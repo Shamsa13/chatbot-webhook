@@ -8,7 +8,7 @@ import { createClient } from "@supabase/supabase-js";
 const app = express();
 
 app.use(express.urlencoded({ extended: false }));
-app.use(express.json());
+app.use(express.json({ limit: "2mb" }));
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
@@ -21,10 +21,7 @@ const SUPABASE_SECRET_KEY =
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 
-// Main reply model
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.1-chat-latest";
-
-// Memory update model (cheaper)
 const OPENAI_MEMORY_MODEL = process.env.OPENAI_MEMORY_MODEL || "gpt-4.1-mini";
 
 if (!SUPABASE_URL || !SUPABASE_SECRET_KEY) {
@@ -48,7 +45,7 @@ console.log("ENV CHECK", {
 });
 
 function normalizeFrom(fromRaw = "") {
-  return String(fromRaw).replace(/^whatsapp:/, "");
+  return String(fromRaw).replace(/^whatsapp:/, "").trim();
 }
 
 function twimlReply(text) {
@@ -56,11 +53,6 @@ function twimlReply(text) {
   const twiml = new MessagingResponse();
   twiml.message(text);
   return twiml.toString();
-}
-
-function safeString(x) {
-  if (x === null || x === undefined) return "";
-  return String(x);
 }
 
 async function logError({ conversationId, channel, stage, message, details }) {
@@ -176,42 +168,49 @@ async function getOrCreateConversation(userId, channelScope) {
   return inserted.id;
 }
 
-async function getRecentMessages(conversationId, limit = 12) {
+async function getUserConversationIds(userId) {
+  const { data, error } = await supabase
+    .from("conversations")
+    .select("id")
+    .eq("user_id", userId);
+
+  if (error) throw new Error("conversations list failed: " + error.message);
+
+  return (data || []).map((r) => r.id);
+}
+
+async function getRecentUserMessages(userId, limit = 12) {
+  const convoIds = await getUserConversationIds(userId);
+  if (!convoIds.length) return [];
+
   const { data, error } = await supabase
     .from("messages")
-    .select("direction, text, created_at")
-    .eq("conversation_id", conversationId)
+    .select("direction, text, created_at, channel")
+    .in("conversation_id", convoIds)
     .order("created_at", { ascending: false })
     .limit(limit);
 
   if (error) throw new Error("messages read failed: " + error.message);
 
   const sorted = (data || []).slice().reverse();
-  return sorted.map((m) => ({
-    role: m.direction === "agent" ? "assistant" : "user",
-    content: m.text || ""
-  }));
+
+  return sorted.map((m) => {
+    const role = m.direction === "agent" ? "assistant" : "user";
+    const ch = (m.channel || "").toLowerCase() === "call" ? "CALL" : "SMS";
+    const content = `[${ch}] ${m.text || ""}`.trim();
+    return { role, content };
+  });
 }
 
-async function getConversationUserMsgCount(conversationId) {
-  const { count, error } = await supabase
-    .from("messages")
-    .select("id", { count: "exact", head: true })
-    .eq("conversation_id", conversationId)
-    .eq("direction", "user");
-
-  if (error) throw new Error("messages count failed: " + error.message);
-
-  return count || 0;
-}
-
-function formatHistoryForDynamicVar(historyMsgs) {
-  return (historyMsgs || [])
+function formatRecentHistoryForCall(userMsgs) {
+  if (!userMsgs || !userMsgs.length) return "";
+  return userMsgs
     .map((m) => {
-      const who = m.role === "assistant" ? "AGENT" : "USER";
+      const who = m.role === "assistant" ? "Agent" : "User";
       return `${who}: ${m.content}`;
     })
-    .join("\n");
+    .join("\n")
+    .trim();
 }
 
 async function callModel({ systemPrompt, knowledgeBase, memorySummary, history, userText }) {
@@ -240,8 +239,8 @@ async function updateMemorySummary({ oldSummary, userText, assistantText }) {
   const prompt = [
     "You update a long term memory summary for a single user.",
     "Goal: preserve important facts, preferences, goals, ongoing projects, decisions, names, and anything that should persist.",
-    "Always label platform context when relevant, for example: CALL, SMS.",
-    "Do not store sensitive data like passwords, API keys, secret tokens, or full payment info.",
+    "Keep channel context. If info came from a call, label it CALL. If from sms, label it SMS.",
+    "Do not store sensitive data like passwords, api keys, secret tokens, or full payment info.",
     "Keep it compact but complete. Use short lines. No fluff.",
     "",
     "Existing memory summary:",
@@ -249,7 +248,7 @@ async function updateMemorySummary({ oldSummary, userText, assistantText }) {
     "",
     "New conversation turn:",
     "User: " + userText,
-    "Assistant: " + (assistantText || ""),
+    "Assistant: " + assistantText,
     "",
     "Return the updated memory summary only."
   ].join("\n");
@@ -263,81 +262,21 @@ async function updateMemorySummary({ oldSummary, userText, assistantText }) {
   return out.trim();
 }
 
-/*
-  Call session mapping helpers
-  Table: call_sessions
-  Columns:
-    call_sid (text, primary key)
-    phone (text)
-    user_id (uuid)
-    conversation_id (uuid)
-    updated_at (timestamptz)
-*/
-async function upsertCallSession({ callSid, phone, userId, conversationId }) {
-  if (!callSid) return;
+async function getUserMsgCountInConversation(conversationId) {
+  const { count, error } = await supabase
+    .from("messages")
+    .select("id", { count: "exact", head: true })
+    .eq("conversation_id", conversationId)
+    .eq("direction", "user");
 
-  const payload = {
-    call_sid: callSid,
-    phone,
-    user_id: userId,
-    conversation_id: conversationId,
-    updated_at: new Date().toISOString()
-  };
-
-  const { error } = await supabase
-    .from("call_sessions")
-    .upsert(payload, { onConflict: "call_sid" });
-
-  if (error) throw new Error("call_sessions upsert failed: " + error.message);
-}
-
-async function lookupCallSession(callSid) {
-  if (!callSid) return null;
-
-  const { data, error } = await supabase
-    .from("call_sessions")
-    .select("call_sid, phone, user_id, conversation_id")
-    .eq("call_sid", callSid)
-    .single();
-
-  if (error) return null;
-  return data || null;
-}
-
-function extractCallSid(body) {
-  return (
-    body?.call_sid ||
-    body?.callSid ||
-    body?.data?.call_sid ||
-    body?.data?.callSid ||
-    body?.data?.metadata?.call_sid ||
-    body?.data?.metadata?.callSid ||
-    body?.data?.twilio?.call_sid ||
-    body?.data?.twilio?.callSid ||
-    null
-  );
-}
-
-function extractCallSummary(body) {
-  const summary =
-    body?.data?.analysis?.transcript_summary ||
-    body?.data?.analysis?.summary ||
-    body?.analysis?.transcript_summary ||
-    body?.analysis?.summary ||
-    body?.data?.transcript_summary ||
-    body?.data?.summary ||
-    "";
-
-  return safeString(summary).trim();
+  if (error) throw new Error("messages count failed: " + error.message);
+  return Number(count || 0);
 }
 
 app.get("/health", (req, res) => {
   res.status(200).send("ok");
 });
 
-/*
-  SMS webhook for Twilio
-*/
 app.post("/twilio/sms", async (req, res) => {
   const from = normalizeFrom(req.body.From || "");
   const body = String(req.body.Body || "").trim();
@@ -368,14 +307,14 @@ app.post("/twilio/sms", async (req, res) => {
 
     const cfg = await getBotConfig();
     const memorySummary = await getUserMemorySummary(userId);
-    const history = await getRecentMessages(conversationId, 12);
+    const history = await getRecentUserMessages(userId, 12);
 
     const replyText = await callModel({
       systemPrompt: cfg.systemPrompt,
       knowledgeBase: cfg.knowledgeBase,
       memorySummary,
       history,
-      userText: body
+      userText: `[SMS] ${body}`
     });
 
     const { error: outErr } = await supabase.from("messages").insert({
@@ -389,17 +328,16 @@ app.post("/twilio/sms", async (req, res) => {
 
     if (outErr) throw new Error("messages insert failed: " + outErr.message);
 
-    // Update durable memory every 3 user messages in SMS thread
+    // Memory update every 3 user messages in this sms conversation
     try {
-      const userMsgCount = await getConversationUserMsgCount(conversationId);
-
+      const userMsgCount = await getUserMsgCountInConversation(conversationId);
       if (userMsgCount > 0 && userMsgCount % 3 === 0) {
+        const oldSummary = memorySummary;
         const newSummary = await updateMemorySummary({
-          oldSummary: memorySummary,
-          userText: "SMS: " + body,
-          assistantText: replyText
+          oldSummary,
+          userText: `[SMS] ${body}`,
+          assistantText: `[SMS] ${replyText}`
         });
-
         if (newSummary) {
           await setUserMemorySummary(userId, newSummary);
           console.log("MEMORY updated", { userMsgCount });
@@ -429,153 +367,193 @@ app.post("/twilio/sms", async (req, res) => {
       details: { from, hasBody: !!body }
     });
 
-    return res.status(200).type("text/xml").send(twimlReply("Agent error. Check Render logs."));
+    return res.status(200).type("text/xml").send(twimlReply("Agent error. Check logs."));
   }
 });
 
-/*
-  ElevenLabs: Call start personalization webhook
-*/
+// ElevenLabs initiation data webhook
+// Point your ElevenLabs Conversation Initiation Client Data Webhook to this endpoint
 app.post("/elevenlabs/twilio-personalize", async (req, res) => {
+  const fromRaw = req.body?.from || req.body?.From || req.body?.callerId || "";
+  const phone = normalizeFrom(fromRaw);
+
+  console.log("ELEVEN personalize", {
+    callerId: phone,
+    callSid: req.body?.callSid || req.body?.CallSid || null
+  });
+
   try {
-    const callerId = normalizeFrom(
-      safeString(
-        req.body?.caller_id ||
-          req.body?.callerId ||
-          req.body?.from ||
-          req.body?.From ||
-          req.body?.caller ||
-          ""
-      )
-    ).trim();
-
-    const callSid =
-      extractCallSid(req.body) ||
-      safeString(req.body?.call_sid || req.body?.callSid || "").trim();
-
-    if (!callerId) {
+    if (!phone) {
       return res.status(200).json({
         type: "conversation_initiation_client_data",
         dynamic_variables: {
-          user_phone: "",
           long_term_memory: "",
-          recent_history: "",
-          call_sid: callSid || ""
+          user_phone: "",
+          channel: "call",
+          recent_history: ""
         }
       });
     }
 
-    const userId = await getOrCreateUser(callerId);
-    const conversationId = await getOrCreateConversation(userId, "call");
-
-    if (callSid) {
-      await upsertCallSession({
-        callSid,
-        phone: callerId,
-        userId,
-        conversationId
-      });
-    }
+    const userId = await getOrCreateUser(phone);
+    await getOrCreateConversation(userId, "call");
 
     const memorySummary = await getUserMemorySummary(userId);
-    const historyMsgs = await getRecentMessages(conversationId, 12);
-
-    console.log("ELEVEN personalize", { callerId, callSid });
+    const history = await getRecentUserMessages(userId, 12);
+    const recentHistory = formatRecentHistoryForCall(history);
 
     return res.status(200).json({
       type: "conversation_initiation_client_data",
       dynamic_variables: {
-        user_phone: callerId,
         long_term_memory: memorySummary || "",
-        recent_history: formatHistoryForDynamicVar(historyMsgs) || "",
-        call_sid: callSid || ""
+        user_phone: phone,
+        channel: "call",
+        recent_history: recentHistory || ""
       }
     });
   } catch (err) {
-    console.error("ERROR elevenlabs personalize", err?.message || err);
-
+    const msg = err?.message || String(err);
+    console.error("ERROR eleven personalize", msg);
     return res.status(200).json({
       type: "conversation_initiation_client_data",
       dynamic_variables: {
-        user_phone: "",
         long_term_memory: "",
-        recent_history: "",
-        call_sid: ""
+        user_phone: phone || "",
+        channel: "call",
+        recent_history: ""
       }
     });
   }
 });
 
-/*
-  ElevenLabs: Post call webhook
-  Fix: phone number is in data.user_id for your payload
-*/
+// ElevenLabs post call webhook
+// Point your ElevenLabs Post call webhook to this endpoint
 app.post("/elevenlabs/post-call", async (req, res) => {
-  try {
-    console.log("ELEVEN post-call RAW body", JSON.stringify(req.body, null, 2));
-  } catch (e) {
-    console.log("ELEVEN post-call RAW body (stringify failed)");
-  }
+  const body = req.body || {};
+  console.log("ELEVEN post-call RAW body", JSON.stringify(body, null, 2));
 
   let conversationId = null;
 
   try {
-    const callSid = extractCallSid(req.body);
-    const session = await lookupCallSession(callSid);
+    const data = body.data || {};
 
-    // ✅ FIXED: ElevenLabs phone is coming in as req.body.data.user_id
-    const phoneFromPayload = normalizeFrom(
-      safeString(
-        req.body?.caller_id ||
-          req.body?.callerId ||
-          req.body?.from ||
-          req.body?.From ||
-          req.body?.caller ||
-          req.body?.data?.caller_id ||
-          req.body?.data?.from ||
-          req.body?.data?.user_id ||
-          req.body?.data?.userId ||
-          ""
-      )
-    ).trim();
+    const phoneRaw =
+      data.user_id ||
+      data.caller_id ||
+      body.user_id ||
+      body.callerId ||
+      "";
 
-    const phone = (session?.phone || phoneFromPayload || "").trim();
+    const phone = normalizeFrom(String(phoneRaw).trim());
+    if (!phone) throw new Error("post call missing phone");
 
-    if (!phone) {
-      console.log("POST CALL missing phone. callSid:", callSid);
-      return res.status(200).json({ ok: true });
+    const userId = await getOrCreateUser(phone);
+    conversationId = await getOrCreateConversation(userId, "call");
+
+    // Try to extract transcript text from common payload shapes
+    const transcript =
+      data.transcript ||
+      data.transcription ||
+      data.full_transcript ||
+      data.text ||
+      "";
+
+    let turnsText = "";
+    if (!transcript && Array.isArray(data.turns)) {
+      turnsText = data.turns
+        .map((t) => {
+          const role = t.role || t.speaker || "unknown";
+          const text = t.text || t.message || "";
+          return `${role}: ${text}`.trim();
+        })
+        .filter(Boolean)
+        .join("\n");
     }
 
-    const userId = session?.user_id || (await getOrCreateUser(phone));
-    conversationId =
-      session?.conversation_id || (await getOrCreateConversation(userId, "call"));
+    const transcriptText = String(transcript || turnsText).trim();
 
-    const summary = extractCallSummary(req.body);
-
-    const callSummaryText =
-      summary || "CALL: (No transcript_summary found in webhook payload yet)";
-
-    const { error: inErr } = await supabase.from("messages").insert({
-      conversation_id: conversationId,
-      channel: "call",
-      direction: "user",
-      text: "CALL summary: " + callSummaryText,
-      provider: "elevenlabs",
-      twilio_call_sid: callSid || null
+    console.log("POST CALL parsed", {
+      phone,
+      hasTranscript: !!transcriptText,
+      transcriptLen: transcriptText.length
     });
 
-    if (inErr) throw new Error("messages insert failed: " + inErr.message);
+    // Store a call session record if your table supports it
+    try {
+      const meta = data.metadata || {};
+      const callSid =
+        body.callSid ||
+        body.CallSid ||
+        data.call_sid ||
+        meta.call_sid ||
+        null;
 
-    const oldMem = await getUserMemorySummary(userId);
+      const durationSecs =
+        meta.call_duration_secs ||
+        meta.call_duration_seconds ||
+        null;
+
+      const cost =
+        meta.cost ||
+        data.cost ||
+        null;
+
+      const { error: csErr } = await supabase.from("call_sessions").insert({
+        user_id: userId,
+        conversation_id: conversationId,
+        provider: "elevenlabs",
+        call_sid: callSid,
+        transcript: transcriptText || null,
+        duration_secs: durationSecs,
+        cost: cost,
+        raw_payload: body
+      });
+
+      if (csErr) {
+        console.error("call_sessions insert failed", csErr.message);
+      }
+    } catch (e) {
+      console.error("call_sessions insert exception", e?.message || e);
+    }
+
+    // Also store transcript into messages so unified history works
+    if (transcriptText) {
+      const { error: msgErr } = await supabase.from("messages").insert({
+        conversation_id: conversationId,
+        channel: "call",
+        direction: "user",
+        text: `[CALL TRANSCRIPT]\n${transcriptText}`,
+        provider: "elevenlabs",
+        twilio_message_sid: null
+      });
+
+      if (msgErr) {
+        console.error("messages insert failed for call transcript", msgErr.message);
+      }
+    }
+
+    // Update durable memory after call ends
+    const oldSummary = await getUserMemorySummary(userId);
+
+    const assistantTextForMemory = transcriptText
+      ? `CALL transcript:\n${transcriptText}`
+      : "CALL ended but transcript was missing from the webhook payload.";
+
     const newSummary = await updateMemorySummary({
-      oldSummary: oldMem,
-      userText: "CALL: " + callSummaryText,
-      assistantText: ""
+      oldSummary,
+      userText: "CALL",
+      assistantText: assistantTextForMemory
     });
 
     if (newSummary) {
       await setUserMemorySummary(userId, newSummary);
-      console.log("MEMORY updated from call", { hasSummary: !!summary });
+      console.log("POST CALL memory updated OK", {
+        phone,
+        oldLen: oldSummary.length,
+        newLen: newSummary.length
+      });
+    } else {
+      console.log("POST CALL memory update skipped because new summary was empty");
     }
 
     return res.status(200).json({ ok: true });
@@ -586,12 +564,12 @@ app.post("/elevenlabs/post-call", async (req, res) => {
     await logError({
       conversationId,
       channel: "call",
-      stage: "post_call",
+      stage: "elevenlabs_post_call",
       message: msg,
-      details: null
+      details: { hasBody: !!req.body }
     });
 
-    return res.status(200).json({ ok: true });
+    return res.status(200).json({ ok: false });
   }
 });
 
