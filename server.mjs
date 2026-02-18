@@ -304,9 +304,6 @@ async function lookupCallSession(callSid) {
   return data || null;
 }
 
-/*
-  Utility: try to extract a call sid from ElevenLabs payload
-*/
 function extractCallSid(body) {
   return (
     body?.call_sid ||
@@ -321,9 +318,6 @@ function extractCallSid(body) {
   );
 }
 
-/*
-  Utility: cheap summary extraction from ElevenLabs post call payload
-*/
 function extractCallSummary(body) {
   const summary =
     body?.data?.analysis?.transcript_summary ||
@@ -441,11 +435,6 @@ app.post("/twilio/sms", async (req, res) => {
 
 /*
   ElevenLabs: Call start personalization webhook
-  Returns dynamic variables:
-    long_term_memory
-    recent_history (last 12 call thread messages)
-    user_phone
-    call_sid
 */
 app.post("/elevenlabs/twilio-personalize", async (req, res) => {
   try {
@@ -460,7 +449,9 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
       )
     ).trim();
 
-    const callSid = extractCallSid(req.body) || safeString(req.body?.call_sid || req.body?.callSid || "").trim();
+    const callSid =
+      extractCallSid(req.body) ||
+      safeString(req.body?.call_sid || req.body?.callSid || "").trim();
 
     if (!callerId) {
       return res.status(200).json({
@@ -475,11 +466,8 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
     }
 
     const userId = await getOrCreateUser(callerId);
-
-    // Separate call thread
     const conversationId = await getOrCreateConversation(userId, "call");
 
-    // Store mapping so post call webhook can find the right phone later
     if (callSid) {
       await upsertCallSession({
         callSid,
@@ -520,12 +508,9 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
 
 /*
   ElevenLabs: Post call webhook
-  Cheapest path:
-    use analysis.transcript_summary
-  Also logs raw payload for schema confirmation.
+  Fix: phone number is in data.user_id for your payload
 */
 app.post("/elevenlabs/post-call", async (req, res) => {
-  // Always return 200 so ElevenLabs does not retry forever
   try {
     console.log("ELEVEN post-call RAW body", JSON.stringify(req.body, null, 2));
   } catch (e) {
@@ -538,6 +523,7 @@ app.post("/elevenlabs/post-call", async (req, res) => {
     const callSid = extractCallSid(req.body);
     const session = await lookupCallSession(callSid);
 
+    // ✅ FIXED: ElevenLabs phone is coming in as req.body.data.user_id
     const phoneFromPayload = normalizeFrom(
       safeString(
         req.body?.caller_id ||
@@ -547,6 +533,8 @@ app.post("/elevenlabs/post-call", async (req, res) => {
           req.body?.caller ||
           req.body?.data?.caller_id ||
           req.body?.data?.from ||
+          req.body?.data?.user_id ||
+          req.body?.data?.userId ||
           ""
       )
     ).trim();
@@ -559,15 +547,14 @@ app.post("/elevenlabs/post-call", async (req, res) => {
     }
 
     const userId = session?.user_id || (await getOrCreateUser(phone));
-    conversationId = session?.conversation_id || (await getOrCreateConversation(userId, "call"));
+    conversationId =
+      session?.conversation_id || (await getOrCreateConversation(userId, "call"));
 
     const summary = extractCallSummary(req.body);
 
-    // If ElevenLabs did not include summary, we store a short placeholder and we will adjust after we see the payload
     const callSummaryText =
       summary || "CALL: (No transcript_summary found in webhook payload yet)";
 
-    // Store the call summary as a user message in the call thread
     const { error: inErr } = await supabase.from("messages").insert({
       conversation_id: conversationId,
       channel: "call",
@@ -579,7 +566,6 @@ app.post("/elevenlabs/post-call", async (req, res) => {
 
     if (inErr) throw new Error("messages insert failed: " + inErr.message);
 
-    // Update memory immediately after each call ends
     const oldMem = await getUserMemorySummary(userId);
     const newSummary = await updateMemorySummary({
       oldSummary: oldMem,
