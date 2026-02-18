@@ -363,6 +363,64 @@ app.post("/twilio/sms", async (req, res) => {
       .send(twimlReply("Agent error. Check Render logs."));
   }
 });
+// ElevenLabs: Twilio personalization webhook (call start)
+// ElevenLabs will POST: caller_id, agent_id, called_number, call_sid
+app.post("/elevenlabs/twilio-personalize", async (req, res) => {
+  try {
+    const callerId = normalizeFrom(req.body.caller_id || req.body.callerId || "");
+    const callSid = req.body.call_sid || req.body.callSid || null;
+
+    if (!callerId) {
+      return res.status(200).json({
+        type: "conversation_initiation_client_data",
+        dynamic_variables: {
+          long_term_memory: "",
+          user_phone: ""
+        }
+      });
+    }
+
+    const userId = await getOrCreateUser(callerId);
+    const memorySummary = await getUserMemorySummary(userId);
+
+    console.log("ELEVEN personalize", { callerId, callSid });
+
+    return res.status(200).json({
+      type: "conversation_initiation_client_data",
+      dynamic_variables: {
+        long_term_memory: memorySummary || "",
+        user_phone: callerId
+      }
+    });
+  } catch (err) {
+    console.error("ELEVEN personalize error", err?.message || err);
+    return res.status(200).json({
+      type: "conversation_initiation_client_data",
+      dynamic_variables: {
+        long_term_memory: "",
+        user_phone: ""
+      }
+    });
+  }
+});
+
+// ElevenLabs: Post call transcription webhook (call end)
+// For Step 1 we just confirm delivery. We will store summary + update memory in Step 2.
+app.post("/elevenlabs/post-call", async (req, res) => {
+  try {
+    const type = req.body?.type || "";
+    const conversationId = req.body?.data?.conversation_id || null;
+    const agentId = req.body?.data?.agent_id || null;
+
+    console.log("ELEVEN post-call", { type, conversationId, agentId });
+
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error("ELEVEN post-call error", err?.message || err);
+    return res.status(200).json({ ok: true });
+  }
+});
+
 
 app.listen(PORT, () => {
   console.log(`Server listening on ${PORT}`);
