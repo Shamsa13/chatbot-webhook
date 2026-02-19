@@ -1,4 +1,4 @@
-// server.mjs - Unified Brain Architecture (2026 Edition)
+// server.mjs
 import "dotenv/config";
 import express from "express";
 import twilio from "twilio";
@@ -6,209 +6,502 @@ import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 
 const app = express();
+
 app.use(express.urlencoded({ extended: false }));
-app.use(express.json({ limit: "5mb" })); // Increased limit for long transcripts
+app.use(express.json({ limit: "5mb" })); // Increased for long call transcripts
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
 
-// Config & Keys
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const SUPABASE_URL = process.env.SUPABASE_URL || "";
+const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
-// Models - Using the latest 2026 snapshots
-const MODEL_MAIN = "gpt-5.1-chat-latest"; // Flagship reasoning
-const MODEL_MEM = "gpt-4.1-mini";         // Efficient 1M context
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.1-chat-latest";
+const OPENAI_MEMORY_MODEL = process.env.OPENAI_MEMORY_MODEL || "gpt-4.1-mini";
+
+if (!SUPABASE_URL || !SUPABASE_SECRET_KEY) {
+  console.error("Missing SUPABASE_URL or SUPABASE_SECRET_KEY");
+}
+if (!OPENAI_API_KEY) {
+  console.error("Missing OPENAI_API_KEY");
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, {
+  auth: { persistSession: false }
+});
+
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
-console.log("🚀 UNIFIED BRAIN STARTING", { main: MODEL_MAIN, mem: MODEL_MEM });
+console.log("ENV CHECK", {
+  openaiKeyLen: OPENAI_API_KEY.length,
+  model: OPENAI_MODEL,
+  memoryModel: OPENAI_MEMORY_MODEL,
+  supabaseUrl: SUPABASE_URL
+});
 
-// --- UTILITIES ---
-
-function normalizePhone(raw = "") {
-  return String(raw).replace(/[^\d+]/g, "").replace(/^whatsapp:/, "").trim();
+function normalizeFrom(fromRaw = "") {
+  return String(fromRaw).replace(/^whatsapp:/, "").trim();
 }
 
 function twimlReply(text) {
-  const resp = new twilio.twiml.MessagingResponse();
-  resp.message(text);
-  return resp.toString();
+  const MessagingResponse = twilio.twiml.MessagingResponse;
+  const twiml = new MessagingResponse();
+  twiml.message(text);
+  return twiml.toString();
 }
 
-// --- KNOWLEDGE BASE (RAG) ---
+async function logError({ conversationId, channel, stage, message, details }) {
+  try {
+    await supabase.from("error_logs").insert({
+      conversation_id: conversationId || null,
+      channel: channel || "sms",
+      stage: stage || "unknown",
+      message: message || "unknown",
+      details: details || null
+    });
+  } catch (e) {
+    console.error("error_logs insert failed", e?.message || e);
+  }
+}
+
+async function getBotConfig() {
+  const { data, error } = await supabase
+    .from("bot_config")
+    .select("system_prompt")
+    .eq("id", "default")
+    .single();
+
+  if (error) throw new Error("bot_config read failed: " + error.message);
+
+  return {
+    systemPrompt: (data?.system_prompt || "").trim()
+  };
+}
 
 async function searchKnowledgeBase(userText) {
   try {
-    const emb = await openai.embeddings.create({ 
-      model: "text-embedding-3-small", 
-      input: userText 
+    const embResponse = await openai.embeddings.create({
+      model: "text-embedding-3-small",
+      input: userText,
     });
-    
+    const queryEmbedding = embResponse.data[0].embedding;
+
     const { data: chunks, error } = await supabase.rpc('match_kb_chunks', {
-      query_embedding: emb.data[0].embedding,
-      match_threshold: 0.35,
-      match_count: 3
+      query_embedding: queryEmbedding,
+      match_threshold: 0.3, 
+      match_count: 3 
     });
 
-    if (error || !chunks?.length) return "";
-    return chunks.map(c => `[Doc: ${c.doc_key}]\n${c.content}`).join("\n\n---\n\n");
+    if (error) {
+      console.error("Vector search error:", error.message);
+      return "";
+    }
+
+    if (!chunks || chunks.length === 0) return "";
+
+    return chunks
+      .map(c => `[Source: ${c.doc_key}]\n${c.content}`)
+      .join("\n\n---\n\n");
+      
   } catch (err) {
-    console.error("RAG Error:", err.message);
+    console.error("Knowledge base search failed:", err.message);
     return "";
   }
 }
 
-// --- USER & MEMORY HELPERS ---
-
 async function getOrCreateUser(phone) {
-  const { data: existing } = await supabase.from("users").select("id").eq("phone", phone).limit(1);
-  if (existing?.length) return existing[0].id;
+  const { data: existing, error: readErr } = await supabase
+    .from("users")
+    .select("id")
+    .eq("phone", phone)
+    .limit(1);
 
-  const { data: inserted } = await supabase.from("users").insert({ phone }).select("id").single();
+  if (readErr) throw new Error("users read failed: " + readErr.message);
+
+  if (existing && existing.length) return existing[0].id;
+
+  const { data: inserted, error: insErr } = await supabase
+    .from("users")
+    .insert({ phone })
+    .select("id")
+    .single();
+
+  if (insErr) throw new Error("users insert failed: " + insErr.message);
+
   return inserted.id;
 }
 
-async function getMemory(userId) {
-  const { data } = await supabase.from("users").select("memory_summary").eq("id", userId).single();
-  return data?.memory_summary || "";
+async function getUserMemorySummary(userId) {
+  const { data, error } = await supabase
+    .from("users")
+    .select("memory_summary")
+    .eq("id", userId)
+    .single();
+
+  if (error) throw new Error("users memory_summary read failed: " + error.message);
+
+  return (data?.memory_summary || "").trim();
 }
 
-async function getHistory(userId, limit = 10) {
-  const { data: convos } = await supabase.from("conversations").select("id").eq("user_id", userId);
-  const ids = (convos || []).map(c => c.id);
-  if (!ids.length) return [];
+async function setUserMemorySummary(userId, memorySummary) {
+  const { data, error } = await supabase
+    .from("users")
+    .update({
+      memory_summary: memorySummary,
+      last_seen: new Date().toISOString()
+    })
+    .eq("id", userId)
+    .select("id, memory_summary")
+    .single();
 
-  const { data } = await supabase.from("messages")
-    .select("direction, text, channel")
-    .in("conversation_id", ids)
+  if (error) throw new Error("users memory_summary update failed: " + error.message);
+
+  console.log("USER MEMORY UPDATED", {
+    userId,
+    memoryLen: (data?.memory_summary || "").length
+  });
+}
+
+async function getOrCreateConversation(userId, channelScope) {
+  const { data: existing, error: readErr } = await supabase
+    .from("conversations")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("channel_scope", channelScope)
+    .is("closed_at", null)
+    .order("last_active_at", { ascending: false })
+    .limit(1);
+
+  if (readErr) throw new Error("conversations read failed: " + readErr.message);
+
+  if (existing && existing.length) {
+    const id = existing[0].id;
+    await supabase
+      .from("conversations")
+      .update({ last_active_at: new Date().toISOString() })
+      .eq("id", id);
+    return id;
+  }
+
+  const nowIso = new Date().toISOString();
+  const { data: inserted, error: insErr } = await supabase
+    .from("conversations")
+    .insert({
+      user_id: userId,
+      started_at: nowIso,
+      last_active_at: nowIso,
+      channel_scope: channelScope
+    })
+    .select("id")
+    .single();
+
+  if (insErr) throw new Error("conversations insert failed: " + insErr.message);
+
+  return inserted.id;
+}
+
+async function getUserConversationIds(userId) {
+  const { data, error } = await supabase
+    .from("conversations")
+    .select("id")
+    .eq("user_id", userId);
+
+  if (error) throw new Error("conversations list failed: " + error.message);
+
+  return (data || []).map((r) => r.id);
+}
+
+async function getRecentUserMessages(userId, limit = 12) {
+  const convoIds = await getUserConversationIds(userId);
+  if (!convoIds.length) return [];
+
+  const { data, error } = await supabase
+    .from("messages")
+    .select("direction, text, created_at, channel")
+    .in("conversation_id", convoIds)
     .order("created_at", { ascending: false })
     .limit(limit);
 
-  return (data || []).reverse().map(m => ({
-    role: m.direction === "agent" ? "assistant" : "user",
-    content: `(${m.channel}) ${m.text}`.trim()
-  }));
+  if (error) throw new Error("messages read failed: " + error.message);
+
+  const sorted = (data || []).slice().reverse();
+
+  return sorted.map((m) => {
+    const role = m.direction === "agent" ? "assistant" : "user";
+    const ch = (m.channel || "").toLowerCase() === "call" ? "CALL" : "SMS";
+    return { role, content: (m.text || "").trim(), channel: ch };
+  });
 }
 
-async function updateLongTermMemory(userId, userText, agentText) {
-  const oldMem = await getMemory(userId);
-  const prompt = `You are a memory processor. Update the user's memory summary based on the new turn.
-  KEEP IT COMPACT. Use bullet points. Label channel as (SMS) or (CALL).
-  OLD MEMORY: ${oldMem || "None"}
-  NEW TURN:
-  User: ${userText}
-  Assistant: ${agentText}
-  RETURN ONLY THE UPDATED SUMMARY.`;
+function formatRecentHistoryForCall(msgs) {
+  if (!msgs || !msgs.length) return "No recent history.";
+  return msgs
+    .map((m) => {
+      const who = m.role === "assistant" ? "Agent" : "User";
+      return `${who} (via ${m.channel}): ${m.content}`;
+    })
+    .join("\n")
+    .trim();
+}
+
+async function callModel({ systemPrompt, ragContext, memorySummary, history, userText }) {
+  const sys = systemPrompt || "You are a helpful assistant. Keep replies short and clear.";
+
+  const messages = [
+    { role: "system", content: sys },
+    ...(ragContext ? [{ role: "system", content: "Relevant Knowledge Base Context:\n\n" + ragContext }] : []),
+    ...(memorySummary ? [{ role: "system", content: "Long term memory about this user:\n" + memorySummary }] : []),
+    ...(history || []),
+    { role: "user", content: userText }
+  ];
 
   const resp = await openai.chat.completions.create({
-    model: MODEL_MEM,
+    model: OPENAI_MODEL,
+    messages
+  });
+
+  const out = resp?.choices?.[0]?.message?.content || "";
+  return out.trim() || "Sorry, I could not generate a reply.";
+}
+
+async function updateMemorySummary({ oldSummary, userText, assistantText }) {
+  const prompt = [
+    "You update a long term memory summary for a single user.",
+    "Goal: preserve important facts, preferences, goals, ongoing projects, decisions, names, and anything that should persist.",
+    "Keep channel context. If info came from a call, note it was from a CALL. If from sms, note it was from SMS.",
+    "Do not store sensitive data like passwords, api keys, secret tokens, or full payment info.",
+    "Keep it compact but complete. Use short lines. No fluff.",
+    "",
+    "Existing memory summary:",
+    oldSummary ? oldSummary : "(empty)",
+    "",
+    "New conversation turn:",
+    "User: " + userText,
+    "Assistant: " + assistantText,
+    "",
+    "Return the updated memory summary only."
+  ].join("\n");
+
+  const resp = await openai.chat.completions.create({
+    model: OPENAI_MEMORY_MODEL,
     messages: [{ role: "system", content: prompt }]
   });
 
-  const newMem = resp.choices[0].message.content;
-  await supabase.from("users").update({ 
-    memory_summary: newMem, 
-    last_seen: new Date().toISOString() 
-  }).eq("id", userId);
-  console.log("🧠 Memory Sync Complete");
+  const out = resp?.choices?.[0]?.message?.content || "";
+  return out.trim();
 }
 
-// --- WEBHOOKS ---
+async function getUserMsgCountInConversation(conversationId) {
+  const { count, error } = await supabase
+    .from("messages")
+    .select("id", { count: "exact", head: true })
+    .eq("conversation_id", conversationId)
+    .eq("direction", "user");
 
-// SMS Handler
+  if (error) throw new Error("messages count failed: " + error.message);
+  return Number(count || 0);
+}
+
+// FIXED: Robust extraction for 2026 ElevenLabs payload structure
+function extractElevenTranscript(body) {
+  const data = body?.data || body || {};
+  
+  // 1. Check for the new built-in summary (Ideal for memory update)
+  if (data?.analysis?.transcript_summary) {
+    return data.analysis.transcript_summary;
+  }
+
+  // 2. Check for the actual conversation turns
+  const turns = data.transcript || data.messages || data.turns;
+  if (Array.isArray(turns)) {
+    return turns
+      .map(t => {
+        const role = (t.role || t.speaker || "USER").toUpperCase();
+        const text = t.message || t.text || t.content || "";
+        return text ? `${role}: ${text}` : "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  // 3. Fallback to raw string
+  return typeof data.transcript === "string" ? data.transcript.trim() : "";
+}
+
+app.get("/health", (req, res) => {
+  res.status(200).send("ok");
+});
+
 app.post("/twilio/sms", async (req, res) => {
-  const phone = normalizePhone(req.body.From);
-  const body = req.body.Body?.trim();
-  console.log("📩 SMS IN:", { phone, body });
+  const from = normalizeFrom(req.body.From || "");
+  const body = String(req.body.Body || "").trim();
+  const twilioMessageSid = req.body.MessageSid || null;
+
+  console.log("START sms", { from, body });
+
+  if (!from || !body) {
+    return res.status(200).type("text/xml").send(twimlReply("ok"));
+  }
+
+  let conversationId = null;
 
   try {
-    const userId = await getOrCreateUser(phone);
-    const { data: convo } = await supabase.from("conversations")
-      .select("id").eq("user_id", userId).eq("channel_scope", "sms").is("closed_at", null).single();
+    const userId = await getOrCreateUser(from);
+    conversationId = await getOrCreateConversation(userId, "sms");
+
+    const { error: inErr } = await supabase.from("messages").insert({
+      conversation_id: conversationId,
+      channel: "sms",
+      direction: "user",
+      text: body,
+      provider: "twilio",
+      twilio_message_sid: twilioMessageSid
+    });
+
+    if (inErr) throw new Error("messages insert failed: " + inErr.message);
+
+    const cfg = await getBotConfig();
+    const memorySummary = await getUserMemorySummary(userId);
+    const history = await getRecentUserMessages(userId, 12);
     
-    const convoId = convo?.id || (await supabase.from("conversations")
-      .insert({ user_id: userId, channel_scope: "sms" }).select("id").single()).data.id;
+    console.log("Searching KB for:", body);
+    const ragContext = await searchKnowledgeBase(body);
 
-    await supabase.from("messages").insert({ 
-      conversation_id: convoId, channel: "sms", direction: "user", text: body 
+    const formattedHistoryForOpenAI = history.map(h => ({
+      role: h.role,
+      content: `(${h.channel}) ${h.content}`
+    }));
+
+    const replyText = await callModel({
+      systemPrompt: cfg.systemPrompt,
+      ragContext: ragContext,
+      memorySummary,
+      history: formattedHistoryForOpenAI,
+      userText: `(SMS) ${body}`
     });
 
-    const [sys, mem, hist, rag] = await Promise.all([
-      supabase.from("bot_config").select("system_prompt").eq("id", "default").single(),
-      getMemory(userId),
-      getHistory(userId, 8),
-      searchKnowledgeBase(body)
-    ]);
+    const cleanReplyText = replyText.replace(/^[\(\[].*?[\)\]]\s*/, '').trim();
 
-    const messages = [
-      { role: "system", content: sys.data.system_prompt },
-      ...(rag ? [{ role: "system", content: "KNOWLEDGE:\n" + rag }] : []),
-      ...(mem ? [{ role: "system", content: "USER MEMORY:\n" + mem }] : []),
-      ...hist,
-      { role: "user", content: body }
-    ];
-
-    const aiResp = await openai.chat.completions.create({ model: MODEL_MAIN, messages });
-    let reply = aiResp.choices[0].message.content;
-    reply = reply.replace(/^[\(\[].*?[\)\]]\s*/, "").trim(); // Cleanup tags
-
-    await supabase.from("messages").insert({ 
-      conversation_id: convoId, channel: "sms", direction: "agent", text: reply 
+    const { error: outErr } = await supabase.from("messages").insert({
+      conversation_id: conversationId,
+      channel: "sms",
+      direction: "agent",
+      text: cleanReplyText, 
+      provider: "openai",
+      twilio_message_sid: null
     });
 
-    if (hist.length % 3 === 0) updateLongTermMemory(userId, `(SMS) ${body}`, `(SMS) ${reply}`);
+    if (outErr) throw new Error("messages insert failed: " + outErr.message);
 
-    res.status(200).type("text/xml").send(twimlReply(reply));
+    try {
+      const userMsgCount = await getUserMsgCountInConversation(conversationId);
+      if (userMsgCount > 0 && userMsgCount % 3 === 0) {
+        const oldSummary = memorySummary;
+        const newSummary = await updateMemorySummary({
+          oldSummary,
+          userText: `(SMS) ${body}`,
+          assistantText: `(SMS) ${cleanReplyText}`
+        });
+        if (newSummary) {
+          await setUserMemorySummary(userId, newSummary);
+          console.log("MEMORY updated (sms)", { userMsgCount });
+        }
+      }
+    } catch (memErr) {
+      console.error("memory update failed", memErr?.message || memErr);
+    }
+
+    return res.status(200).type("text/xml").send(twimlReply(cleanReplyText));
   } catch (err) {
-    console.error("SMS Fail:", err);
-    res.status(200).type("text/xml").send(twimlReply("Internal brain freeze. Try again."));
+    const msg = err?.message || String(err);
+    console.error("ERROR sms", msg);
+    return res.status(200).type("text/xml").send(twimlReply("Agent error. Check logs."));
   }
 });
 
-// ElevenLabs: Call Start
 app.post("/elevenlabs/twilio-personalize", async (req, res) => {
-  const phone = normalizePhone(req.body?.from || req.body?.callerId || "");
-  console.log("📞 CALL STARTING:", phone);
-
   try {
-    const userId = await getOrCreateUser(phone);
-    const [mem, hist] = await Promise.all([getMemory(userId), getHistory(userId, 10)]);
+    const fromRaw = req.body?.from || req.body?.From || req.body?.callerId || req.body?.caller_id || "";
+    const phone = normalizeFrom(fromRaw);
 
-    res.status(200).json({
+    console.log("ELEVEN personalize", { callerId: phone, callSid: req.body?.callSid || req.body?.CallSid || null });
+
+    if (!phone) {
+      return res.status(200).json({
+        dynamic_variables: { memory_summary: "", caller_phone: "", channel: "call", recent_history: "" }
+      });
+    }
+
+    const userId = await getOrCreateUser(phone);
+    await getOrCreateConversation(userId, "call");
+
+    const memorySummary = await getUserMemorySummary(userId);
+    const history = await getRecentUserMessages(userId, 12);
+    const recentHistory = formatRecentHistoryForCall(history);
+
+    return res.status(200).json({
       dynamic_variables: {
-        memory_summary: mem || "No previous history.",
+        memory_summary: memorySummary || "No previous memory.",
         caller_phone: phone,
-        recent_history: hist.map(h => `${h.role === 'assistant' ? 'Agent' : 'User'}: ${h.content}`).join("\n") || "No history."
+        channel: "call",
+        recent_history: recentHistory || "No recent history."
       }
     });
   } catch (err) {
-    res.status(200).json({ dynamic_variables: {} });
+    console.error("ERROR eleven personalize", err?.message || String(err));
+    return res.status(200).json({
+      dynamic_variables: { memory_summary: "", caller_phone: "", channel: "call", recent_history: "" }
+    });
   }
 });
 
-// ElevenLabs: Call End (2026 Structured Extraction)
+// FIXED: Now robustly finds the phone and transcript in the POST payload
 app.post("/elevenlabs/post-call", async (req, res) => {
-  const body = req.body || {};
-  const data = body.data || {};
-  
-  // Robust Extraction
-  const phone = normalizePhone(data.metadata?.caller_id || body.user_id || "");
-  const transcript = data.analysis?.transcript_summary || 
-                     (Array.isArray(data.transcript) ? data.transcript.map(t => `${t.role}: ${t.message}`).join("\n") : "");
+  try {
+    const body = req.body || {};
+    const data = body.data || {};
 
-  console.log("🔚 CALL ENDED:", { phone, hasTranscript: !!transcript });
+    // Check every common place phone number is hidden in the webhook data
+    const phoneRaw = 
+      data.metadata?.caller_id || 
+      data.user_id || 
+      body.caller_id || 
+      body.from || 
+      "";
 
-  if (phone && transcript) {
-    try {
-      const userId = await getOrCreateUser(phone);
-      await updateLongTermMemory(userId, "(VOICE CALL)", `Transcript Summary: ${transcript}`);
-      console.log("✅ Call Context Saved to Long Term Memory");
-    } catch (err) { console.error("Post-Call Sync Error:", err); }
+    const phone = normalizeFrom(String(phoneRaw).trim());
+    const transcriptText = extractElevenTranscript(body);
+
+    console.log("POST CALL RECEIVED", { phone, hasTranscript: !!transcriptText });
+
+    if (!phone || !transcriptText) {
+      console.log("POST CALL missing phone or transcript. Skipping update.");
+      return res.status(200).json({ ok: true });
+    }
+
+    const userId = await getOrCreateUser(phone);
+    const oldSummary = await getUserMemorySummary(userId);
+
+    const newSummary = await updateMemorySummary({
+      oldSummary,
+      userText: `(VOICE CALL INITIATED)`,
+      assistantText: `(VOICE CALL TRANSCRIPT SUMMARY)\n${transcriptText}`
+    });
+
+    if (newSummary) {
+      await setUserMemorySummary(userId, newSummary);
+      console.log("POST CALL memory updated OK");
+    }
+
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error("ERROR post-call", err?.message);
+    return res.status(200).json({ ok: false });
   }
-  res.status(200).json({ ok: true });
 });
 
-app.listen(PORT, () => console.log(`🌍 BRAIN ONLINE @ PORT ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server listening on ${PORT}`);
+});
