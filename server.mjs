@@ -339,25 +339,24 @@ function extractElevenTranscript(body) {
 }
 
 // --- NEW: DYNAMIC INTENT & CRM FUNCTIONS ---
-
 async function triggerGoogleAppsScript(email, name, transcriptId) {
-  if (!GOOGLE_SCRIPT_WEBHOOK_URL) {
-    console.log("⚠️ GOOGLE_SCRIPT_WEBHOOK_URL missing. Skipping email automation.");
-    return;
-  }
+  if (!GOOGLE_SCRIPT_WEBHOOK_URL) return;
   try {
     console.log(`🚀 Sending Webhook to Google Scripts for Transcript ${transcriptId} -> ${email}`);
-    await fetch(GOOGLE_SCRIPT_WEBHOOK_URL, {
+    const response = await fetch(GOOGLE_SCRIPT_WEBHOOK_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: email, name: name, transcriptId: transcriptId })
+      body: JSON.stringify({ email, name, transcriptId })
     });
-    console.log("✅ Google Apps Script triggered successfully.");
-  } catch (err) {
-    console.error("❌ Failed to trigger Google Apps Script:", err.message);
+    
+    // NEW: Actually read what Google replies with
+    const responseText = await response.text(); 
+    console.log("✅ Google Apps Script responded:", responseText);
+    
+  } catch (err) { 
+    console.error("❌ Google Script trigger failed:", err.message); 
   }
 }
-
 async function processSmsIntent(userId, userText) {
   try {
     const { data: user } = await supabase.from("users").select("full_name, email, transcript_history").eq("id", userId).single();
@@ -594,7 +593,11 @@ app.post("/elevenlabs/post-call", async (req, res) => {
       await supabase.from("users").update({ transcript_history: historyArray }).eq("id", userId);
     }
 
+
+
     // Proactive SMS via Twilio
+
+// Proactive SMS via Twilio
     if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
       const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
       const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
@@ -610,8 +613,22 @@ app.post("/elevenlabs/post-call", async (req, res) => {
         to: outboundPhone
       });
       console.log("📤 Dynamic follow-up SMS sent to:", outboundPhone);
-    }
 
+      // --- NEW FIX: LOG THE MESSAGE SO DAVID REMEMBERS HE SENT IT ---
+      try {
+        const smsConversationId = await getOrCreateConversation(userId, "sms");
+        await supabase.from("messages").insert({
+          conversation_id: smsConversationId,
+          channel: "sms",
+          direction: "agent",
+          text: textMessage,
+          provider: "twilio"
+        });
+        console.log("💾 Proactive SMS saved to history so AI has context.");
+      } catch (logErr) {
+        console.error("⚠️ Failed to log proactive SMS:", logErr.message);
+      }
+    }
     return res.status(200).json({ ok: true });
   } catch (err) {
     console.error("ERROR post-call", err?.message);
