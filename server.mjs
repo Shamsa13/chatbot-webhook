@@ -285,6 +285,7 @@ async function processSmsIntent(userId, userText) {
 }
 
 // --- WHATSAPP AWARE vCARD SENDER WITH TRACERS ---
+// --- WHATSAPP AWARE vCARD SENDER WITH TRACERS (LINK VERSION) ---
 async function checkAndSendVCard(userId, rawPhone) {
   console.log(`[vCard Tracer] 1. Started check for: ${rawPhone}`);
   try {
@@ -300,20 +301,20 @@ async function checkAndSendVCard(userId, rawPhone) {
       if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
         const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
         
-        // WhatsApp bypass detection
         const isWhatsApp = rawPhone.startsWith("whatsapp:");
-        const outboundPhone = rawPhone; // Leave 'whatsapp:' prefix intact if present
+        const outboundPhone = rawPhone; 
         const fromNumber = isWhatsApp ? `whatsapp:${process.env.TWILIO_PHONE_NUMBER}` : process.env.TWILIO_PHONE_NUMBER;
         
         console.log(`[vCard Tracer] 3. Attempting to send to ${outboundPhone} via ${isWhatsApp ? 'WhatsApp' : 'SMS'}...`);
 
-        const introMsg = "Hi, it's David Beatty VC! I'm sending over my digital contact card. Tap the file below to save my info and photo directly to your phone!";
+        // NEW: We put the URL directly in the text body!
+        const introMsg = "Hi, it's David Beatty VC! Tap this link to instantly save my contact card and photo to your phone: https://dtxebwectbvnksuxpclc.supabase.co/storage/v1/object/public/assets/Board%20Governance%20AI.vcf";
         
+        // NEW: We removed the "mediaUrl" parameter entirely so it sends as a standard SMS
         const msg = await twilioClient.messages.create({
           body: introMsg,
           from: fromNumber,
-          to: outboundPhone,
-          mediaUrl: ["https://dtxebwectbvnksuxpclc.supabase.co/storage/v1/object/public/assets/Board%20Governance%20AI.vcf"]
+          to: outboundPhone
         });
         
         console.log(`[vCard Tracer] 4. Twilio accepted the message! SID:`, msg.sid);
@@ -330,7 +331,6 @@ async function checkAndSendVCard(userId, rawPhone) {
     console.error("[vCard Tracer] ⚠️ CRASH in catch block:", err.message);
   }
 }
-
 // --- ROUTES ---
 app.get("/health", (req, res) => res.status(200).send("ok"));
 
