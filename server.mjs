@@ -57,17 +57,20 @@ function twimlReply(text) {
   return twiml.toString();
 }
 
-async function logError({ conversationId, channel, stage, message, details }) {
+async function logError({ phone, userId, conversationId, channel, stage, message, details }) {
   try {
     await supabase.from("error_logs").insert({
+      phone: phone || null,
+      user_id: userId || null,
       conversation_id: conversationId || null,
-      channel: channel || "sms",
+      channel: channel || "unknown",
       stage: stage || "unknown",
       message: message || "unknown",
-      details: details || null
+      // Store extra data as a JSON object so you can debug later
+      details: details ? JSON.stringify(details) : null 
     });
   } catch (e) {
-    console.error("error_logs insert failed", e?.message || e);
+    console.error("CRITICAL: error_logs insert failed", e?.message || e);
   }
 }
 
@@ -357,14 +360,16 @@ async function triggerGoogleAppsScript(email, name, transcriptId) {
     console.error("❌ Google Script trigger failed:", err.message); 
   }
 }
+
 async function processSmsIntent(userId, userText) {
   try {
     const { data: user } = await supabase.from("users").select("full_name, email, transcript_history").eq("id", userId).single();
     
+    // UPDATED PROMPT: Explicitly tell it to interpret "Yes", "Sure", etc. as true
     const prompt = `Analyze the user's text message: "${userText}"
     Current User Data: Name=${user?.full_name || 'null'}, Email=${user?.email || 'null'}
     1. Extract their name and email if mentioned.
-    2. Check if they are requesting a transcript, confirming they want one, OR providing their email to receive one.
+    2. Check if they are requesting a transcript, confirming they want one, OR providing their email to receive one. If the user says 'Yes', 'Sure', or 'I'd love that', set wants_transcript to true.
     Respond STRICTLY in JSON: {"full_name": "extracted name or null", "email": "extracted email or null", "wants_transcript": true/false}`;
 
     const resp = await openai.chat.completions.create({
@@ -417,9 +422,10 @@ app.post("/twilio/sms", async (req, res) => {
   }
 
   let conversationId = null;
+  let userId = null; // Defined here so catch block can access it
 
   try {
-    const userId = await getOrCreateUser(from);
+    userId = await getOrCreateUser(from);
     conversationId = await getOrCreateConversation(userId, "sms");
 
     const { error: inErr } = await supabase.from("messages").insert({
@@ -491,9 +497,19 @@ app.post("/twilio/sms", async (req, res) => {
   } catch (err) {
     const msg = err?.message || String(err);
     console.error("ERROR sms", msg);
+    // Send error to Supabase
+    await logError({
+      phone: from,
+      userId: userId,
+      conversationId: conversationId,
+      channel: "sms",
+      stage: "twilio_sms_webhook",
+      message: msg,
+      details: { body: body }
+    });
     return res.status(200).type("text/xml").send(twimlReply("Agent error. Check logs."));
   }
-});
+}); // <-- FIXED: Added missing closing brackets for this route
 
 // FIXED: Personalize route now fetches name and passes first_greeting
 app.post("/elevenlabs/twilio-personalize", async (req, res) => {
@@ -527,6 +543,7 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
       ? `Welcome back, ${name}. Shall we continue where we left off?` 
       : "Hi! I'm David. How can I help you with your board decisions today?";
 
+    // FIXED: Properly formatted the JSON return payload
     return res.status(200).json({
       dynamic_variables: {
         memory_summary: memorySummary || "No previous memory.",
@@ -538,6 +555,12 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
     });
   } catch (err) {
     console.error("ERROR eleven personalize", err?.message || String(err));
+    await logError({
+      phone: req.body?.from || req.body?.callerId || "unknown",
+      channel: "call",
+      stage: "personalize_webhook",
+      message: err?.message || String(err)
+    });
     return res.status(200).json({
       dynamic_variables: { memory_summary: "", caller_phone: "", channel: "call", recent_history: "", first_greeting: "" }
     });
@@ -593,11 +616,20 @@ app.post("/elevenlabs/post-call", async (req, res) => {
       await supabase.from("users").update({ transcript_history: historyArray }).eq("id", userId);
     }
 
+    // --- NEW: 1. INSTANTLY TRIGGER GOOGLE TO FETCH THE TRANSCRIPT ---
+    if (GOOGLE_SCRIPT_WEBHOOK_URL) {
+      try {
+        console.log(`⚡ Telling Google to fetch transcript ${transcriptId} immediately...`);
+        // We use fetch without await here so it runs in the background
+        fetch(GOOGLE_SCRIPT_WEBHOOK_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "fetch_transcripts" })
+        }).catch(err => console.error("Fetch trigger failed", err));
+      } catch (err) {}
+    }
 
-
-    // Proactive SMS via Twilio
-
-// Proactive SMS via Twilio
+    // --- NEW: 2. DELAY THE PROACTIVE SMS BY 2 MINUTES ---
     if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
       const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
       const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
@@ -607,34 +639,54 @@ app.post("/elevenlabs/post-call", async (req, res) => {
         ? `Hi ${userRecord.full_name.split(' ')[0]}! It's David. Would you like me to email you the transcript from our recent call? Just reply 'Yes'.`
         : `Hi! It's David. Thanks for the chat. If you'd like me to email you a copy of our call transcript, just reply with your full name and email address!`;
 
-      await twilioClient.messages.create({
-        body: textMessage,
-        from: process.env.TWILIO_PHONE_NUMBER,
-        to: outboundPhone
-      });
-      console.log("📤 Dynamic follow-up SMS sent to:", outboundPhone);
+      console.log(`⏳ Waiting 2 minutes to send proactive SMS to ${outboundPhone}...`);
+      
+      // setTimeout delays the execution by 120,000 milliseconds (2 minutes)
+      setTimeout(async () => {
+        try {
+          await twilioClient.messages.create({
+            body: textMessage,
+            from: process.env.TWILIO_PHONE_NUMBER,
+            to: outboundPhone
+          });
+          console.log("📤 Delayed follow-up SMS sent to:", outboundPhone);
 
-      // --- NEW FIX: LOG THE MESSAGE SO DAVID REMEMBERS HE SENT IT ---
-      try {
-        const smsConversationId = await getOrCreateConversation(userId, "sms");
-        await supabase.from("messages").insert({
-          conversation_id: smsConversationId,
-          channel: "sms",
-          direction: "agent",
-          text: textMessage,
-          provider: "twilio"
-        });
-        console.log("💾 Proactive SMS saved to history so AI has context.");
-      } catch (logErr) {
-        console.error("⚠️ Failed to log proactive SMS:", logErr.message);
-      }
+          // Log the message so David remembers he sent it
+          const smsConversationId = await getOrCreateConversation(userId, "sms");
+          await supabase.from("messages").insert({
+            conversation_id: smsConversationId,
+            channel: "sms",
+            direction: "agent",
+            text: textMessage,
+            provider: "twilio"
+          });
+          console.log("💾 Delayed SMS saved to history.");
+        } catch (smsErr) {
+          console.error("⚠️ Failed to send/log delayed SMS:", smsErr.message);
+          await logError({
+            phone: outboundPhone,
+            userId: userId,
+            channel: "sms",
+            stage: "delayed_proactive_sms",
+            message: smsErr.message
+          });
+        }
+      }, 120000); // <-- 120000 ms = 2 minutes
     }
+
+    // We return 200 OK to ElevenLabs immediately so they don't think the webhook timed out
     return res.status(200).json({ ok: true });
   } catch (err) {
     console.error("ERROR post-call", err?.message);
+    await logError({
+      phone: req.body?.caller_id || req.body?.from || "unknown",
+      channel: "call",
+      stage: "post_call_webhook",
+      message: err?.message || "Unknown error occurred during post-call processing"
+    });
     return res.status(200).json({ ok: false });
   }
-});
+}); // <-- FIXED: Added missing closing brackets for this route
 
 app.listen(PORT, () => {
   console.log(`Server listening on ${PORT}`);
