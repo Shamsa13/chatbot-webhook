@@ -20,7 +20,6 @@ const SUPABASE_SECRET_KEY =
   "";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-// NEW: Google Script Webhook URL
 const GOOGLE_SCRIPT_WEBHOOK_URL = process.env.GOOGLE_SCRIPT_WEBHOOK_URL || "";
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.1-chat-latest";
@@ -66,7 +65,6 @@ async function logError({ phone, userId, conversationId, channel, stage, message
       channel: channel || "unknown",
       stage: stage || "unknown",
       message: message || "unknown",
-      // Store extra data as a JSON object so you can debug later
       details: details ? JSON.stringify(details) : null 
     });
   } catch (e) {
@@ -274,16 +272,17 @@ async function callModel({ systemPrompt, ragContext, memorySummary, history, use
   return out.trim() || "Sorry, I could not generate a reply.";
 }
 
-// YOUR UPDATED MEMORY FUNCTION
+// UPGRADED APPEND-ONLY MEMORY FUNCTION
 async function updateMemorySummary({ oldSummary, userText, assistantText }) {
   const prompt = [
-    "You update a long-term memory summary for a single user.",
-    "STRICT FORMATTING RULE:",
-    "Every new memory point MUST start with a tag: [SMS] or [VOICE] based on the channel.",
-    "Follow the tag with a natural, descriptive sentence about what was learned.",
+    "You are a strict memory archiver for an AI assistant.",
+    "CRITICAL RULE: NEVER delete, condense, or alter any existing memory lines. You must preserve every single historical detail, fact, and preference exactly as it is.",
+    "Your job is ONLY to extract NEW, highly specific facts from the 'New conversation turn' and APPEND them to the bottom of the existing list.",
+    "If the new turn contains no new specific facts (e.g., just saying 'hello' or testing), output the 'Existing memory summary' exactly as it was, with no additions.",
     "",
-    "Goal: preserve facts, preferences, goals, and names.",
-    "Keep it compact but complete. Use short lines. No fluff.",
+    "STRICT FORMATTING RULE:",
+    "1. Every new line MUST start with a tag: [SMS] or [VOICE].",
+    "2. Capture SPECIFIC details only (e.g., 'Likes the color crimson red', 'Is testing the system', 'Lives in Toronto'). No vague summaries.",
     "",
     "Existing memory summary:",
     oldSummary ? oldSummary : "(empty)",
@@ -292,7 +291,7 @@ async function updateMemorySummary({ oldSummary, userText, assistantText }) {
     "User: " + userText,
     "Assistant: " + assistantText,
     "",
-    "Return the updated memory summary only using the [TAG] Natural sentence format."
+    "Return the ENTIRE memory list (existing lines + new lines appended to the bottom). DO NOT omit any old information."
   ].join("\n");
 
   const resp = await openai.chat.completions.create({
@@ -315,16 +314,13 @@ async function getUserMsgCountInConversation(conversationId) {
   return Number(count || 0);
 }
 
-// FIXED: Robust extraction for 2026 ElevenLabs payload structure
 function extractElevenTranscript(body) {
   const data = body?.data || body || {};
   
-  // 1. Check for the new built-in summary (Ideal for memory update)
   if (data?.analysis?.transcript_summary) {
     return data.analysis.transcript_summary;
   }
 
-  // 2. Check for the actual conversation turns
   const turns = data.transcript || data.messages || data.turns;
   if (Array.isArray(turns)) {
     return turns
@@ -337,11 +333,9 @@ function extractElevenTranscript(body) {
       .join("\n");
   }
 
-  // 3. Fallback to raw string
   return typeof data.transcript === "string" ? data.transcript.trim() : "";
 }
 
-// --- NEW: DYNAMIC INTENT & CRM FUNCTIONS ---
 async function triggerGoogleAppsScript(email, name, transcriptId) {
   if (!GOOGLE_SCRIPT_WEBHOOK_URL) return;
   try {
@@ -351,11 +345,8 @@ async function triggerGoogleAppsScript(email, name, transcriptId) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, name, transcriptId })
     });
-    
-    // NEW: Actually read what Google replies with
     const responseText = await response.text(); 
     console.log("✅ Google Apps Script responded:", responseText);
-    
   } catch (err) { 
     console.error("❌ Google Script trigger failed:", err.message); 
   }
@@ -365,7 +356,6 @@ async function processSmsIntent(userId, userText) {
   try {
     const { data: user } = await supabase.from("users").select("full_name, email, transcript_history").eq("id", userId).single();
     
-    // UPDATED PROMPT: Explicitly tell it to interpret "Yes", "Sure", etc. as true
     const prompt = `Analyze the user's text message: "${userText}"
     Current User Data: Name=${user?.full_name || 'null'}, Email=${user?.email || 'null'}
     1. Extract their name and email if mentioned.
@@ -404,6 +394,51 @@ async function processSmsIntent(userId, userText) {
   }
 }
 
+// --- NEW: ONE-TIME vCARD SENDER (WITH TRACERS) ---
+async function checkAndSendVCard(userId, phone) {
+  console.log(`[vCard Tracer] 1. Started background check for phone: ${phone}`);
+  try {
+    const { data: user, error } = await supabase.from("users").select("vcard_sent").eq("id", userId).single();
+    console.log(`[vCard Tracer] 2. Supabase lookup complete. vcard_sent is:`, user?.vcard_sent);
+
+    if (error && error.code !== 'PGRST116') {
+      console.error("[vCard Tracer] ⚠️ Failed to read vcard status:", error.message);
+      return;
+    }
+
+    if (!user?.vcard_sent) {
+      console.log(`[vCard Tracer] 3. User needs vCard. Checking Render Env Vars...`);
+      
+      if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
+        console.log(`[vCard Tracer] 4. Env Vars present! Attempting to send via Twilio to ${phone}...`);
+        
+        const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+        const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
+        
+        const introMsg = "Hi, it's David Beatty VC! I'm sending over my digital contact card. Tap the file below to save my info and photo directly to your phone so you always know it's me.";
+        
+        const msg = await twilioClient.messages.create({
+          body: introMsg,
+          from: process.env.TWILIO_PHONE_NUMBER,
+          to: outboundPhone,
+          mediaUrl: ["https://dtxebwectbvnksuxpclc.supabase.co/storage/v1/object/public/assets/Board%20Governance%20AI.vcf"]
+        });
+        
+        console.log(`[vCard Tracer] 5. Twilio accepted the message! Twilio SID:`, msg.sid);
+
+        await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
+        console.log(`[vCard Tracer] 6. 📇 vCard marked as TRUE in database for ${outboundPhone}.`);
+      } else {
+        console.log(`[vCard Tracer] ❌ FAILED AT 4: Missing one or more Twilio variables inside the code!`);
+      }
+    } else {
+      console.log(`[vCard Tracer] 🛑 Stopped: User already has vcard_sent = true`);
+    }
+  } catch (err) {
+    console.error("[vCard Tracer] ⚠️ CRASH in catch block:", err.message);
+  }
+}
+
 // --- ROUTES ---
 
 app.get("/health", (req, res) => {
@@ -422,10 +457,14 @@ app.post("/twilio/sms", async (req, res) => {
   }
 
   let conversationId = null;
-  let userId = null; // Defined here so catch block can access it
+  let userId = null; 
 
   try {
     userId = await getOrCreateUser(from);
+    
+    // NEW: We are awaiting this function now so Render MUST log the tracer data!
+    await checkAndSendVCard(userId, from);
+
     conversationId = await getOrCreateConversation(userId, "sms");
 
     const { error: inErr } = await supabase.from("messages").insert({
@@ -439,7 +478,6 @@ app.post("/twilio/sms", async (req, res) => {
 
     if (inErr) throw new Error("messages insert failed: " + inErr.message);
 
-    // NEW: Background intent checker
     processSmsIntent(userId, body);
 
     const cfg = await getBotConfig();
@@ -497,7 +535,6 @@ app.post("/twilio/sms", async (req, res) => {
   } catch (err) {
     const msg = err?.message || String(err);
     console.error("ERROR sms", msg);
-    // Send error to Supabase
     await logError({
       phone: from,
       userId: userId,
@@ -509,9 +546,8 @@ app.post("/twilio/sms", async (req, res) => {
     });
     return res.status(200).type("text/xml").send(twimlReply("Agent error. Check logs."));
   }
-}); // <-- FIXED: Added missing closing brackets for this route
+}); 
 
-// FIXED: Personalize route now fetches name and passes first_greeting
 app.post("/elevenlabs/twilio-personalize", async (req, res) => {
   try {
     const fromRaw = req.body?.from || req.body?.From || req.body?.callerId || req.body?.caller_id || "";
@@ -528,7 +564,6 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
     const userId = await getOrCreateUser(phone);
     await getOrCreateConversation(userId, "call");
 
-    // Fetch memory, history, and user's full name
     const [memorySummary, history, { data: userRecord }] = await Promise.all([
       getUserMemorySummary(userId),
       getRecentUserMessages(userId, 12),
@@ -537,13 +572,11 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
     
     const recentHistory = formatRecentHistoryForCall(history);
 
-    // Generate the dynamic greeting
     const name = userRecord?.full_name ? userRecord.full_name.split(' ')[0] : "there";
     const greeting = memorySummary 
       ? `Welcome back, ${name}. Shall we continue where we left off?` 
       : "Hi! I'm David. How can I help you with your board decisions today?";
 
-    // FIXED: Properly formatted the JSON return payload
     return res.status(200).json({
       dynamic_variables: {
         memory_summary: memorySummary || "No previous memory.",
@@ -567,13 +600,11 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
   }
 });
 
-// FIXED: Post-call now includes dynamic SMS and Transcript history updates
 app.post("/elevenlabs/post-call", async (req, res) => {
   try {
     const body = req.body || {};
     const data = body.data || {};
 
-    // Check every common place phone number is hidden in the webhook data
     const phoneRaw = 
       data.metadata?.caller_id || 
       data.user_id || 
@@ -592,6 +623,9 @@ app.post("/elevenlabs/post-call", async (req, res) => {
     }
 
     const userId = await getOrCreateUser(phone);
+    
+    await checkAndSendVCard(userId, phone);
+
     const oldSummary = await getUserMemorySummary(userId);
 
     const newSummary = await updateMemorySummary({
@@ -605,22 +639,18 @@ app.post("/elevenlabs/post-call", async (req, res) => {
       console.log("POST CALL memory updated OK");
     }
 
-    // --- NEW: CRM AND PROACTIVE SMS ---
     const transcriptId = data.conversation_id || body.conversation_id;
     const { data: userRecord } = await supabase.from("users").select("full_name, email, transcript_history").eq("id", userId).single();
     
-    // Save transcript ID to array
     let historyArray = userRecord?.transcript_history || [];
     if (transcriptId && !historyArray.includes(transcriptId)) {
       historyArray.push(transcriptId);
       await supabase.from("users").update({ transcript_history: historyArray }).eq("id", userId);
     }
 
-    // --- NEW: 1. INSTANTLY TRIGGER GOOGLE TO FETCH THE TRANSCRIPT ---
     if (GOOGLE_SCRIPT_WEBHOOK_URL) {
       try {
         console.log(`⚡ Telling Google to fetch transcript ${transcriptId} immediately...`);
-        // We use fetch without await here so it runs in the background
         fetch(GOOGLE_SCRIPT_WEBHOOK_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -629,7 +659,6 @@ app.post("/elevenlabs/post-call", async (req, res) => {
       } catch (err) {}
     }
 
-    // --- NEW: 2. DELAY THE PROACTIVE SMS BY 2 MINUTES ---
     if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
       const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
       const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
@@ -641,7 +670,6 @@ app.post("/elevenlabs/post-call", async (req, res) => {
 
       console.log(`⏳ Waiting 2 minutes to send proactive SMS to ${outboundPhone}...`);
       
-      // setTimeout delays the execution by 120,000 milliseconds (2 minutes)
       setTimeout(async () => {
         try {
           await twilioClient.messages.create({
@@ -651,7 +679,6 @@ app.post("/elevenlabs/post-call", async (req, res) => {
           });
           console.log("📤 Delayed follow-up SMS sent to:", outboundPhone);
 
-          // Log the message so David remembers he sent it
           const smsConversationId = await getOrCreateConversation(userId, "sms");
           await supabase.from("messages").insert({
             conversation_id: smsConversationId,
@@ -671,10 +698,9 @@ app.post("/elevenlabs/post-call", async (req, res) => {
             message: smsErr.message
           });
         }
-      }, 120000); // <-- 120000 ms = 2 minutes
+      }, 120000);
     }
 
-    // We return 200 OK to ElevenLabs immediately so they don't think the webhook timed out
     return res.status(200).json({ ok: true });
   } catch (err) {
     console.error("ERROR post-call", err?.message);
@@ -686,7 +712,7 @@ app.post("/elevenlabs/post-call", async (req, res) => {
     });
     return res.status(200).json({ ok: false });
   }
-}); // <-- FIXED: Added missing closing brackets for this route
+}); 
 
 app.listen(PORT, () => {
   console.log(`Server listening on ${PORT}`);
