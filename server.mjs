@@ -50,7 +50,7 @@ function twimlReply(text) {
 }
 
 async function logError({ phone, userId, conversationId, channel, stage, message, details }) {
-  try {
+        const userMsgCount = await getUserMsgCountInConversation(conversationId);try {
     await supabase.from("error_logs").insert({
       phone: phone || null,
       user_id: userId || null,
@@ -307,13 +307,17 @@ async function processSmsIntent(userId, userText) {
       await supabase.from("users").update(updates).eq("id", userId);
       console.log("👤 User profile dynamically updated via SMS:", updates);
     }
-
-    if (result.transcript_id_to_send && result.transcript_id_to_send !== 'null') {
+   if (result.transcript_id_to_send && result.transcript_id_to_send !== 'null') {
       const finalEmail = updates.email || user?.email;
       if (finalEmail && finalEmail.includes('@')) {
         const desc = result.transcript_description || "from our recent conversation";
-        console.log(`✅ Smart Intent: Sending transcript ${result.transcript_id_to_send} to ${finalEmail}. Desc: ${desc}`);
-        triggerGoogleAppsScript(finalEmail, updates.full_name || user?.full_name || "User", result.transcript_id_to_send, desc);
+        console.log(`✅ Smart Intent: Queuing transcript ${result.transcript_id_to_send} for ${finalEmail}...`);
+        
+        // NEW: Delay the email by 6000 milliseconds (6 seconds) so the SMS text wins the race!
+        setTimeout(() => {
+          triggerGoogleAppsScript(finalEmail, updates.full_name || user?.full_name || "User", result.transcript_id_to_send, desc);
+        }, 6000);
+        
       } else {
         console.log("🛑 Intent: User wants transcript, but NO EMAIL on file. Assistant will urge them for it.");
       }
@@ -429,7 +433,7 @@ app.post("/twilio/sms", async (req, res) => {
 
     try {
       const userMsgCount = await getUserMsgCountInConversation(conversationId);
-      if (userMsgCount > 0 && userMsgCount % 3 === 0) {
+      if (userMsgCount > 0 && userMsgCount % 2 === 0) {
         const newSummary = await updateMemorySummary({
           oldSummary: memorySummary, userText: `(SMS) ${body}`, assistantText: `(SMS) ${cleanReplyText}`
         });
