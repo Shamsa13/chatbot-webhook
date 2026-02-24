@@ -382,52 +382,50 @@ app.post("/twilio/sms", async (req, res) => {
 
   if (!cleanPhone || !body) return res.status(200).type("text/xml").send(twimlReply("ok"));
 
-  // 🛡️ DEDUPE LAYER 1: Check Twilio's exact Message ID
+  // 🛡️ THE ATOMIC SHIELD: Check SID first
   if (twilioMessageSid) {
     const { data: sidDupes } = await supabase.from("messages").select("id").eq("twilio_message_sid", twilioMessageSid).limit(1);
     if (sidDupes && sidDupes.length > 0) {
-      console.log("♻️ BLOCKED: Exact Twilio retry detected.");
+      console.log("♻️ RETRY BLOCKED: Twilio SID already exists.");
       return res.status(200).type("text/xml").send("<Response></Response>");
     }
   }
 
-  let conversationId = null;
-  let userId = null; 
-
   try {
-    userId = await getOrCreateUser(cleanPhone);
-    conversationId = await getOrCreateConversation(userId, "sms");
+    const userId = await getOrCreateUser(cleanPhone);
+    const conversationId = await getOrCreateConversation(userId, "sms");
 
-    // 🛡️ DEDUPE LAYER 2: Check for identical text from the same user in the last 15 seconds
-    const fifteenSecondsAgo = new Date(Date.now() - 15000).toISOString();
-    const { data: textDupes } = await supabase.from("messages")
-      .select("id")
-      .eq("conversation_id", conversationId)
-      .eq("direction", "user")
-      .eq("text", body)
-      .gte("created_at", fifteenSecondsAgo)
-      .limit(1);
+    // 🔥 THE FIX: SAVE THE MESSAGE IMMEDIATELY (Before the AI starts)
+    // This "locks" the message so the second request sees it and stops.
+    const { error: inErr } = await supabase.from("messages").insert({
+      conversation_id: conversationId, 
+      channel: "sms", 
+      direction: "user",
+      text: body, 
+      provider: "twilio", 
+      twilio_message_sid: twilioMessageSid
+    });
 
-    if (textDupes && textDupes.length > 0) {
-      console.log(`♻️ BLOCKED: Double tap detected for text: "${body}"`);
-      return res.status(200).type("text/xml").send("<Response></Response>");
+    if (inErr) {
+      // If we get a "Unique Violation" error, it's a duplicate. Stop immediately.
+      if (inErr.code === '23505') {
+        console.log("♻️ RACE CONDITION BLOCKED: Message already saved by another worker.");
+        return res.status(200).type("text/xml").send("<Response></Response>");
+      }
+      throw new Error("messages insert failed: " + inErr.message);
     }
 
+    // ------------------------------------------------------------------
+    // Now that the message is safely locked in the DB, proceed to AI
+    // ------------------------------------------------------------------
     await checkAndSendVCard(userId, rawFrom);
-
-    const { error: inErr } = await supabase.from("messages").insert({
-      conversation_id: conversationId, channel: "sms", direction: "user",
-      text: body, provider: "twilio", twilio_message_sid: twilioMessageSid
-    });
-    if (inErr) throw new Error("messages insert failed: " + inErr.message);
 
     const cfg = await getBotConfig();
     const memorySummary = await getUserMemorySummary(userId);
     const history = await getRecentUserMessages(userId, 12);
     
     const { data: userDb } = await supabase.from("users").select("full_name, email").eq("id", userId).single();
-    const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}, Email: ${userDb?.email || 'Unknown'}. 
-    CRITICAL INSTRUCTION: If the user says 'Yes' to receiving a transcript, OR asks for a transcript, but their Email is 'Unknown', you MUST reply by telling them you need their email address to send it. Do not confirm sending until an email is provided.`;
+    const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}, Email: ${userDb?.email || 'Unknown'}.`;
     
     const ragContext = await searchKnowledgeBase(body);
     const formattedHistoryForOpenAI = history.map(h => ({ role: h.role, content: `(${h.channel}) ${h.content}` }));
@@ -441,7 +439,7 @@ app.post("/twilio/sms", async (req, res) => {
       history: formattedHistoryForOpenAI, 
       userText: `(SMS) ${body}`
     });
-    console.log("  -> [OpenAI Tracer] 2. OpenAI replied successfully!");
+
     const cleanReplyText = replyText.replace(/^[\(\[].*?[\)\]]\s*/, '').trim();
 
     await supabase.from("messages").insert({
@@ -449,38 +447,28 @@ app.post("/twilio/sms", async (req, res) => {
       text: cleanReplyText, provider: "openai", twilio_message_sid: null
     });
 
+    // Send the reply to the user
     res.status(200).type("text/xml").send(twimlReply(cleanReplyText));
-    console.log("✅ SMS Reply sent to Twilio! Starting background tasks...");
+    console.log("✅ SMS Reply sent to Twilio!");
 
-    const intentKeywords = /\b(transcript|transcripts|email|send|call|calls|recent|yes|yep|yeah|yup|sure|please|ok|okay|notes|summary|record|recording|copy|forward|share|last|previous|ago|conversation|chat|meeting|talk)\b/i; 
-    
+    // Background Tasks
+    const intentKeywords = /\b(transcript|email|send|call|recent|yes|back|ago)\b/i; 
     if (intentKeywords.test(body)) {
-      console.log("🔍 Keyword detected in background. Running intent check...");
-      try {
-        const pendingEmailTask = await processSmsIntent(userId, body);
-        if (pendingEmailTask) {
-          triggerGoogleAppsScript(pendingEmailTask.email, pendingEmailTask.name, pendingEmailTask.id, pendingEmailTask.desc);
+      processSmsIntent(userId, body).then(pendingTask => {
+        if (pendingTask) {
+          triggerGoogleAppsScript(pendingTask.email, pendingTask.name, pendingTask.id, pendingTask.desc);
         }
-      } catch (intentErr) {
-        console.error("Background intent failed:", intentErr);
-      }
+      }).catch(e => console.error("Intent error:", e));
     }
 
-    try {
-      const newSummary = await updateMemorySummary({
-        oldSummary: memorySummary, userText: `(SMS) ${body}`, assistantText: `(SMS) ${cleanReplyText}`
-      });
-      if (newSummary) await setUserMemorySummary(userId, newSummary);
-    } catch (memErr) {
-      console.error("memory update failed", memErr?.message || memErr);
-    }
+    updateMemorySummary({ oldSummary: memorySummary, userText: body, assistantText: cleanReplyText })
+      .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
+      .catch(e => console.error("Memory error:", e));
 
   } catch (err) {
-    const msg = err?.message || String(err);
-    console.error("ERROR sms", msg);
-    await logError({ phone: cleanPhone, userId: userId, conversationId: conversationId, channel: "sms", stage: "twilio_sms_webhook", message: msg, details: { body: body } });
+    console.error("ERROR sms", err.message);
     if (!res.headersSent) {
-      return res.status(200).type("text/xml").send(twimlReply("Give me just a second to pull that up for you."));
+      res.status(200).type("text/xml").send(twimlReply("Just a moment..."));
     }
   }
 });
