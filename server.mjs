@@ -274,11 +274,15 @@ async function processSmsIntent(userId, userText) {
     CRITICAL INSTRUCTIONS FOR TIMELINE SELECTION:
     1. Extract full_name and email if present in the user's latest message.
     2. Determine if we should trigger a transcript email:
-       - "Most recent call" or user says "Yes" to a prompt = Select the LAST item in the array.
-       - "2nd most recent" or "1 call ago" or "previous call" = Select the SECOND-TO-LAST item in the array.
-       - "3rd most recent" or "2 calls ago" = Select the THIRD-TO-LAST item in the array.
+       - "Most recent call" or saying "Yes" = Select the LAST item in the array.
+       - "N calls ago" = Count backwards from the end of the array mathematically. 
+         * 1 call ago = 2nd to last item
+         * 2 calls ago = 3rd to last item
+         * 3 calls ago = 4th to last item
+         * 4 calls ago = 5th to last item
+         * General rule: 'N calls ago' is always the (N + 1)th item from the end.
        - If they ask for a transcript by TOPIC, search the "summary" fields to match the right ID.
-    3. Generate a 'transcript_description' for the email (e.g., "from your 2nd most recent call regarding hiring", "from the call on 2026-02-24").
+    3. Generate a 'transcript_description' for the email (e.g., "from your 4th most recent call regarding hiring", "from the call on 2026-02-24").
 
     Respond STRICTLY in JSON:
     {
@@ -321,7 +325,6 @@ async function processSmsIntent(userId, userText) {
     console.error("Intent extraction failed:", err.message);
   }
 }
-
 // RESTORED: Full verbose vCard tracers
 async function checkAndSendVCard(userId, rawPhone) {
   console.log(`[vCard Tracer] 1. Started check for: ${rawPhone}`);
