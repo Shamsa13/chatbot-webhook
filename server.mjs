@@ -411,6 +411,18 @@ app.post("/elevenlabs/post-call", async (req, res) => {
       await supabase.from("users").update({ transcript_data: transcriptDataArray }).eq("id", userId);
     }
 
+    // FIXED: The background "Ping" is back to tell Google to create the Doc!
+    if (GOOGLE_SCRIPT_WEBHOOK_URL) {
+      try {
+        console.log(`⚡ Telling Google to fetch transcript ${transcriptId} immediately...`);
+        fetch(GOOGLE_SCRIPT_WEBHOOK_URL, { 
+          method: "POST", 
+          headers: { "Content-Type": "application/json" }, 
+          body: JSON.stringify({ action: "fetch_transcripts" }) 
+        }).catch(err => console.error("Fetch trigger failed", err));
+      } catch (err) {}
+    }
+
     if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
       const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
       setTimeout(async () => {
