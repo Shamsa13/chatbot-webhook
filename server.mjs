@@ -72,11 +72,14 @@ async function getBotConfig() {
 }
 
 async function searchKnowledgeBase(userText) {
+  console.log("  -> [KB Tracer] 1. Requesting embeddings from OpenAI...");
   try {
     const embResponse = await openai.embeddings.create({
       model: "text-embedding-3-small",
       input: userText,
     });
+    
+    console.log("  -> [KB Tracer] 2. Embeddings received! Querying Supabase...");
     const queryEmbedding = embResponse.data[0].embedding;
 
     const { data: chunks, error } = await supabase.rpc('match_kb_chunks', {
@@ -86,19 +89,19 @@ async function searchKnowledgeBase(userText) {
     });
 
     if (error) {
-      console.error("Vector search error:", error.message);
+      console.error("  -> [KB Tracer] ⚠️ Vector search error:", error.message);
       return "";
     }
 
+    console.log(`  -> [KB Tracer] 3. Supabase search complete. Found ${chunks ? chunks.length : 0} chunks.`);
     if (!chunks || chunks.length === 0) return "";
 
     return chunks.map(c => `[Source: ${c.doc_key}]\n${c.content}`).join("\n\n---\n\n");
   } catch (err) {
-    console.error("Knowledge base search failed:", err.message);
+    console.error("  -> [KB Tracer] ⚠️ Knowledge base search failed:", err.message);
     return "";
   }
 }
-
 async function getOrCreateUser(phone) {
   const { data: existing, error: readErr } = await supabase.from("users").select("id").eq("phone", phone).limit(1);
   if (readErr) throw new Error("users read failed: " + readErr.message);
