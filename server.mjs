@@ -251,34 +251,40 @@ async function triggerGoogleAppsScript(email, name, transcriptId, description) {
     console.error("❌ Google Script trigger failed:", err.message); 
   }
 }
+
 async function processSmsIntent(userId, userText) {
   try {
     const { data: user } = await supabase.from("users").select("full_name, email, transcript_data").eq("id", userId).single();
     const historyMsgs = await getRecentUserMessages(userId, 3);
     const historyText = historyMsgs.map(m => `${m.role}: ${m.content}`).join("\n");
 
-    let transcriptArray = user?.transcript_data || [];
+    const transcriptArray = user?.transcript_data || [];
     
-    // FIX: Map old flat strings into objects instead of deleting them, so the AI sees EVERY call!
-    const cleanTranscriptArray = transcriptArray.map(t => typeof t === 'string' ? { id: t, summary: "Older call" } : t);
+    // Safety check: preserve older flat strings but map them to objects
+    const cleanTranscriptArray = transcriptArray.map(t => typeof t === 'string' ? { id: t, summary: "Older call", timestamp: "Unknown" } : t);
+    
+    // NEW: Give the AI the exact current date and time so it can calculate "2 days ago"
+    const todayStr = new Date().toLocaleString("en-US", { timeZone: "America/Toronto" });
 
     const prompt = `Analyze the user's latest text message: "${userText}"
     Current DB Data: Name=${user?.full_name || 'null'}, Email=${user?.email || 'null'}
+    CURRENT LIVE DATE AND TIME: ${todayStr}
     
     Recent Chat Context:
     ${historyText}
 
-    Available Transcripts (JSON format). 
-    Chronological rule: The array is ordered from OLDEST to NEWEST. The LAST item is ALWAYS the MOST RECENT call.
+    Available Transcripts (JSON format):
     ${JSON.stringify(cleanTranscriptArray)}
     
     CRITICAL INSTRUCTIONS FOR TIMELINE SELECTION:
     1. Extract full_name and email if present.
-    2. Determine if we should trigger a transcript email:
-       - "Most recent" or replying "Yes" to a prompt = Select the LAST item in the array.
-       - "N calls ago" = Count backwards from the end of the array. 1 call ago = 2nd to last.
-       - If they ask for a transcript by TOPIC, search the "summary" fields.
-    3. Generate a 'transcript_description' for the email.
+    2. Determine if we should trigger a transcript email by strictly analyzing the 'timestamp' fields:
+       - FIRST, sort the Available Transcripts in your mind from NEWEST to OLDEST using the exact 'timestamp'.
+       - "Most recent" or "Yes" = Select the ID with the NEWEST timestamp.
+       - "N calls ago" = Count backwards using the sorted timestamps. 1 call ago = 2nd newest. 2 calls ago = 3rd newest.
+       - "2 days ago" or specific dates = Compare the 'timestamp' to the CURRENT LIVE DATE (${todayStr}) and find the exact match.
+       - Topic = Search the "summary" fields to match the right ID.
+    3. Generate a 'transcript_description' for the email (e.g., "from your call on Feb 22nd regarding hiring").
 
     Respond STRICTLY in JSON:
     {
@@ -300,7 +306,9 @@ async function processSmsIntent(userId, userText) {
     if (result.full_name && result.full_name.toLowerCase() !== 'null' && !user?.full_name) updates.full_name = result.full_name;
     if (result.email && result.email.toLowerCase() !== 'null' && !user?.email) updates.email = result.email;
     
-    if (Object.keys(updates).length > 0) await supabase.from("users").update(updates).eq("id", userId);
+    if (Object.keys(updates).length > 0) {
+      await supabase.from("users").update(updates).eq("id", userId);
+    }
 
     if (result.transcript_id_to_send && result.transcript_id_to_send !== 'null') {
       const finalEmail = updates.email || user?.email;
@@ -308,7 +316,7 @@ async function processSmsIntent(userId, userText) {
         const desc = result.transcript_description || "from our recent conversation";
         console.log(`✅ Smart Intent: Queued transcript ${result.transcript_id_to_send} for ${finalEmail}`);
         
-        // FIX: Return the email data so the server can hold onto it!
+        // Return the payload back to the SMS route so we can delay the email!
         return { email: finalEmail, name: updates.full_name || user?.full_name || "User", id: result.transcript_id_to_send, desc: desc };
       }
     }
@@ -318,6 +326,7 @@ async function processSmsIntent(userId, userText) {
     return null;
   }
 }
+
 // RESTORED: Full verbose vCard tracers
 async function checkAndSendVCard(userId, rawPhone) {
   console.log(`[vCard Tracer] 1. Started check for: ${rawPhone}`);
@@ -390,7 +399,7 @@ app.post("/twilio/sms", async (req, res) => {
     });
     if (inErr) throw new Error("messages insert failed: " + inErr.message);
 
-    // FIX: Save the queued email task to fire LATER
+    // FIX: Catch the queued email task from our Intent Extractor
     const pendingEmailTask = await processSmsIntent(userId, body);
 
     const cfg = await getBotConfig();
@@ -425,23 +434,29 @@ app.post("/twilio/sms", async (req, res) => {
         oldSummary: memorySummary, userText: `(SMS) ${body}`, assistantText: `(SMS) ${cleanReplyText}`
       });
       if (newSummary) await setUserMemorySummary(userId, newSummary);
-    } catch (memErr) {}
+    } catch (memErr) {
+      console.error("memory update failed", memErr?.message || memErr);
+    }
 
-    // FIX 1: Send the SMS text message back to Twilio IMMEDIATELY
+    // FIX 1: Reply to the Twilio Text Message IMMEDIATELY
     res.status(200).type("text/xml").send(twimlReply(cleanReplyText));
 
-    // FIX 2: Now that the SMS is sent, fire the Google Apps Script email!
+    // FIX 2: Now that the SMS is safely sent, trigger the Email in the background
     if (pendingEmailTask) {
       setTimeout(() => {
         triggerGoogleAppsScript(pendingEmailTask.email, pendingEmailTask.name, pendingEmailTask.id, pendingEmailTask.desc);
-      }, 1000); // Wait 1 second just to ensure the text arrives first
+      }, 1500); 
     }
 
   } catch (err) {
     const msg = err?.message || String(err);
     console.error("ERROR sms", msg);
     await logError({ phone: cleanPhone, userId: userId, conversationId: conversationId, channel: "sms", stage: "twilio_sms_webhook", message: msg, details: { body: body } });
-    return res.status(200).type("text/xml").send(twimlReply("Agent error. Check logs."));
+    
+    // Failsafe Twilio reply if it crashes
+    if (!res.headersSent) {
+      return res.status(200).type("text/xml").send(twimlReply("Give me just a second to pull that up for you."));
+    }
   }
 });
 
