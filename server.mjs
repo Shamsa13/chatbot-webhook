@@ -257,10 +257,10 @@ async function processSmsIntent(userId, userText) {
     const historyMsgs = await getRecentUserMessages(userId, 3);
     const historyText = historyMsgs.map(m => `${m.role}: ${m.content}`).join("\n");
 
-    const transcriptArray = user?.transcript_data || [];
+    let transcriptArray = user?.transcript_data || [];
     
-    // Safety check: Filter out flat strings so the LLM only sees objects with timestamps
-    const cleanTranscriptArray = transcriptArray.filter(t => typeof t === 'object' && t !== null && t.id);
+    // FIX: Map old flat strings into objects instead of deleting them, so the AI sees EVERY call!
+    const cleanTranscriptArray = transcriptArray.map(t => typeof t === 'string' ? { id: t, summary: "Older call" } : t);
 
     const prompt = `Analyze the user's latest text message: "${userText}"
     Current DB Data: Name=${user?.full_name || 'null'}, Email=${user?.email || 'null'}
@@ -268,20 +268,17 @@ async function processSmsIntent(userId, userText) {
     Recent Chat Context:
     ${historyText}
 
-    Available Transcripts (JSON format):
+    Available Transcripts (JSON format). 
+    Chronological rule: The array is ordered from OLDEST to NEWEST. The LAST item is ALWAYS the MOST RECENT call.
     ${JSON.stringify(cleanTranscriptArray)}
     
     CRITICAL INSTRUCTIONS FOR TIMELINE SELECTION:
-    1. Extract full_name and email if present in the user's latest message.
-    2. Determine if we should trigger a transcript email by analyzing the 'timestamp' fields:
-       - FIRST, sort the Available Transcripts in your mind from NEWEST to OLDEST using the exact 'timestamp'.
-       - "Most recent" or "Yes" = Select the ID with the NEWEST timestamp.
-       - "1 call ago" or "previous call" = Select the ID with the 2nd newest timestamp.
-       - "2 calls ago" = Select the ID with the 3rd newest timestamp.
-       - "3 calls ago" = Select the ID with the 4th newest timestamp.
-       - "N calls ago" = Select the (N+1)th newest timestamp.
-       - If they ask for a transcript by TOPIC, search the "summary" fields to match the right ID.
-    3. Generate a 'transcript_description' for the email (e.g., "from your call on 2026-02-24 regarding hiring").
+    1. Extract full_name and email if present.
+    2. Determine if we should trigger a transcript email:
+       - "Most recent" or replying "Yes" to a prompt = Select the LAST item in the array.
+       - "N calls ago" = Count backwards from the end of the array. 1 call ago = 2nd to last.
+       - If they ask for a transcript by TOPIC, search the "summary" fields.
+    3. Generate a 'transcript_description' for the email.
 
     Respond STRICTLY in JSON:
     {
@@ -303,32 +300,24 @@ async function processSmsIntent(userId, userText) {
     if (result.full_name && result.full_name.toLowerCase() !== 'null' && !user?.full_name) updates.full_name = result.full_name;
     if (result.email && result.email.toLowerCase() !== 'null' && !user?.email) updates.email = result.email;
     
-    if (Object.keys(updates).length > 0) {
-      await supabase.from("users").update(updates).eq("id", userId);
-      console.log("👤 User profile dynamically updated via SMS:", updates);
-    }
-   if (result.transcript_id_to_send && result.transcript_id_to_send !== 'null') {
+    if (Object.keys(updates).length > 0) await supabase.from("users").update(updates).eq("id", userId);
+
+    if (result.transcript_id_to_send && result.transcript_id_to_send !== 'null') {
       const finalEmail = updates.email || user?.email;
       if (finalEmail && finalEmail.includes('@')) {
         const desc = result.transcript_description || "from our recent conversation";
-        console.log(`✅ Smart Intent: Queuing transcript ${result.transcript_id_to_send} for ${finalEmail}...`);
+        console.log(`✅ Smart Intent: Queued transcript ${result.transcript_id_to_send} for ${finalEmail}`);
         
-        // NEW: Delay the email by 6000 milliseconds (6 seconds) so the SMS text wins the race!
-        setTimeout(() => {
-          triggerGoogleAppsScript(finalEmail, updates.full_name || user?.full_name || "User", result.transcript_id_to_send, desc);
-        }, 6000);
-        
-      } else {
-        console.log("🛑 Intent: User wants transcript, but NO EMAIL on file. Assistant will urge them for it.");
+        // FIX: Return the email data so the server can hold onto it!
+        return { email: finalEmail, name: updates.full_name || user?.full_name || "User", id: result.transcript_id_to_send, desc: desc };
       }
-    } else {
-      console.log("🛑 Intent: No transcript requested based on context.");
     }
+    return null;
   } catch (err) {
     console.error("Intent extraction failed:", err.message);
+    return null;
   }
 }
-
 // RESTORED: Full verbose vCard tracers
 async function checkAndSendVCard(userId, rawPhone) {
   console.log(`[vCard Tracer] 1. Started check for: ${rawPhone}`);
@@ -401,7 +390,8 @@ app.post("/twilio/sms", async (req, res) => {
     });
     if (inErr) throw new Error("messages insert failed: " + inErr.message);
 
-    await processSmsIntent(userId, body);
+    // FIX: Save the queued email task to fire LATER
+    const pendingEmailTask = await processSmsIntent(userId, body);
 
     const cfg = await getBotConfig();
     const memorySummary = await getUserMemorySummary(userId);
@@ -425,34 +415,35 @@ app.post("/twilio/sms", async (req, res) => {
 
     const cleanReplyText = replyText.replace(/^[\(\[].*?[\)\]]\s*/, '').trim();
 
-    const { error: outErr } = await supabase.from("messages").insert({
+    await supabase.from("messages").insert({
       conversation_id: conversationId, channel: "sms", direction: "agent",
       text: cleanReplyText, provider: "openai", twilio_message_sid: null
     });
-    if (outErr) throw new Error("messages insert failed: " + outErr.message);
 
     try {
-      const userMsgCount = await getUserMsgCountInConversation(conversationId);
-      if (userMsgCount > 0 && userMsgCount % 2 === 0) {
-        const newSummary = await updateMemorySummary({
-          oldSummary: memorySummary, userText: `(SMS) ${body}`, assistantText: `(SMS) ${cleanReplyText}`
-        });
-        if (newSummary) {
-          await setUserMemorySummary(userId, newSummary);
-        }
-      }
-    } catch (memErr) {
-      console.error("memory update failed", memErr?.message || memErr);
+      const newSummary = await updateMemorySummary({
+        oldSummary: memorySummary, userText: `(SMS) ${body}`, assistantText: `(SMS) ${cleanReplyText}`
+      });
+      if (newSummary) await setUserMemorySummary(userId, newSummary);
+    } catch (memErr) {}
+
+    // FIX 1: Send the SMS text message back to Twilio IMMEDIATELY
+    res.status(200).type("text/xml").send(twimlReply(cleanReplyText));
+
+    // FIX 2: Now that the SMS is sent, fire the Google Apps Script email!
+    if (pendingEmailTask) {
+      setTimeout(() => {
+        triggerGoogleAppsScript(pendingEmailTask.email, pendingEmailTask.name, pendingEmailTask.id, pendingEmailTask.desc);
+      }, 1000); // Wait 1 second just to ensure the text arrives first
     }
 
-    return res.status(200).type("text/xml").send(twimlReply(cleanReplyText));
   } catch (err) {
     const msg = err?.message || String(err);
     console.error("ERROR sms", msg);
     await logError({ phone: cleanPhone, userId: userId, conversationId: conversationId, channel: "sms", stage: "twilio_sms_webhook", message: msg, details: { body: body } });
     return res.status(200).type("text/xml").send(twimlReply("Agent error. Check logs."));
   }
-}); 
+});
 
 app.post("/elevenlabs/twilio-personalize", async (req, res) => {
   try {
@@ -514,8 +505,8 @@ app.post("/elevenlabs/post-call", async (req, res) => {
     if (!Array.isArray(transcriptDataArray)) transcriptDataArray = [];
     
     // NEW: Safety check to purge any old flat string IDs and only keep proper JSON objects
-    transcriptDataArray = transcriptDataArray.filter(t => typeof t === 'object' && t !== null && t.id);
-
+// Safety map to preserve older flat strings instead of deleting them!
+    transcriptDataArray = transcriptDataArray.map(t => typeof t === 'string' ? { id: t, summary: "Older call" } : t).filter(t => t && t.id);
     if (transcriptId && !transcriptDataArray.find(t => t.id === transcriptId)) {
       const previewText = (data?.analysis?.transcript_summary || transcriptText.substring(0, 150)).replace(/\n/g, " ") + "...";
       
