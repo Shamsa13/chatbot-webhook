@@ -251,7 +251,6 @@ async function triggerGoogleAppsScript(email, name, transcriptId, description) {
     console.error("❌ Google Script trigger failed:", err.message); 
   }
 }
-
 async function processSmsIntent(userId, userText) {
   try {
     const { data: user } = await supabase.from("users").select("full_name, email, transcript_data").eq("id", userId).single();
@@ -259,7 +258,9 @@ async function processSmsIntent(userId, userText) {
     const historyText = historyMsgs.map(m => `${m.role}: ${m.content}`).join("\n");
 
     const transcriptArray = user?.transcript_data || [];
-    const mostRecentId = transcriptArray.length > 0 ? transcriptArray[transcriptArray.length - 1].id : null;
+    
+    // Safety check: Filter out flat strings so the LLM only sees objects with timestamps
+    const cleanTranscriptArray = transcriptArray.filter(t => typeof t === 'object' && t !== null && t.id);
 
     const prompt = `Analyze the user's latest text message: "${userText}"
     Current DB Data: Name=${user?.full_name || 'null'}, Email=${user?.email || 'null'}
@@ -267,22 +268,20 @@ async function processSmsIntent(userId, userText) {
     Recent Chat Context:
     ${historyText}
 
-    Available Transcripts (JSON format). 
-    Chronological rule: The LAST item in this array is the MOST RECENT call.
-    ${JSON.stringify(transcriptArray)}
+    Available Transcripts (JSON format):
+    ${JSON.stringify(cleanTranscriptArray)}
     
     CRITICAL INSTRUCTIONS FOR TIMELINE SELECTION:
     1. Extract full_name and email if present in the user's latest message.
-    2. Determine if we should trigger a transcript email:
-       - "Most recent call" or saying "Yes" = Select the LAST item in the array.
-       - "N calls ago" = Count backwards from the end of the array mathematically. 
-         * 1 call ago = 2nd to last item
-         * 2 calls ago = 3rd to last item
-         * 3 calls ago = 4th to last item
-         * 4 calls ago = 5th to last item
-         * General rule: 'N calls ago' is always the (N + 1)th item from the end.
+    2. Determine if we should trigger a transcript email by analyzing the 'timestamp' fields:
+       - FIRST, sort the Available Transcripts in your mind from NEWEST to OLDEST using the exact 'timestamp'.
+       - "Most recent" or "Yes" = Select the ID with the NEWEST timestamp.
+       - "1 call ago" or "previous call" = Select the ID with the 2nd newest timestamp.
+       - "2 calls ago" = Select the ID with the 3rd newest timestamp.
+       - "3 calls ago" = Select the ID with the 4th newest timestamp.
+       - "N calls ago" = Select the (N+1)th newest timestamp.
        - If they ask for a transcript by TOPIC, search the "summary" fields to match the right ID.
-    3. Generate a 'transcript_description' for the email (e.g., "from your 4th most recent call regarding hiring", "from the call on 2026-02-24").
+    3. Generate a 'transcript_description' for the email (e.g., "from your call on 2026-02-24 regarding hiring").
 
     Respond STRICTLY in JSON:
     {
@@ -325,6 +324,7 @@ async function processSmsIntent(userId, userText) {
     console.error("Intent extraction failed:", err.message);
   }
 }
+
 // RESTORED: Full verbose vCard tracers
 async function checkAndSendVCard(userId, rawPhone) {
   console.log(`[vCard Tracer] 1. Started check for: ${rawPhone}`);
@@ -490,7 +490,6 @@ app.post("/elevenlabs/post-call", async (req, res) => {
     const body = req.body || {};
     const data = body.data || {};
     
-    // RESTORED: Ultra-robust caller ID check here too
     const phoneRaw = data.metadata?.caller_id || data.user_id || body.caller_id || body.callerId || body.from || body.From || "";
     const phone = normalizeFrom(String(phoneRaw).trim());
     const transcriptText = extractElevenTranscript(body);
@@ -509,14 +508,23 @@ app.post("/elevenlabs/post-call", async (req, res) => {
     
     let transcriptDataArray = userRecord?.transcript_data || [];
     if (!Array.isArray(transcriptDataArray)) transcriptDataArray = [];
+    
+    // NEW: Safety check to purge any old flat string IDs and only keep proper JSON objects
+    transcriptDataArray = transcriptDataArray.filter(t => typeof t === 'object' && t !== null && t.id);
 
     if (transcriptId && !transcriptDataArray.find(t => t.id === transcriptId)) {
       const previewText = (data?.analysis?.transcript_summary || transcriptText.substring(0, 150)).replace(/\n/g, " ") + "...";
-      transcriptDataArray.push({ id: transcriptId, date: new Date().toISOString().split('T')[0], summary: previewText });
+      
+      // NEW: We now save the exact ISO timestamp (Date + Time + Timezone)
+      transcriptDataArray.push({ 
+        id: transcriptId, 
+        timestamp: new Date().toISOString(), 
+        summary: previewText 
+      });
+      
       await supabase.from("users").update({ transcript_data: transcriptDataArray }).eq("id", userId);
     }
 
-    // RESTORED: The background trigger for Google Apps Script to build the Doc
     if (GOOGLE_SCRIPT_WEBHOOK_URL) {
       try {
         console.log(`⚡ Telling Google to fetch transcript ${transcriptId} immediately...`);
@@ -555,6 +563,5 @@ app.post("/elevenlabs/post-call", async (req, res) => {
     console.error("ERROR post-call", err?.message);
     return res.status(200).json({ ok: false });
   }
-}); 
-
+});
 app.listen(PORT, () => console.log(`Server live on ${PORT}`));
