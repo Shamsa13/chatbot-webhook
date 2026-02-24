@@ -102,6 +102,7 @@ async function searchKnowledgeBase(userText) {
     return "";
   }
 }
+
 async function getOrCreateUser(phone) {
   const { data: existing, error: readErr } = await supabase.from("users").select("id").eq("phone", phone).limit(1);
   if (readErr) throw new Error("users read failed: " + readErr.message);
@@ -169,10 +170,11 @@ function formatRecentHistoryForCall(msgs) {
     }).join("\n").trim();
 }
 
-async function callModel({ systemPrompt, ragContext, memorySummary, history, userText }) {
+async function callModel({ systemPrompt, profileContext, ragContext, memorySummary, history, userText }) {
   const sys = systemPrompt || "You are a helpful assistant. Keep replies short and clear.";
   const messages = [
     { role: "system", content: sys },
+    ...(profileContext ? [{ role: "system", content: profileContext }] : []),
     ...(ragContext ? [{ role: "system", content: "Relevant Knowledge Base Context:\n\n" + ragContext }] : []),
     ...(memorySummary ? [{ role: "system", content: "Long term memory about this user:\n" + memorySummary }] : []),
     ...(history || []),
@@ -184,17 +186,22 @@ async function callModel({ systemPrompt, ragContext, memorySummary, history, use
   return out.trim() || "Sorry, I could not generate a reply.";
 }
 
-// UPGRADED APPEND-ONLY MEMORY FUNCTION
+// APPEND-ONLY MEMORY FUNCTION (Date + Tags Preserved)
 async function updateMemorySummary({ oldSummary, userText, assistantText }) {
+  const today = new Date().toISOString().split('T')[0];
   const prompt = [
     "You are a strict memory archiver for an AI assistant.",
-    "CRITICAL RULE: NEVER delete, condense, or alter any existing memory lines. You must preserve every single historical detail, fact, and preference exactly as it is.",
+    "CRITICAL RULE: NEVER delete, condense, or alter any existing memory lines. You must preserve every single historical detail exactly as it is.",
     "Your job is ONLY to extract NEW, highly specific facts from the 'New conversation turn' and APPEND them to the bottom of the existing list.",
     "If the new turn contains no new specific facts, output the 'Existing memory summary' exactly as it was.",
     "",
     "STRICT FORMATTING RULE:",
-    "1. Every new line MUST start with a tag: [SMS] or [VOICE].",
-    "2. Capture SPECIFIC details only. No vague summaries.",
+    "1. Every new line MUST start with this exact structure: [CHANNEL] [YYYY-MM-DD] [TAG] Fact.",
+    "2. Replace [CHANNEL] with either [SMS] or [VOICE].",
+    `3. Replace [YYYY-MM-DD] with exactly today's date: [${today}].`,
+    "4. Replace [TAG] with ONE of these categories: [NAME], [COMPANY], [FACT], [SUBJECT], [PREFERENCE], [GOAL], [ACTION].",
+    "5. Capture SPECIFIC details only. No vague summaries.",
+    "Example: [SMS] [2026-02-24] [PREFERENCE] User likes the color crimson red.",
     "",
     "Existing memory summary:",
     oldSummary ? oldSummary : "(empty)",
@@ -247,14 +254,38 @@ async function triggerGoogleAppsScript(email, name, transcriptId) {
   }
 }
 
+// --- NEW: SMART CONTEXT-AWARE INTENT EXTRACTOR ---
 async function processSmsIntent(userId, userText) {
   try {
-    const { data: user } = await supabase.from("users").select("full_name, email, transcript_history").eq("id", userId).single();
-    const prompt = `Analyze the user's text message: "${userText}"
-    Current User Data: Name=${user?.full_name || 'null'}, Email=${user?.email || 'null'}
-    1. Extract their name and email if mentioned.
-    2. Check if they are requesting a transcript, confirming they want one, OR providing their email to receive one. If the user says 'Yes', 'Sure', or 'I'd love that', set wants_transcript to true.
-    Respond STRICTLY in JSON: {"full_name": "extracted name or null", "email": "extracted email or null", "wants_transcript": true/false}`;
+    // We now fetch the new transcript_data array
+    const { data: user } = await supabase.from("users").select("full_name, email, transcript_data").eq("id", userId).single();
+    
+    // We fetch the last 3 messages so the LLM knows if the bot JUST offered a transcript
+    const historyMsgs = await getRecentUserMessages(userId, 3);
+    const historyText = historyMsgs.map(m => `${m.role}: ${m.content}`).join("\n");
+
+    const prompt = `Analyze the user's latest text message: "${userText}"
+    Current DB Data: Name=${user?.full_name || 'null'}, Email=${user?.email || 'null'}
+    
+    Recent Chat Context (to understand conversation flow):
+    ${historyText}
+
+    Available Transcripts for this user (JSON):
+    ${JSON.stringify(user?.transcript_data || [])}
+
+    Tasks:
+    1. Extract full_name and email if present in the user's latest message.
+    2. Determine if we should trigger a transcript email.
+       - Rule A: If the user explicitly asks for a transcript by TOPIC or RELATIVE TIME (e.g., "send me the one about hiring", "send the transcript from 2 calls ago"), match it to the correct 'id' from the Available Transcripts list.
+       - Rule B: If the user just provides an email or says "Yes", ONLY send the most recent transcript IF the 'Recent Chat Context' shows the Assistant *just* explicitly offered to send it.
+       - Rule C: Do NOT trigger a transcript if the user mentions an email for another reason, or if they haven't explicitly asked for one.
+
+    Respond STRICTLY in JSON:
+    {
+      "full_name": "extracted name or null",
+      "email": "extracted email or null",
+      "transcript_id_to_send": "exact ID from the list, or null"
+    }`;
 
     const resp = await openai.chat.completions.create({
       model: OPENAI_MEMORY_MODEL,
@@ -264,36 +295,37 @@ async function processSmsIntent(userId, userText) {
     
     const result = JSON.parse(resp.choices[0].message.content);
     const updates = {};
-    if (result.full_name && !user?.full_name) updates.full_name = result.full_name;
-    if (result.email && !user?.email) updates.email = result.email;
+    
+    if (result.full_name && result.full_name.toLowerCase() !== 'null' && !user?.full_name) updates.full_name = result.full_name;
+    if (result.email && result.email.toLowerCase() !== 'null' && !user?.email) updates.email = result.email;
+    
     if (Object.keys(updates).length > 0) {
       await supabase.from("users").update(updates).eq("id", userId);
-      console.log("👤 User profile dynamically updated:", updates);
+      console.log("👤 User profile dynamically updated via SMS:", updates);
     }
 
-    if (result.wants_transcript) {
+    // Trigger specific transcript based on AI logic
+    if (result.transcript_id_to_send && result.transcript_id_to_send !== 'null') {
       const finalEmail = updates.email || user?.email;
-      const history = user?.transcript_history || [];
-      const latestTranscriptId = history.length > 0 ? history[history.length - 1] : null;
-
-      if (finalEmail && latestTranscriptId) {
-        triggerGoogleAppsScript(finalEmail, updates.full_name || user?.full_name || "User", latestTranscriptId);
+      if (finalEmail) {
+        console.log(`✅ Smart Intent detected: Sending transcript ${result.transcript_id_to_send} to ${finalEmail}`);
+        triggerGoogleAppsScript(finalEmail, updates.full_name || user?.full_name || "User", result.transcript_id_to_send);
       } else {
-        console.log("⚠️ User wants transcript but missing email or transcript ID.");
+        console.log("⚠️ User requested transcript but missing email.");
       }
+    } else {
+      console.log("🛑 Intent: No transcript requested based on context.");
     }
   } catch (err) {
     console.error("Intent extraction failed:", err.message);
   }
 }
 
-// --- WHATSAPP AWARE vCARD SENDER WITH TRACERS ---
-// --- WHATSAPP AWARE vCARD SENDER WITH TRACERS (LINK VERSION) ---
+// vCard sender (No "VC" mentions)
 async function checkAndSendVCard(userId, rawPhone) {
   console.log(`[vCard Tracer] 1. Started check for: ${rawPhone}`);
   try {
     const { data: user, error } = await supabase.from("users").select("vcard_sent").eq("id", userId).single();
-    console.log(`[vCard Tracer] 2. Supabase vcard_sent is:`, user?.vcard_sent);
 
     if (error && error.code !== 'PGRST116') {
       console.error("[vCard Tracer] ⚠️ Failed to read vcard status:", error.message);
@@ -308,12 +340,8 @@ async function checkAndSendVCard(userId, rawPhone) {
         const outboundPhone = rawPhone; 
         const fromNumber = isWhatsApp ? `whatsapp:${process.env.TWILIO_PHONE_NUMBER}` : process.env.TWILIO_PHONE_NUMBER;
         
-        console.log(`[vCard Tracer] 3. Attempting to send to ${outboundPhone} via ${isWhatsApp ? 'WhatsApp' : 'SMS'}...`);
-
-        // NEW: We put the URL directly in the text body!
-        const introMsg = "Hi, it's David Beatty VC! Tap this link to instantly save my contact card and photo to your phone: https://dtxebwectbvnksuxpclc.supabase.co/storage/v1/object/public/assets/Board%20Governance%20AI.vcf";
+        const introMsg = "Hi, it's David Beatty AI! Tap this link to instantly save my contact card and photo to your phone: https://dtxebwectbvnksuxpclc.supabase.co/storage/v1/object/public/assets/Board%20Governance%20AI.vcf";
         
-        // NEW: We removed the "mediaUrl" parameter entirely so it sends as a standard SMS
         const msg = await twilioClient.messages.create({
           body: introMsg,
           from: fromNumber,
@@ -321,29 +349,24 @@ async function checkAndSendVCard(userId, rawPhone) {
         });
         
         console.log(`[vCard Tracer] 4. Twilio accepted the message! SID:`, msg.sid);
-
         await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
-        console.log(`[vCard Tracer] 5. 📇 vCard marked as TRUE in database.`);
-      } else {
-        console.log(`[vCard Tracer] ❌ FAILED: Missing Twilio variables!`);
       }
-    } else {
-      console.log(`[vCard Tracer] 🛑 Stopped: User already has vcard_sent = true`);
-    }
+    } 
   } catch (err) {
-    console.error("[vCard Tracer] ⚠️ CRASH in catch block:", err.message);
+    console.error("[vCard Tracer] ⚠️ CRASH:", err.message);
   }
 }
+
 // --- ROUTES ---
 app.get("/health", (req, res) => res.status(200).send("ok"));
 
 app.post("/twilio/sms", async (req, res) => {
-  const rawFrom = req.body.From || ""; // Contains 'whatsapp:' if applicable
-  const cleanPhone = normalizeFrom(rawFrom); // Stripped version for database lookups
+  const rawFrom = req.body.From || ""; 
+  const cleanPhone = normalizeFrom(rawFrom); 
   const body = String(req.body.Body || "").trim();
   const twilioMessageSid = req.body.MessageSid || null;
 
-  console.log("START sms", { rawFrom, cleanPhone, body });
+  console.log("START sms", { cleanPhone, body });
 
   if (!cleanPhone || !body) return res.status(200).type("text/xml").send(twimlReply("ok"));
 
@@ -352,8 +375,6 @@ app.post("/twilio/sms", async (req, res) => {
 
   try {
     userId = await getOrCreateUser(cleanPhone);
-    
-    // We pass rawFrom here so the vCard function knows if it is WhatsApp or SMS
     await checkAndSendVCard(userId, rawFrom);
 
     conversationId = await getOrCreateConversation(userId, "sms");
@@ -364,20 +385,26 @@ app.post("/twilio/sms", async (req, res) => {
     });
     if (inErr) throw new Error("messages insert failed: " + inErr.message);
 
+    // Run smart intent checker invisibly in background
     processSmsIntent(userId, body);
 
     const cfg = await getBotConfig();
     const memorySummary = await getUserMemorySummary(userId);
     const history = await getRecentUserMessages(userId, 12);
     
-    console.log("Searching KB for:", body);
+    const { data: userDb } = await supabase.from("users").select("full_name, email").eq("id", userId).single();
+    const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}, Email: ${userDb?.email || 'Unknown'}. Do not ask for this information if it is already known.`;
+    
     const ragContext = await searchKnowledgeBase(body);
-
     const formattedHistoryForOpenAI = history.map(h => ({ role: h.role, content: `(${h.channel}) ${h.content}` }));
 
     const replyText = await callModel({
-      systemPrompt: cfg.systemPrompt, ragContext: ragContext,
-      memorySummary, history: formattedHistoryForOpenAI, userText: `(SMS) ${body}`
+      systemPrompt: cfg.systemPrompt, 
+      profileContext: profileContext,
+      ragContext: ragContext,
+      memorySummary, 
+      history: formattedHistoryForOpenAI, 
+      userText: `(SMS) ${body}`
     });
 
     const cleanReplyText = replyText.replace(/^[\(\[].*?[\)\]]\s*/, '').trim();
@@ -396,7 +423,6 @@ app.post("/twilio/sms", async (req, res) => {
         });
         if (newSummary) {
           await setUserMemorySummary(userId, newSummary);
-          console.log("MEMORY updated (sms)", { userMsgCount });
         }
       }
     } catch (memErr) {
@@ -423,13 +449,23 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
     await getOrCreateConversation(userId, "call");
 
     const [memorySummary, history, { data: userRecord }] = await Promise.all([
-      getUserMemorySummary(userId), getRecentUserMessages(userId, 12), supabase.from("users").select("full_name").eq("id", userId).single()
+      getUserMemorySummary(userId), getRecentUserMessages(userId, 12), supabase.from("users").select("full_name, email").eq("id", userId).single()
     ]);
     
     const name = userRecord?.full_name ? userRecord.full_name.split(' ')[0] : "there";
     const greeting = memorySummary ? `Welcome back, ${name}. Shall we continue where we left off?` : "Hi! I'm David. How can I help you with your board decisions today?";
 
-    return res.status(200).json({ dynamic_variables: { memory_summary: memorySummary || "No previous memory.", caller_phone: phone, channel: "call", recent_history: formatRecentHistoryForCall(history) || "No recent history.", first_greeting: greeting } });
+    return res.status(200).json({ 
+      dynamic_variables: { 
+        memory_summary: memorySummary || "No previous memory.", 
+        caller_phone: phone, 
+        channel: "call", 
+        recent_history: formatRecentHistoryForCall(history) || "No recent history.", 
+        first_greeting: greeting,
+        user_name: userRecord?.full_name || "Unknown",
+        user_email: userRecord?.email || "Unknown"
+      } 
+    });
   } catch (err) {
     console.error("ERROR eleven personalize", err?.message || String(err));
     return res.status(200).json({ dynamic_variables: { memory_summary: "", caller_phone: "", channel: "call", recent_history: "", first_greeting: "" } });
@@ -447,20 +483,31 @@ app.post("/elevenlabs/post-call", async (req, res) => {
     if (!phone || !transcriptText) return res.status(200).json({ ok: true });
 
     const userId = await getOrCreateUser(phone);
-    
-    await checkAndSendVCard(userId, phone); // Voice calls use SMS for the follow-up vCard
+    await checkAndSendVCard(userId, phone);
 
     const oldSummary = await getUserMemorySummary(userId);
     const newSummary = await updateMemorySummary({ oldSummary, userText: `(VOICE CALL INITIATED)`, assistantText: `(VOICE CALL TRANSCRIPT SUMMARY)\n${transcriptText}` });
     if (newSummary) await setUserMemorySummary(userId, newSummary);
 
+    // --- NEW: FILING CABINET METADATA SAVER ---
     const transcriptId = data.conversation_id || body.conversation_id;
-    const { data: userRecord } = await supabase.from("users").select("full_name, email, transcript_history").eq("id", userId).single();
+    // We now select your new 'transcript_data' array
+    const { data: userRecord } = await supabase.from("users").select("full_name, email, transcript_data").eq("id", userId).single();
     
-    let historyArray = userRecord?.transcript_history || [];
-    if (transcriptId && !historyArray.includes(transcriptId)) {
-      historyArray.push(transcriptId);
-      await supabase.from("users").update({ transcript_history: historyArray }).eq("id", userId);
+    let transcriptDataArray = userRecord?.transcript_data || [];
+    if (!Array.isArray(transcriptDataArray)) transcriptDataArray = [];
+
+    if (transcriptId && !transcriptDataArray.find(t => t.id === transcriptId)) {
+      // Create a short preview/summary of what this call was about
+      const aiSummary = data?.analysis?.transcript_summary || "";
+      const previewText = aiSummary || (transcriptText.substring(0, 150).replace(/\n/g, " ") + "...");
+
+      transcriptDataArray.push({
+        id: transcriptId,
+        date: new Date().toISOString().split('T')[0],
+        summary: previewText
+      });
+      await supabase.from("users").update({ transcript_data: transcriptDataArray }).eq("id", userId);
     }
 
     if (GOOGLE_SCRIPT_WEBHOOK_URL) {
@@ -472,10 +519,16 @@ app.post("/elevenlabs/post-call", async (req, res) => {
     if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
       const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
       const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
-      const textMessage = (userRecord?.email && userRecord?.full_name) ? `Hi ${userRecord.full_name.split(' ')[0]}! It's David. Would you like me to email you the transcript from our recent call? Just reply 'Yes'.` : `Hi! It's David. Thanks for the chat. If you'd like me to email you a copy of our call transcript, just reply with your full name and email address!`;
 
       setTimeout(async () => {
         try {
+          const { data: latestUser } = await supabase.from("users").select("full_name, email").eq("id", userId).single();
+          const hasInfo = latestUser?.email && latestUser?.full_name;
+          
+          const textMessage = hasInfo 
+            ? `Hi ${latestUser.full_name.split(' ')[0]}! It's David AI. Would you like me to email you the transcript from our recent call? Just reply 'Yes'.`
+            : `Hi! It's David AI. Thanks for the chat. If you'd like me to email you a copy of our call transcript, just reply with your full name and email address!`;
+
           await twilioClient.messages.create({ body: textMessage, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
           const smsConversationId = await getOrCreateConversation(userId, "sms");
           await supabase.from("messages").insert({ conversation_id: smsConversationId, channel: "sms", direction: "agent", text: textMessage, provider: "twilio" });
