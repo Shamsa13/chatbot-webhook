@@ -751,29 +751,33 @@ app.get("/health", (req, res) => res.status(200).send("ok"));
 
 
 app.post("/twilio/sms", async (req, res) => {
-
   const rawFrom = req.body.From || ""; 
-
   const cleanPhone = normalizeFrom(rawFrom); 
-
   const body = String(req.body.Body || "").trim();
-
   const twilioMessageSid = req.body.MessageSid || null;
-
-
 
   console.log("START sms", { cleanPhone, body });
 
-
-
   if (!cleanPhone || !body) return res.status(200).type("text/xml").send(twimlReply("ok"));
 
+  // 🛡️ THE TWILIO DEDUPLICATOR: Ignore network retries!
+  if (twilioMessageSid) {
+    const { data: duplicate } = await supabase
+      .from("messages")
+      .select("id")
+      .eq("twilio_message_sid", twilioMessageSid)
+      .limit(1);
 
+    if (duplicate && duplicate.length > 0) {
+      console.log("♻️ Duplicate Twilio message detected! Ignoring to prevent double-reply.");
+      // We return an empty response so Twilio stops retrying, but we don't trigger the AI.
+      return res.status(200).type("text/xml").send("<Response></Response>");
+    }
+  }
 
   let conversationId = null;
-
   let userId = null; 
-
+  // ... rest of the code stays exactly the same
 
 
   try {
