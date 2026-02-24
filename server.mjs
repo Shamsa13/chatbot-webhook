@@ -430,13 +430,14 @@ app.post("/twilio/sms", async (req, res) => {
     const ragContext = await searchKnowledgeBase(body);
     const formattedHistoryForOpenAI = history.map(h => ({ role: h.role, content: `(${h.channel}) ${h.content}` }));
 
-    console.log("  -> [OpenAI Tracer] 1. Sending message to OpenAI...");
+console.log("  -> [OpenAI Tracer] 1. Sending message to OpenAI...");
     const replyText = await callModel({
       systemPrompt: cfg.systemPrompt, 
       profileContext: profileContext,
       ragContext: ragContext,
       memorySummary, 
-      history: formattedHistoryForOpenAI, 
+      // 🔥 THE FIX: Strip the duplicate message off the end of the history array!
+      history: formattedHistoryForOpenAI.slice(0, -1), 
       userText: `(SMS) ${body}`
     });
 
