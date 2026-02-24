@@ -384,6 +384,15 @@ app.post("/twilio/sms", async (req, res) => {
 
   if (!cleanPhone || !body) return res.status(200).type("text/xml").send(twimlReply("ok"));
 
+  // 🛡️ THE TWILIO DEDUPLICATOR: Ignore network retries!
+  if (twilioMessageSid) {
+    const { data: duplicate } = await supabase.from("messages").select("id").eq("twilio_message_sid", twilioMessageSid).limit(1);
+    if (duplicate && duplicate.length > 0) {
+      console.log("♻️ Duplicate Twilio message detected! Ignoring to prevent double-reply.");
+      return res.status(200).type("text/xml").send("<Response></Response>");
+    }
+  }
+
   let conversationId = null;
   let userId = null; 
 
@@ -412,7 +421,6 @@ app.post("/twilio/sms", async (req, res) => {
     const formattedHistoryForOpenAI = history.map(h => ({ role: h.role, content: `(${h.channel}) ${h.content}` }));
 
     // 2. Create the Reply
-// 2. Create the Reply
     console.log("  -> [OpenAI Tracer] 1. Sending message to OpenAI...");
     const replyText = await callModel({
       systemPrompt: cfg.systemPrompt, 
@@ -449,7 +457,6 @@ app.post("/twilio/sms", async (req, res) => {
         const pendingEmailTask = await processSmsIntent(userId, body);
         
         // If the intent check finds a valid request, send the email instantly
-        // (No timeout needed anymore because the SMS is already delivered)
         if (pendingEmailTask) {
           triggerGoogleAppsScript(pendingEmailTask.email, pendingEmailTask.name, pendingEmailTask.id, pendingEmailTask.desc);
         }
@@ -482,10 +489,8 @@ app.post("/twilio/sms", async (req, res) => {
   }
 });
 
-
 app.post("/elevenlabs/twilio-personalize", async (req, res) => {
   try {
-    // RESTORED: Ultra-robust caller ID check
     const fromRaw = req.body?.from || req.body?.From || req.body?.callerId || req.body?.caller_id || req.body?.call?.from || "";
     const phone = normalizeFrom(fromRaw);
 
@@ -542,59 +547,64 @@ app.post("/elevenlabs/post-call", async (req, res) => {
     let transcriptDataArray = userRecord?.transcript_data || [];
     if (!Array.isArray(transcriptDataArray)) transcriptDataArray = [];
     
-    // NEW: Safety check to purge any old flat string IDs and only keep proper JSON objects
-// Safety map to preserve older flat strings instead of deleting them!
+    // Safety map to preserve older flat strings instead of deleting them!
     transcriptDataArray = transcriptDataArray.map(t => typeof t === 'string' ? { id: t, summary: "Older call" } : t).filter(t => t && t.id);
+
+    // 🛡️ THE ELEVENLABS DEDUPLICATOR
+    // We wrap EVERYTHING in this check so it only texts you ONCE per call!
     if (transcriptId && !transcriptDataArray.find(t => t.id === transcriptId)) {
       const previewText = (data?.analysis?.transcript_summary || transcriptText.substring(0, 150)).replace(/\n/g, " ") + "...";
       
-      // NEW: We now save the exact ISO timestamp (Date + Time + Timezone)
+      // Save the new transcript
       transcriptDataArray.push({ 
         id: transcriptId, 
         timestamp: new Date().toISOString(), 
         summary: previewText 
       });
-      
       await supabase.from("users").update({ transcript_data: transcriptDataArray }).eq("id", userId);
-    }
 
-    if (GOOGLE_SCRIPT_WEBHOOK_URL) {
-      try {
-        console.log(`⚡ Telling Google to fetch transcript ${transcriptId} immediately...`);
-        fetch(GOOGLE_SCRIPT_WEBHOOK_URL, { 
-          method: "POST", 
-          headers: { "Content-Type": "application/json" }, 
-          body: JSON.stringify({ action: "fetch_transcripts" }) 
-        }).catch(err => console.error("Fetch trigger failed", err));
-      } catch (err) {}
-    }
-
-    if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
-      const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-      const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
-
-      setTimeout(async () => {
+      // Trigger Google Scripts
+      if (GOOGLE_SCRIPT_WEBHOOK_URL) {
         try {
-          const { data: latestUser } = await supabase.from("users").select("full_name, email").eq("id", userId).single();
-          const hasInfo = latestUser?.email && latestUser?.full_name;
-          
-          const textMessage = hasInfo 
-            ? `Hi ${latestUser.full_name.split(' ')[0]}! It's David AI. Would you like me to email you the transcript from our recent call? Just reply 'Yes'.`
-            : `Hi! It's David AI. Thanks for the chat. If you'd like me to email you a copy of our call transcript, just reply with your full name and email address!`;
+          console.log(`⚡ Telling Google to fetch transcript ${transcriptId} immediately...`);
+          fetch(GOOGLE_SCRIPT_WEBHOOK_URL, { 
+            method: "POST", 
+            headers: { "Content-Type": "application/json" }, 
+            body: JSON.stringify({ action: "fetch_transcripts" }) 
+          }).catch(err => console.error("Fetch trigger failed", err));
+        } catch (err) {}
+      }
 
-          await twilioClient.messages.create({ body: textMessage, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
-          const smsConversationId = await getOrCreateConversation(userId, "sms");
-          await supabase.from("messages").insert({ conversation_id: smsConversationId, channel: "sms", direction: "agent", text: textMessage, provider: "twilio" });
-        } catch (smsErr) {
-          console.error("⚠️ Failed to send/log delayed SMS:", smsErr.message);
-        }
-      }, 120000);
-    }
+      // Schedule the Twilio text
+      if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
+        const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+        const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
+
+        setTimeout(async () => {
+          try {
+            const { data: latestUser } = await supabase.from("users").select("full_name, email").eq("id", userId).single();
+            const hasInfo = latestUser?.email && latestUser?.full_name;
+            
+            const textMessage = hasInfo 
+              ? `Hi ${latestUser.full_name.split(' ')[0]}! It's David AI. Would you like me to email you the transcript from our recent call? Just reply 'Yes'.`
+              : `Hi! It's David AI. Thanks for the chat. If you'd like me to email you a copy of our call transcript, just reply with your full name and email address!`;
+
+            await twilioClient.messages.create({ body: textMessage, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
+            const smsConversationId = await getOrCreateConversation(userId, "sms");
+            await supabase.from("messages").insert({ conversation_id: smsConversationId, channel: "sms", direction: "agent", text: textMessage, provider: "twilio" });
+          } catch (smsErr) {
+            console.error("⚠️ Failed to send/log delayed SMS:", smsErr.message);
+          }
+        }, 120000);
+      }
+    } // <-- End of the safety block
 
     return res.status(200).json({ ok: true });
+
   } catch (err) {
     console.error("ERROR post-call", err?.message);
     return res.status(200).json({ ok: false });
   }
 });
+
 app.listen(PORT, () => console.log(`Server live on ${PORT}`));
