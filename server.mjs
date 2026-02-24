@@ -50,7 +50,7 @@ function twimlReply(text) {
 }
 
 async function logError({ phone, userId, conversationId, channel, stage, message, details }) {
-        const userMsgCount = await getUserMsgCountInConversation(conversationId);try {
+  try {
     await supabase.from("error_logs").insert({
       phone: phone || null,
       user_id: userId || null,
@@ -399,9 +399,7 @@ app.post("/twilio/sms", async (req, res) => {
     });
     if (inErr) throw new Error("messages insert failed: " + inErr.message);
 
-    // FIX: Catch the queued email task from our Intent Extractor
-    const pendingEmailTask = await processSmsIntent(userId, body);
-
+    // 1. Gather context and Search Database FIRST
     const cfg = await getBotConfig();
     const memorySummary = await getUserMemorySummary(userId);
     const history = await getRecentUserMessages(userId, 12);
@@ -413,6 +411,9 @@ app.post("/twilio/sms", async (req, res) => {
     const ragContext = await searchKnowledgeBase(body);
     const formattedHistoryForOpenAI = history.map(h => ({ role: h.role, content: `(${h.channel}) ${h.content}` }));
 
+    // 2. Create the Reply
+// 2. Create the Reply
+    console.log("  -> [OpenAI Tracer] 1. Sending message to OpenAI...");
     const replyText = await callModel({
       systemPrompt: cfg.systemPrompt, 
       profileContext: profileContext,
@@ -421,7 +422,7 @@ app.post("/twilio/sms", async (req, res) => {
       history: formattedHistoryForOpenAI, 
       userText: `(SMS) ${body}`
     });
-
+    console.log("  -> [OpenAI Tracer] 2. OpenAI replied successfully!");
     const cleanReplyText = replyText.replace(/^[\(\[].*?[\)\]]\s*/, '').trim();
 
     await supabase.from("messages").insert({
@@ -429,6 +430,37 @@ app.post("/twilio/sms", async (req, res) => {
       text: cleanReplyText, provider: "openai", twilio_message_sid: null
     });
 
+    // 3. SEND THE REPLY IMMEDIATELY
+    // The user gets their text message right now!
+    res.status(200).type("text/xml").send(twimlReply(cleanReplyText));
+    console.log("✅ SMS Reply sent to Twilio! Starting background tasks...");
+
+
+    // ------------------------------------------------------------------
+    // ⬇️ BACKGROUND TASKS (These run silently AFTER the user is replied to)
+    // ------------------------------------------------------------------
+
+    // 4. Check Intent (Only if keywords are found)
+    const intentKeywords = /\b(transcript|transcripts|email|send|call|calls|recent|yes|yep|yeah|yup|sure|please|ok|okay|notes|summary|record|recording|copy|forward|share|last|previous|ago|conversation|chat|meeting|talk)\b/i; 
+    
+    if (intentKeywords.test(body)) {
+      console.log("🔍 Keyword detected in background. Running intent check...");
+      try {
+        const pendingEmailTask = await processSmsIntent(userId, body);
+        
+        // If the intent check finds a valid request, send the email instantly
+        // (No timeout needed anymore because the SMS is already delivered)
+        if (pendingEmailTask) {
+          triggerGoogleAppsScript(pendingEmailTask.email, pendingEmailTask.name, pendingEmailTask.id, pendingEmailTask.desc);
+        }
+      } catch (intentErr) {
+        console.error("Background intent failed:", intentErr);
+      }
+    } else {
+      console.log("⏭️ No keywords detected. Skipping intent check.");
+    }
+
+    // 5. Store Memory
     try {
       const newSummary = await updateMemorySummary({
         oldSummary: memorySummary, userText: `(SMS) ${body}`, assistantText: `(SMS) ${cleanReplyText}`
@@ -436,16 +468,6 @@ app.post("/twilio/sms", async (req, res) => {
       if (newSummary) await setUserMemorySummary(userId, newSummary);
     } catch (memErr) {
       console.error("memory update failed", memErr?.message || memErr);
-    }
-
-    // FIX 1: Reply to the Twilio Text Message IMMEDIATELY
-    res.status(200).type("text/xml").send(twimlReply(cleanReplyText));
-
-    // FIX 2: Now that the SMS is safely sent, trigger the Email in the background
-    if (pendingEmailTask) {
-      setTimeout(() => {
-        triggerGoogleAppsScript(pendingEmailTask.email, pendingEmailTask.name, pendingEmailTask.id, pendingEmailTask.desc);
-      }, 1500); 
     }
 
   } catch (err) {
@@ -459,6 +481,7 @@ app.post("/twilio/sms", async (req, res) => {
     }
   }
 });
+
 
 app.post("/elevenlabs/twilio-personalize", async (req, res) => {
   try {
