@@ -455,21 +455,23 @@ app.post("/twilio/sms", async (req, res) => {
     
     // Convert active events into a clean string for the AI WITH FREQUENCY CAP
 // Convert active events into a clean string for the AI WITH FREQUENCY CAP AND TIME
+// Convert active events into a clean string for the AI WITH FREQUENCY CAP, TIME, AND COST
     let eventInstructions = "";
     if (activeEventsCache.length > 0) {
       const eventList = activeEventsCache.map(e => {
         const count = pitchCounts[e.id] || 0;
-        const timeString = new Date(e.event_date).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-        return `- ${e.event_name} on ${timeString}. Link: ${e.registration_url}. Desc: ${e.description} (Pitched: ${count}/3 times)`;
+        // Force Eastern Time so Render doesn't output UTC
+        const timeString = new Date(e.event_date).toLocaleString('en-US', { timeZone: 'America/Toronto', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
+        return `- ${e.event_name}. Date/Time: ${timeString}. Cost: ${e.cost_type}. Link: ${e.registration_url}. Desc: ${e.description} (Pitched: ${count}/3 times)`;
       }).join("\n");
       
       eventInstructions = `\n\nUPCOMING EVENTS CALENDAR:\n${eventList}\n
       CRITICAL EVENT RULES: 
       1. If the user's message is directly related to the topic of an event, briefly mention it.
-      2. ALWAYS include the registration_url and cost_type if you mention the event.
+      2. You MUST explicitly state the exact Time (e.g., '2:00 PM EST') and whether it is Free or Paid.
       3. If the "Pitched" count is 3/3 or higher, DO NOT mention the event unless explicitly asked.
-      4. RICH PREVIEW RULE: You MUST put the registration_url at the absolute VERY END of your entire message. Put it on a new line. Do not type a single word, period, or parenthesis after the URL. This allows the user's phone to generate a visual preview card.`;
-    }
+      4. RICH PREVIEW RULE: You MUST put the registration_url at the absolute VERY END of your entire message. Put it on a new line. Do not type a single word, period, or parenthesis after the URL.`;
+    }	
 
     const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}, Email: ${userDb?.email || 'Unknown'}. 
     CRITICAL INSTRUCTION: If the user says 'Yes' to receiving a transcript, OR asks for a transcript, but their Email is 'Unknown', you MUST reply by telling them you need their email address to send it. Do not confirm sending until an email is provided.${eventInstructions}`;
@@ -550,12 +552,11 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
     
     const name = userRecord?.full_name ? userRecord.full_name.split(' ')[0] : "there";
     const greeting = memorySummary ? `Welcome back, ${name}. Shall we continue where we left off?` : "Hi! I'm David AI. How can I help you with your board decisions today?";
-
 let voiceEventContext = "No upcoming events.";
     if (activeEventsCache.length > 0) {
       const eventList = activeEventsCache.map(e => {
-        const timeString = new Date(e.event_date).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-        return `- ${e.event_name} on ${timeString}`;
+        const timeString = new Date(e.event_date).toLocaleString('en-US', { timeZone: 'America/Toronto', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
+        return `- ${e.event_name}. Date/Time: ${timeString}. Cost: ${e.cost_type}.`;
       }).join("\n");
       voiceEventContext = `UPCOMING EVENTS:\n${eventList}`;
     }
@@ -653,9 +654,13 @@ app.post("/elevenlabs/post-call", async (req, res) => {
               
               if (result.event_id_to_send && result.event_id_to_send !== 'null') {
                 const event = availableEvents.find(e => e.id === result.event_id_to_send);
-             if (event) {
-                  const timeString = new Date(event.event_date).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-                  const eventSms = `Hi, it's David! Here is the link for the ${event.event_name} event we just talked about (Starts ${timeString}):\n\n${event.registration_url}`;
+		
+		if (event) {
+                  // Format time to Eastern Time and grab cost
+                  const timeString = new Date(event.event_date).toLocaleString('en-US', { timeZone: 'America/Toronto', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
+                  const costText = event.cost_type && event.cost_type.toLowerCase() !== 'free' ? ` (Cost: ${event.cost_type})` : ' (Free)';
+                  
+                  const eventSms = `Hi, it's David! Here is the link for the ${event.event_name} event we just talked about. It starts on ${timeString}${costText}:\n\n${event.registration_url}`;
                   
                   await twilioClient.messages.create({ body: eventSms, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
                   
@@ -667,8 +672,7 @@ app.post("/elevenlabs/post-call", async (req, res) => {
                   await supabase.from("users").update({ event_pitch_counts: userPitchCounts }).eq("id", userId);
                   
                   console.log(`✅ Smart Event Link sent for ${event.event_name}`);
-                }   
-		
+                }		
 		
               }
             } catch (eventErr) {
