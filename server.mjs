@@ -385,7 +385,7 @@ async function checkAndSendVCard(userId, rawPhone) {
         const outboundPhone = rawPhone; 
         const fromNumber = isWhatsApp ? `whatsapp:${process.env.TWILIO_PHONE_NUMBER}` : process.env.TWILIO_PHONE_NUMBER;
         
-        const introMsg = "Hi, it's David Beatty AI! Tap this link to instantly save my contact card and photo to your phone: https://dtxebwectbvnksuxpclc.supabase.co/storage/v1/object/public/assets/Board%20Governance%20AI.vcf";
+	const introMsg = "Hi, it's David Beatty AI! Tap this link below to instantly save my contact card and photo to your phone:\n\nhttps://dtxebwectbvnksuxpclc.supabase.co/storage/v1/object/public/assets/Board%20Governance%20AI.vcf";
         await twilioClient.messages.create({ body: introMsg, from: fromNumber, to: outboundPhone });
         await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
       }
@@ -454,18 +454,21 @@ app.post("/twilio/sms", async (req, res) => {
     let pitchCounts = userDb?.event_pitch_counts || {};
     
     // Convert active events into a clean string for the AI WITH FREQUENCY CAP
+// Convert active events into a clean string for the AI WITH FREQUENCY CAP AND TIME
     let eventInstructions = "";
     if (activeEventsCache.length > 0) {
       const eventList = activeEventsCache.map(e => {
         const count = pitchCounts[e.id] || 0;
-        return `- ${e.event_name} on ${new Date(e.event_date).toLocaleDateString()}. Link: ${e.registration_url}. Desc: ${e.description} (Pitched to this user: ${count}/3 times)`;
+        const timeString = new Date(e.event_date).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+        return `- ${e.event_name} on ${timeString}. Link: ${e.registration_url}. Desc: ${e.description} (Pitched: ${count}/3 times)`;
       }).join("\n");
       
       eventInstructions = `\n\nUPCOMING EVENTS CALENDAR:\n${eventList}\n
       CRITICAL EVENT RULES: 
-      1. If the user's message is directly related to the topic of an event, briefly mention it at the end of your reply (e.g., "By the way, I'm hosting a session on this...").
+      1. If the user's message is directly related to the topic of an event, briefly mention it.
       2. ALWAYS include the registration_url and cost_type if you mention the event.
-      3. If the "Pitched to this user" count is 3/3 or higher, DO NOT mention the event again unless the user explicitly asks about it.`;
+      3. If the "Pitched" count is 3/3 or higher, DO NOT mention the event unless explicitly asked.
+      4. RICH PREVIEW RULE: You MUST put the registration_url at the absolute VERY END of your entire message. Put it on a new line. Do not type a single word, period, or parenthesis after the URL. This allows the user's phone to generate a visual preview card.`;
     }
 
     const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}, Email: ${userDb?.email || 'Unknown'}. 
@@ -548,11 +551,12 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
     const name = userRecord?.full_name ? userRecord.full_name.split(' ')[0] : "there";
     const greeting = memorySummary ? `Welcome back, ${name}. Shall we continue where we left off?` : "Hi! I'm David AI. How can I help you with your board decisions today?";
 
-    let voiceEventContext = "No upcoming events.";
+let voiceEventContext = "No upcoming events.";
     if (activeEventsCache.length > 0) {
-      const eventList = activeEventsCache.map(e => 
-        `- ${e.event_name} on ${new Date(e.event_date).toLocaleDateString()}`
-      ).join("\n");
+      const eventList = activeEventsCache.map(e => {
+        const timeString = new Date(e.event_date).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+        return `- ${e.event_name} on ${timeString}`;
+      }).join("\n");
       voiceEventContext = `UPCOMING EVENTS:\n${eventList}`;
     }
 
@@ -649,8 +653,10 @@ app.post("/elevenlabs/post-call", async (req, res) => {
               
               if (result.event_id_to_send && result.event_id_to_send !== 'null') {
                 const event = availableEvents.find(e => e.id === result.event_id_to_send);
-                if (event) {
-                  const eventSms = `Hi, it's David! Here is the link for the ${event.event_name} event we just talked about: ${event.registration_url}`;
+             if (event) {
+                  const timeString = new Date(event.event_date).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+                  const eventSms = `Hi, it's David! Here is the link for the ${event.event_name} event we just talked about (Starts ${timeString}):\n\n${event.registration_url}`;
+                  
                   await twilioClient.messages.create({ body: eventSms, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
                   
                   const smsConversationId = await getOrCreateConversation(userId, "sms");
@@ -661,7 +667,9 @@ app.post("/elevenlabs/post-call", async (req, res) => {
                   await supabase.from("users").update({ event_pitch_counts: userPitchCounts }).eq("id", userId);
                   
                   console.log(`✅ Smart Event Link sent for ${event.event_name}`);
-                }
+                }   
+		
+		
               }
             } catch (eventErr) {
               console.error("Semantic event match failed:", eventErr.message);
