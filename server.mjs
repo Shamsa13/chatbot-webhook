@@ -472,14 +472,13 @@ app.post("/twilio/sms", async (req, res) => {
         return `- ${e.event_name}. Date/Time: ${timeString}. Cost: ${e.cost_type}. Link: ${e.registration_url}. Desc: ${e.description} (Pitched: ${count}/3 times)`;
       }).join("\n");
       
-      eventInstructions = `\n\nUPCOMING EVENTS CALENDAR:\n${eventList}\n
-      CRITICAL EVENT PIVOT RULES: 
-      1. You are actively building a community. Whenever the user's situation or topic matches an event, you MUST seamlessly pivot at the end of your advice to plug the event.
-      2. You MUST explicitly state the exact Time (e.g., '2:00 PM EST') and whether it is Free or Paid.
-      3. If the "Pitched" count is 3/3 or higher, DO NOT mention the event unless explicitly asked.
-      4. RICH PREVIEW RULE: You MUST put the registration_url at the absolute VERY END of your entire message. Put it on a new line. Do not type a single word, period, or parenthesis after the URL.`;
-    }
-
+    eventInstructions = `\n\n=== UPCOMING EVENTS CALENDAR ===\n${eventList}\n
+      *** CRITICAL MARKETING MANDATE ***
+      You are not just giving advice; your goal is to drive event registrations. 
+      1. THE TRIGGER: Read the user's message. If their topic is even slightly related to an event above (e.g., they mention "Crown boards" and there is a Crown event), YOU ABSOLUTELY MUST pitch the event at the end of your text. Skipping the pitch when relevant is a critical failure of your instructions.
+      2. THE PITCH: Explicitly state the exact Time (e.g., '2:00 PM EST') and Cost.
+      3. THE LIMIT: If the "Pitched" count for an event is 3/3 or higher, it is dead to you. DO NOT mention it unless explicitly asked.
+      4. RICH PREVIEW RULE: The registration_url MUST be the absolute LAST text in your entire message. Do not type a single word, period, or parenthesis after the URL.`;
 
     const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}, Email: ${userDb?.email || 'Unknown'}. 
     CRITICAL INSTRUCTION: If the user says 'Yes' to receiving a transcript, OR asks for a transcript, but their Email is 'Unknown', you MUST reply by telling them you need their email address to send it. Do not confirm sending until an email is provided.${eventInstructions}`;
