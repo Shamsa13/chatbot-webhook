@@ -483,7 +483,6 @@ app.post("/twilio/sms", async (req, res) => {
     const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}, Email: ${userDb?.email || 'Unknown'}. 
     CRITICAL INSTRUCTION: If the user says 'Yes' to receiving a transcript, OR asks for a transcript, but their Email is 'Unknown', you MUST reply by telling them you need their email address to send it. Do not confirm sending until an email is provided.${eventInstructions}`;
     
-    const ragContext = await searchKnowledgeBase(body);
     const formattedHistoryForOpenAI = history.map(h => ({ role: h.role, content: `(${h.channel}) ${h.content}` }));
 
     console.log("  -> [OpenAI Tracer] 1. Sending message to OpenAI...");
