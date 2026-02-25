@@ -462,7 +462,7 @@ app.post("/twilio/sms", async (req, res) => {
     
     // Convert active events into a clean string for the AI WITH FREQUENCY CAP
 // Convert active events into a clean string for the AI WITH FREQUENCY CAP AND TIME
-// Convert active events into a clean string for the AI WITH FREQUENCY CAP, TIME, AND COST
+
     let eventInstructions = "";
     if (activeEventsCache.length > 0) {
       const eventList = activeEventsCache.map(e => {
@@ -473,12 +473,13 @@ app.post("/twilio/sms", async (req, res) => {
       }).join("\n");
       
       eventInstructions = `\n\nUPCOMING EVENTS CALENDAR:\n${eventList}\n
-      CRITICAL EVENT RULES: 
-      1. If the user's message is directly related to the topic of an event, briefly mention it.
+      CRITICAL EVENT PIVOT RULES: 
+      1. You are actively building a community. Whenever the user's situation or topic matches an event, you MUST seamlessly pivot at the end of your advice to plug the event.
       2. You MUST explicitly state the exact Time (e.g., '2:00 PM EST') and whether it is Free or Paid.
       3. If the "Pitched" count is 3/3 or higher, DO NOT mention the event unless explicitly asked.
       4. RICH PREVIEW RULE: You MUST put the registration_url at the absolute VERY END of your entire message. Put it on a new line. Do not type a single word, period, or parenthesis after the URL.`;
-    }	
+    }
+
 
     const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}, Email: ${userDb?.email || 'Unknown'}. 
     CRITICAL INSTRUCTION: If the user says 'Yes' to receiving a transcript, OR asks for a transcript, but their Email is 'Unknown', you MUST reply by telling them you need their email address to send it. Do not confirm sending until an email is provided.${eventInstructions}`;
@@ -503,6 +504,7 @@ app.post("/twilio/sms", async (req, res) => {
     console.log("✅ SMS Reply sent to Twilio! (Fast path)");
 
     // ⬇️ EVERYTHING BELOW THIS HAPPENS IN THE BACKGROUND AFTER THE USER GETS THE TEXT ⬇️
+    
     let updatedCounts = false;
     activeEventsCache.forEach(e => {
       if (cleanReplyText.includes(e.registration_url)) {
@@ -511,15 +513,20 @@ app.post("/twilio/sms", async (req, res) => {
       }
     });
     
-    if (updatedCounts) {
-      supabase.from("users").update({ event_pitch_counts: pitchCounts }).eq("id", userId).catch(e => console.error(e));
-    }
+    // 🔥 FIX: Wrap background tasks in an async block so Supabase executes them properly
+    (async () => {
+      if (updatedCounts) {
+        const { error: updateErr } = await supabase.from("users").update({ event_pitch_counts: pitchCounts }).eq("id", userId);
+        if (updateErr) console.error("Pitch update error:", updateErr);
+      }
 
-    supabase.from("messages").insert({
-      conversation_id: conversationId, channel: "sms", direction: "agent",
-      text: cleanReplyText, provider: "openai", twilio_message_sid: null
-    }).catch(e => console.error(e));
-
+      const { error: msgErr } = await supabase.from("messages").insert({
+        conversation_id: conversationId, channel: "sms", direction: "agent",
+        text: cleanReplyText, provider: "openai", twilio_message_sid: null
+      });
+      if (msgErr) console.error("Message insert error:", msgErr);
+    })();
+    
     // Background Tasks
     const intentKeywords = /\b(transcript|email|send|call|recent|yes|back|ago)\b/i; 
     if (intentKeywords.test(body)) {
