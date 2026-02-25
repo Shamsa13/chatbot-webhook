@@ -546,19 +546,28 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
     const userId = await getOrCreateUser(phone);
     await getOrCreateConversation(userId, "call");
 
+    // 🔥 FIX: We added "event_pitch_counts" to the database fetch here
     const [memorySummary, history, { data: userRecord }] = await Promise.all([
-      getUserMemorySummary(userId), getRecentUserMessages(userId, 12), supabase.from("users").select("full_name, email").eq("id", userId).single()
+      getUserMemorySummary(userId), getRecentUserMessages(userId, 12), supabase.from("users").select("full_name, email, event_pitch_counts").eq("id", userId).single()
     ]);
     
     const name = userRecord?.full_name ? userRecord.full_name.split(' ')[0] : "there";
     const greeting = memorySummary ? `Welcome back, ${name}. Shall we continue where we left off?` : "Hi! I'm David AI. How can I help you with your board decisions today?";
-let voiceEventContext = "No upcoming events.";
+
+    // 🔥 FIX: Filter the events so ElevenLabs is blind to events that hit the 3-pitch limit!
+    const userPitchCounts = userRecord?.event_pitch_counts || {};
+    let voiceEventContext = "No upcoming events.";
+    
     if (activeEventsCache.length > 0) {
-      const eventList = activeEventsCache.map(e => {
-        const timeString = new Date(e.event_date).toLocaleString('en-US', { timeZone: 'America/Toronto', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
-        return `- ${e.event_name}. Date/Time: ${timeString}. Cost: ${e.cost_type}.`;
-      }).join("\n");
-      voiceEventContext = `UPCOMING EVENTS:\n${eventList}`;
+      const availableEvents = activeEventsCache.filter(e => (userPitchCounts[e.id] || 0) < 3);
+      
+      if (availableEvents.length > 0) {
+        const eventList = availableEvents.map(e => {
+          const timeString = new Date(e.event_date).toLocaleString('en-US', { timeZone: 'America/Toronto', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
+          return `- ${e.event_name}. Date/Time: ${timeString}. Cost: ${e.cost_type}.`;
+        }).join("\n");
+        voiceEventContext = `UPCOMING EVENTS:\n${eventList}`;
+      }
     }
 
     return res.status(200).json({ 
@@ -570,7 +579,7 @@ let voiceEventContext = "No upcoming events.";
         first_greeting: greeting,
         user_name: userRecord?.full_name || "Unknown",
         user_email: userRecord?.email || "Unknown",
-        upcoming_events: voiceEventContext // 🔥 Added this new variable!
+        upcoming_events: voiceEventContext 
       } 
     });
 
@@ -637,12 +646,16 @@ app.post("/elevenlabs/post-call", async (req, res) => {
           const availableEvents = activeEventsCache.filter(e => (userPitchCounts[e.id] || 0) < 3);
 
           if (availableEvents.length > 0) {
-            const prompt = `Analyze this call transcript: "${transcriptText}"
+		const prompt = `Analyze this call transcript: "${transcriptText}"
             Available Events: ${JSON.stringify(availableEvents.map(e => ({id: e.id, name: e.event_name, desc: e.description})))}
             
-            Did the agent explicitly offer to text an event link, OR is the core topic of the conversation highly relevant to one of these events?
+            CRITICAL MISSION: You must determine if we need to send an event link to the user.
+            
+            Rule 1 (The Promise Rule): If the Agent explicitly mentions an upcoming event, session, or promises to text/send a link, you MUST match it to the correct event and return the ID. Never break a promise made by the Agent.
+            Rule 2 (The Relevance Rule): If no explicit promise was made, but the core topic of the user's conversation is highly relevant to an available event, return the ID to suggest it.
+            
+            If neither rule applies, return null.
             Respond strictly in JSON: {"event_id_to_send": "exact UUID or null"}`;
-
             try {
               const resp = await openai.chat.completions.create({
                 model: OPENAI_MEMORY_MODEL, 
