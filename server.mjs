@@ -31,6 +31,31 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, {
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
+
+// 🔥 THE EVENT RAM CACHE: Stores upcoming events in memory for zero-latency SMS replies
+let activeEventsCache = [];
+
+async function refreshEventsCache() {
+  try {
+    const { data, error } = await supabase
+      .from('upcoming_events')
+      .select('*')
+      .gte('event_date', new Date().toISOString()) // Only grabs future events!
+      .order('event_date', { ascending: true });
+      
+    if (!error && data) {
+      activeEventsCache = data;
+      console.log(`📅 Loaded ${data.length} upcoming events into RAM.`);
+    }
+  } catch (e) {
+     console.error("Failed to load events", e);
+  }
+}
+
+// Run this once when the server boots up, and then refresh it every 1 hour
+refreshEventsCache();
+setInterval(refreshEventsCache, 60 * 60 * 1000);
+
 console.log("ENV CHECK", {
   openaiKeyLen: OPENAI_API_KEY.length,
   model: OPENAI_MODEL,
@@ -424,13 +449,32 @@ app.post("/twilio/sms", async (req, res) => {
     const memorySummary = await getUserMemorySummary(userId);
     const history = await getRecentUserMessages(userId, 12);
     
-    const { data: userDb } = await supabase.from("users").select("full_name, email").eq("id", userId).single();
-    const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}, Email: ${userDb?.email || 'Unknown'}.`;
+    // FETCH THE TRACKER SO THE AI KNOWS WHEN TO STOP
+    const { data: userDb } = await supabase.from("users").select("full_name, email, event_pitch_counts").eq("id", userId).single();
+    let pitchCounts = userDb?.event_pitch_counts || {};
+    
+    // Convert active events into a clean string for the AI WITH FREQUENCY CAP
+    let eventInstructions = "";
+    if (activeEventsCache.length > 0) {
+      const eventList = activeEventsCache.map(e => {
+        const count = pitchCounts[e.id] || 0;
+        return `- ${e.event_name} on ${new Date(e.event_date).toLocaleDateString()}. Link: ${e.registration_url}. Desc: ${e.description} (Pitched to this user: ${count}/3 times)`;
+      }).join("\n");
+      
+      eventInstructions = `\n\nUPCOMING EVENTS CALENDAR:\n${eventList}\n
+      CRITICAL EVENT RULES: 
+      1. If the user's message is directly related to the topic of an event, briefly mention it at the end of your reply (e.g., "By the way, I'm hosting a session on this...").
+      2. ALWAYS include the registration_url and cost_type if you mention the event.
+      3. If the "Pitched to this user" count is 3/3 or higher, DO NOT mention the event again unless the user explicitly asks about it.`;
+    }
+
+    const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}, Email: ${userDb?.email || 'Unknown'}. 
+    CRITICAL INSTRUCTION: If the user says 'Yes' to receiving a transcript, OR asks for a transcript, but their Email is 'Unknown', you MUST reply by telling them you need their email address to send it. Do not confirm sending until an email is provided.${eventInstructions}`;
     
     const ragContext = await searchKnowledgeBase(body);
     const formattedHistoryForOpenAI = history.map(h => ({ role: h.role, content: `(${h.channel}) ${h.content}` }));
 
-console.log("  -> [OpenAI Tracer] 1. Sending message to OpenAI...");
+    console.log("  -> [OpenAI Tracer] 1. Sending message to OpenAI...");
     const replyText = await callModel({
       systemPrompt: cfg.systemPrompt, 
       profileContext: profileContext,
@@ -442,6 +486,20 @@ console.log("  -> [OpenAI Tracer] 1. Sending message to OpenAI...");
     });
 
     const cleanReplyText = replyText.replace(/^[\(\[].*?[\)\]]\s*/, '').trim();
+
+    // 🔥 THE SMS TRACKER: Did the AI actually drop an event link in this text?
+    let updatedCounts = false;
+    activeEventsCache.forEach(e => {
+      if (cleanReplyText.includes(e.registration_url)) {
+        pitchCounts[e.id] = (pitchCounts[e.id] || 0) + 1;
+        updatedCounts = true;
+      }
+    });
+    
+    // If a link was dropped, update the database so we don't spam them later
+    if (updatedCounts) {
+      await supabase.from("users").update({ event_pitch_counts: pitchCounts }).eq("id", userId);
+    }
 
     await supabase.from("messages").insert({
       conversation_id: conversationId, channel: "sms", direction: "agent",
@@ -490,6 +548,14 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
     const name = userRecord?.full_name ? userRecord.full_name.split(' ')[0] : "there";
     const greeting = memorySummary ? `Welcome back, ${name}. Shall we continue where we left off?` : "Hi! I'm David AI. How can I help you with your board decisions today?";
 
+    let voiceEventContext = "No upcoming events.";
+    if (activeEventsCache.length > 0) {
+      const eventList = activeEventsCache.map(e => 
+        `- ${e.event_name} on ${new Date(e.event_date).toLocaleDateString()}`
+      ).join("\n");
+      voiceEventContext = `UPCOMING EVENTS:\n${eventList}`;
+    }
+
     return res.status(200).json({ 
       dynamic_variables: { 
         memory_summary: memorySummary || "No previous memory.", 
@@ -498,9 +564,11 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
         recent_history: formatRecentHistoryForCall(history) || "No recent history.", 
         first_greeting: greeting,
         user_name: userRecord?.full_name || "Unknown",
-        user_email: userRecord?.email || "Unknown"
+        user_email: userRecord?.email || "Unknown",
+        upcoming_events: voiceEventContext // 🔥 Added this new variable!
       } 
     });
+
   } catch (err) {
     console.error("ERROR eleven personalize", err?.message || String(err));
     return res.status(200).json({ dynamic_variables: { memory_summary: "", caller_phone: "", channel: "call", recent_history: "", first_greeting: "" } });
@@ -525,7 +593,7 @@ app.post("/elevenlabs/post-call", async (req, res) => {
     if (newSummary) await setUserMemorySummary(userId, newSummary);
 
     const transcriptId = data.conversation_id || body.conversation_id;
-    const { data: userRecord } = await supabase.from("users").select("full_name, email, transcript_data").eq("id", userId).single();
+    const { data: userRecord } = await supabase.from("users").select("full_name, email, transcript_data, event_pitch_counts").eq("id", userId).single();
     
     let transcriptDataArray = userRecord?.transcript_data || [];
     if (!Array.isArray(transcriptDataArray)) transcriptDataArray = [];
@@ -555,6 +623,52 @@ app.post("/elevenlabs/post-call", async (req, res) => {
       if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
         const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
         const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
+        
+        // 🔥 SMART EVENT MATCHER: Semantic matching with frequency capping
+        const userPitchCounts = userRecord?.event_pitch_counts || {};
+        
+        if (activeEventsCache.length > 0 && transcriptText) {
+          // Only look at events we haven't maxed out yet
+          const availableEvents = activeEventsCache.filter(e => (userPitchCounts[e.id] || 0) < 3);
+
+          if (availableEvents.length > 0) {
+            const prompt = `Analyze this call transcript: "${transcriptText}"
+            Available Events: ${JSON.stringify(availableEvents.map(e => ({id: e.id, name: e.event_name, desc: e.description})))}
+            
+            Did the agent explicitly offer to text an event link, OR is the core topic of the conversation highly relevant to one of these events?
+            Respond strictly in JSON: {"event_id_to_send": "exact UUID or null"}`;
+
+            try {
+              const resp = await openai.chat.completions.create({
+                model: OPENAI_MEMORY_MODEL, 
+                messages: [{ role: "system", content: prompt }],
+                response_format: { type: "json_object" }
+              });
+
+              const result = JSON.parse(resp.choices[0].message.content);
+              
+              if (result.event_id_to_send && result.event_id_to_send !== 'null') {
+                const event = availableEvents.find(e => e.id === result.event_id_to_send);
+                if (event) {
+                  const eventSms = `Hi, it's David! Here is the link for the ${event.event_name} event we just talked about: ${event.registration_url}`;
+                  await twilioClient.messages.create({ body: eventSms, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
+                  
+                  const smsConversationId = await getOrCreateConversation(userId, "sms");
+                  await supabase.from("messages").insert({ conversation_id: smsConversationId, channel: "sms", direction: "agent", text: eventSms, provider: "twilio" });
+                  
+                  // Increment and save the pitch cap
+                  userPitchCounts[event.id] = (userPitchCounts[event.id] || 0) + 1;
+                  await supabase.from("users").update({ event_pitch_counts: userPitchCounts }).eq("id", userId);
+                  
+                  console.log(`✅ Smart Event Link sent for ${event.event_name}`);
+                }
+              }
+            } catch (eventErr) {
+              console.error("Semantic event match failed:", eventErr.message);
+            }
+          }
+        }
+
         setTimeout(async () => {
           try {
             const { data: latestUser } = await supabase.from("users").select("full_name, email").eq("id", userId).single();
