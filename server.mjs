@@ -443,14 +443,21 @@ app.post("/twilio/sms", async (req, res) => {
     // ------------------------------------------------------------------
     // Now that the message is safely locked in the DB, proceed to AI
     // ------------------------------------------------------------------
-    await checkAndSendVCard(userId, rawFrom);
+     // ------------------------------------------------------------------
+    // Now that the message is safely locked in the DB, proceed to AI
+    // ------------------------------------------------------------------
+    // 🚀 SPEED HACK 1: Run the vCard check in the background so it doesn't pause the code
+    checkAndSendVCard(userId, rawFrom).catch(e => console.error("vCard error in background:", e));
 
-    const cfg = await getBotConfig();
-    const memorySummary = await getUserMemorySummary(userId);
-    const history = await getRecentUserMessages(userId, 12);
+    // 🚀 SPEED HACK 2: Fetch DB config, history, user data, and the vector search all at the EXACT same time
+    const [cfg, memorySummary, history, { data: userDb }, ragContext] = await Promise.all([
+      getBotConfig(),
+      getUserMemorySummary(userId),
+      getRecentUserMessages(userId, 12),
+      supabase.from("users").select("full_name, email, event_pitch_counts").eq("id", userId).single(),
+      searchKnowledgeBase(body)
+    ]);
     
-    // FETCH THE TRACKER SO THE AI KNOWS WHEN TO STOP
-    const { data: userDb } = await supabase.from("users").select("full_name, email, event_pitch_counts").eq("id", userId).single();
     let pitchCounts = userDb?.event_pitch_counts || {};
     
     // Convert active events into a clean string for the AI WITH FREQUENCY CAP
@@ -492,7 +499,11 @@ app.post("/twilio/sms", async (req, res) => {
 
     const cleanReplyText = replyText.replace(/^[\(\[].*?[\)\]]\s*/, '').trim();
 
-    // 🔥 THE SMS TRACKER: Did the AI actually drop an event link in this text?
+    // 🚀 SPEED HACK 3: Fire the text to the user IMMEDIATELY before talking to the database again
+    res.status(200).type("text/xml").send(twimlReply(cleanReplyText));
+    console.log("✅ SMS Reply sent to Twilio! (Fast path)");
+
+    // ⬇️ EVERYTHING BELOW THIS HAPPENS IN THE BACKGROUND AFTER THE USER GETS THE TEXT ⬇️
     let updatedCounts = false;
     activeEventsCache.forEach(e => {
       if (cleanReplyText.includes(e.registration_url)) {
@@ -501,19 +512,14 @@ app.post("/twilio/sms", async (req, res) => {
       }
     });
     
-    // If a link was dropped, update the database so we don't spam them later
     if (updatedCounts) {
-      await supabase.from("users").update({ event_pitch_counts: pitchCounts }).eq("id", userId);
+      supabase.from("users").update({ event_pitch_counts: pitchCounts }).eq("id", userId).catch(e => console.error(e));
     }
 
-    await supabase.from("messages").insert({
+    supabase.from("messages").insert({
       conversation_id: conversationId, channel: "sms", direction: "agent",
       text: cleanReplyText, provider: "openai", twilio_message_sid: null
-    });
-
-    // Send the reply to the user
-    res.status(200).type("text/xml").send(twimlReply(cleanReplyText));
-    console.log("✅ SMS Reply sent to Twilio!");
+    }).catch(e => console.error(e));
 
     // Background Tasks
     const intentKeywords = /\b(transcript|email|send|call|recent|yes|back|ago)\b/i; 
