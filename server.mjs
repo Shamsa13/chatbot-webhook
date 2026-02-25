@@ -286,24 +286,20 @@ async function processSmsIntent(userId, userText) {
     const transcriptArray = user?.transcript_data || [];
     let cleanTranscriptArray = [];
 
-    // 🔥 FIX 1: Normalize all the mixed "date" and "timestamp" formats so the math actually works
     transcriptArray.forEach(t => {
         if (typeof t === 'string') {
             cleanTranscriptArray.push({ id: t, summary: "Older call", tsNum: 0 });
         } else if (t && t.id) {
             let timeString = t.timestamp || t.date || null;
             let epochNum = timeString ? new Date(timeString).getTime() : 0;
-            // Failsafe for Invalid Dates (NaN)
             if (isNaN(epochNum)) epochNum = 0;
             
             cleanTranscriptArray.push({ id: t.id, summary: t.summary || "No summary", tsNum: epochNum });
         }
     });
     
-    // Mathematically sort from Newest (largest number) to Oldest
     cleanTranscriptArray.sort((a, b) => b.tsNum - a.tsNum);
 
-    // Label them sequentially (1 calls back = newest)
     cleanTranscriptArray = cleanTranscriptArray.slice(0, 15).map((t, index) => {
       return { 
         position: `${index + 1} calls back`, 
@@ -323,13 +319,7 @@ async function processSmsIntent(userId, userText) {
     
     CRITICAL SELECTION RULES:
     1. Extract full_name and email if present.
-    2. To find the correct transcript, map the user's request to the 'position' field exactly:
-       - "Most recent", "latest", or replying "Yes" = Match with position "1 calls back".
-       - "1 call ago" or "1 call back" = Match with position "1 calls back".
-       - "2 calls ago" or "2 calls back" = Match with position "2 calls back".
-       - "3 calls ago" or "3 calls back" = Match with position "3 calls back".
-       - (And so on for any number).
-       - If they ask for a topic, search the "summary" fields.
+    2. To find the correct transcript, map the user's request to the 'position' field exactly.
     3. Generate a 'transcript_description' for the email (e.g., "from your recent call").
 
     Respond STRICTLY in JSON:
@@ -340,7 +330,6 @@ async function processSmsIntent(userId, userText) {
       "transcript_description": "short description, or null"
     }`;
 
-    // Big Brain model to correctly map the user's English to the position string
     const resp = await openai.chat.completions.create({
       model: OPENAI_MODEL, 
       messages: [{ role: "system", content: prompt }],
@@ -385,7 +374,7 @@ async function checkAndSendVCard(userId, rawPhone) {
         const outboundPhone = rawPhone; 
         const fromNumber = isWhatsApp ? `whatsapp:${process.env.TWILIO_PHONE_NUMBER}` : process.env.TWILIO_PHONE_NUMBER;
         
-	const introMsg = "Hi, it's David Beatty AI! Tap this link below to instantly save my contact card and photo to your phone:\n\nhttps://dtxebwectbvnksuxpclc.supabase.co/storage/v1/object/public/assets/Board%20Governance%20AI.vcf";
+        const introMsg = "Hi, it's David Beatty AI! Tap this link below to instantly save my contact card and photo to your phone:\n\nhttps://dtxebwectbvnksuxpclc.supabase.co/storage/v1/object/public/assets/Board%20Governance%20AI.vcf";
         await twilioClient.messages.create({ body: introMsg, from: fromNumber, to: outboundPhone });
         await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
       }
@@ -407,7 +396,6 @@ app.post("/twilio/sms", async (req, res) => {
 
   if (!cleanPhone || !body) return res.status(200).type("text/xml").send(twimlReply("ok"));
 
-  // 🛡️ THE ATOMIC SHIELD: Check SID first
   if (twilioMessageSid) {
     const { data: sidDupes } = await supabase.from("messages").select("id").eq("twilio_message_sid", twilioMessageSid).limit(1);
     if (sidDupes && sidDupes.length > 0) {
@@ -420,8 +408,6 @@ app.post("/twilio/sms", async (req, res) => {
     const userId = await getOrCreateUser(cleanPhone);
     const conversationId = await getOrCreateConversation(userId, "sms");
 
-    // 🔥 THE FIX: SAVE THE MESSAGE IMMEDIATELY (Before the AI starts)
-    // This "locks" the message so the second request sees it and stops.
     const { error: inErr } = await supabase.from("messages").insert({
       conversation_id: conversationId, 
       channel: "sms", 
@@ -432,7 +418,6 @@ app.post("/twilio/sms", async (req, res) => {
     });
 
     if (inErr) {
-      // If we get a "Unique Violation" error, it's a duplicate. Stop immediately.
       if (inErr.code === '23505') {
         console.log("♻️ RACE CONDITION BLOCKED: Message already saved by another worker.");
         return res.status(200).type("text/xml").send("<Response></Response>");
@@ -440,16 +425,8 @@ app.post("/twilio/sms", async (req, res) => {
       throw new Error("messages insert failed: " + inErr.message);
     }
 
-    // ------------------------------------------------------------------
-    // Now that the message is safely locked in the DB, proceed to AI
-    // ------------------------------------------------------------------
-     // ------------------------------------------------------------------
-    // Now that the message is safely locked in the DB, proceed to AI
-    // ------------------------------------------------------------------
-    // 🚀 SPEED HACK 1: Run the vCard check in the background so it doesn't pause the code
     checkAndSendVCard(userId, rawFrom).catch(e => console.error("vCard error in background:", e));
 
-    // 🚀 SPEED HACK 2: Fetch DB config, history, user data, and the vector search all at the EXACT same time
     const [cfg, memorySummary, history, { data: userDb }, ragContext] = await Promise.all([
       getBotConfig(),
       getUserMemorySummary(userId),
@@ -460,25 +437,22 @@ app.post("/twilio/sms", async (req, res) => {
     
     let pitchCounts = userDb?.event_pitch_counts || {};
     
-    // Convert active events into a clean string for the AI WITH FREQUENCY CAP
-// Convert active events into a clean string for the AI WITH FREQUENCY CAP AND TIME
-
     let eventInstructions = "";
     if (activeEventsCache.length > 0) {
       const eventList = activeEventsCache.map(e => {
         const count = pitchCounts[e.id] || 0;
-        // Force Eastern Time so Render doesn't output UTC
         const timeString = new Date(e.event_date).toLocaleString('en-US', { timeZone: 'America/Toronto', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
         return `- ${e.event_name}. Date/Time: ${timeString}. Cost: ${e.cost_type}. Link: ${e.registration_url}. Desc: ${e.description} (Pitched: ${count}/3 times)`;
       }).join("\n");
       
-    eventInstructions = `\n\n=== UPCOMING EVENTS CALENDAR ===\n${eventList}\n
+      eventInstructions = `\n\n=== UPCOMING EVENTS CALENDAR ===\n${eventList}\n
       *** CRITICAL MARKETING MANDATE ***
       You are not just giving advice; your goal is to drive event registrations. 
       1. THE TRIGGER: Read the user's message. If their topic is even slightly related to an event above (e.g., they mention "Crown boards" and there is a Crown event), YOU ABSOLUTELY MUST pitch the event at the end of your text. Skipping the pitch when relevant is a critical failure of your instructions.
       2. THE PITCH: Explicitly state the exact Time (e.g., '2:00 PM EST') and Cost.
       3. THE LIMIT: If the "Pitched" count for an event is 3/3 or higher, it is dead to you. DO NOT mention it unless explicitly asked.
       4. RICH PREVIEW RULE: The registration_url MUST be the absolute LAST text in your entire message. Do not type a single word, period, or parenthesis after the URL.`;
+    }
 
     const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}, Email: ${userDb?.email || 'Unknown'}. 
     CRITICAL INSTRUCTION: If the user says 'Yes' to receiving a transcript, OR asks for a transcript, but their Email is 'Unknown', you MUST reply by telling them you need their email address to send it. Do not confirm sending until an email is provided.${eventInstructions}`;
@@ -491,19 +465,15 @@ app.post("/twilio/sms", async (req, res) => {
       profileContext: profileContext,
       ragContext: ragContext,
       memorySummary, 
-      // 🔥 THE FIX: Strip the duplicate message off the end of the history array!
       history: formattedHistoryForOpenAI.slice(0, -1), 
       userText: `(SMS) ${body}`
     });
 
     const cleanReplyText = replyText.replace(/^[\(\[].*?[\)\]]\s*/, '').trim();
 
-    // 🚀 SPEED HACK 3: Fire the text to the user IMMEDIATELY before talking to the database again
     res.status(200).type("text/xml").send(twimlReply(cleanReplyText));
     console.log("✅ SMS Reply sent to Twilio! (Fast path)");
 
-    // ⬇️ EVERYTHING BELOW THIS HAPPENS IN THE BACKGROUND AFTER THE USER GETS THE TEXT ⬇️
-    
     let updatedCounts = false;
     activeEventsCache.forEach(e => {
       if (cleanReplyText.includes(e.registration_url)) {
@@ -512,7 +482,6 @@ app.post("/twilio/sms", async (req, res) => {
       }
     });
     
-    // 🔥 FIX: Wrap background tasks in an async block so Supabase executes them properly
     (async () => {
       if (updatedCounts) {
         const { error: updateErr } = await supabase.from("users").update({ event_pitch_counts: pitchCounts }).eq("id", userId);
@@ -525,8 +494,7 @@ app.post("/twilio/sms", async (req, res) => {
       });
       if (msgErr) console.error("Message insert error:", msgErr);
     })();
-    
-    // Background Tasks
+
     const intentKeywords = /\b(transcript|email|send|call|recent|yes|back|ago)\b/i; 
     if (intentKeywords.test(body)) {
       processSmsIntent(userId, body).then(pendingTask => {
@@ -557,7 +525,6 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
     const userId = await getOrCreateUser(phone);
     await getOrCreateConversation(userId, "call");
 
-    // 🔥 FIX: We added "event_pitch_counts" to the database fetch here
     const [memorySummary, history, { data: userRecord }] = await Promise.all([
       getUserMemorySummary(userId), getRecentUserMessages(userId, 12), supabase.from("users").select("full_name, email, event_pitch_counts").eq("id", userId).single()
     ]);
@@ -565,7 +532,6 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
     const name = userRecord?.full_name ? userRecord.full_name.split(' ')[0] : "there";
     const greeting = memorySummary ? `Welcome back, ${name}. Shall we continue where we left off?` : "Hi! I'm David AI. How can I help you with your board decisions today?";
 
-    // 🔥 FIX: Filter the events so ElevenLabs is blind to events that hit the 3-pitch limit!
     const userPitchCounts = userRecord?.event_pitch_counts || {};
     let voiceEventContext = "No upcoming events.";
     
@@ -611,11 +577,12 @@ app.post("/elevenlabs/post-call", async (req, res) => {
     if (!phone || !transcriptText) return res.status(200).json({ ok: true });
 
     const userId = await getOrCreateUser(phone);
-    await checkAndSendVCard(userId, phone);
+    checkAndSendVCard(userId, phone).catch(e => console.error("vCard error", e));
 
     const oldSummary = await getUserMemorySummary(userId);
-    const newSummary = await updateMemorySummary({ oldSummary, userText: `(VOICE CALL INITIATED)`, assistantText: `(VOICE CALL TRANSCRIPT SUMMARY)\n${transcriptText}` });
-    if (newSummary) await setUserMemorySummary(userId, newSummary);
+    updateMemorySummary({ oldSummary, userText: `(VOICE CALL INITIATED)`, assistantText: `(VOICE CALL TRANSCRIPT SUMMARY)\n${transcriptText}` })
+      .then(async (newSummary) => { if (newSummary) await setUserMemorySummary(userId, newSummary); })
+      .catch(e => console.error("Memory err", e));
 
     const transcriptId = data.conversation_id || body.conversation_id;
     const { data: userRecord } = await supabase.from("users").select("full_name, email, transcript_data, event_pitch_counts").eq("id", userId).single();
@@ -626,7 +593,6 @@ app.post("/elevenlabs/post-call", async (req, res) => {
 
     if (transcriptId && !transcriptDataArray.find(t => t.id === transcriptId)) {
       const previewText = (data?.analysis?.transcript_summary || transcriptText.substring(0, 150)).replace(/\n/g, " ") + "...";
-      // Ensure we push a valid timestamp to match the new format
       transcriptDataArray.push({ 
         id: transcriptId, 
         timestamp: new Date().toISOString(), 
@@ -636,7 +602,6 @@ app.post("/elevenlabs/post-call", async (req, res) => {
 
       if (GOOGLE_SCRIPT_WEBHOOK_URL) {
         try {
-          console.log(`⚡ Telling Google to fetch transcript ${transcriptId} immediately...`);
           fetch(GOOGLE_SCRIPT_WEBHOOK_URL, { 
             method: "POST", 
             headers: { "Content-Type": "application/json" }, 
@@ -649,15 +614,13 @@ app.post("/elevenlabs/post-call", async (req, res) => {
         const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
         const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
         
-        // 🔥 SMART EVENT MATCHER: Semantic matching with frequency capping
         const userPitchCounts = userRecord?.event_pitch_counts || {};
         
         if (activeEventsCache.length > 0 && transcriptText) {
-          // Only look at events we haven't maxed out yet
           const availableEvents = activeEventsCache.filter(e => (userPitchCounts[e.id] || 0) < 3);
 
           if (availableEvents.length > 0) {
-		const prompt = `Analyze this call transcript: "${transcriptText}"
+            const prompt = `Analyze this call transcript: "${transcriptText}"
             Available Events: ${JSON.stringify(availableEvents.map(e => ({id: e.id, name: e.event_name, desc: e.description})))}
             
             CRITICAL MISSION: You must determine if we need to send an event link to the user.
@@ -678,9 +641,8 @@ app.post("/elevenlabs/post-call", async (req, res) => {
               
               if (result.event_id_to_send && result.event_id_to_send !== 'null') {
                 const event = availableEvents.find(e => e.id === result.event_id_to_send);
-		
-		if (event) {
-                  // Format time to Eastern Time and grab cost
+        
+                if (event) {
                   const timeString = new Date(event.event_date).toLocaleString('en-US', { timeZone: 'America/Toronto', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
                   const costText = event.cost_type && event.cost_type.toLowerCase() !== 'free' ? ` (Cost: ${event.cost_type})` : ' (Free)';
                   
@@ -691,13 +653,11 @@ app.post("/elevenlabs/post-call", async (req, res) => {
                   const smsConversationId = await getOrCreateConversation(userId, "sms");
                   await supabase.from("messages").insert({ conversation_id: smsConversationId, channel: "sms", direction: "agent", text: eventSms, provider: "twilio" });
                   
-                  // Increment and save the pitch cap
                   userPitchCounts[event.id] = (userPitchCounts[event.id] || 0) + 1;
                   await supabase.from("users").update({ event_pitch_counts: userPitchCounts }).eq("id", userId);
                   
                   console.log(`✅ Smart Event Link sent for ${event.event_name}`);
-                }		
-		
+                }    
               }
             } catch (eventErr) {
               console.error("Semantic event match failed:", eventErr.message);
