@@ -804,20 +804,25 @@ app.post("/api/upload", upload.single("document"), async (req, res) => {
     }
 
     let extractedText = "";
-
-// A. Parse PDF
+    
+    // A. Parse PDF
     if (file.mimetype === "application/pdf") {
-      // Safely force Node 22 to unwrap the older package
       const { createRequire } = await import("module");
       const dynamicRequire = createRequire(import.meta.url);
-      const pdfModule = dynamicRequire("pdf-parse");
       
-      // Hunt down the actual function no matter where Node hid it
-      const extractPdf = typeof pdfModule === "function" ? pdfModule : (pdfModule.default || pdfModule.pdfParse);
+      // Bypass the broken index file and grab the core function directly from the source code
+      const extractPdf = dynamicRequire("pdf-parse/lib/pdf-parse.js");
       
+      // Safety check so it logs exactly what it is if it fails again
+      if (typeof extractPdf !== "function") {
+         console.error("PDF CORE DEBUG:", extractPdf);
+         throw new Error("Node 22 is still rejecting the PDF function.");
+      }
+
       const pdfData = await extractPdf(file.buffer);
       extractedText = pdfData.text;
-    }
+    }	
+
     // B. Parse Word Doc (.docx)
     else if (file.mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
       const docData = await mammoth.extractRawText({ buffer: file.buffer });
