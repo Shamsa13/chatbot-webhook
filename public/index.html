@@ -21,7 +21,6 @@
         .btn:hover { background: #333; }
         #step2 { display: none; }
         
-        /* Force the phone dropdown to take full width */
         .iti { width: 100%; text-align: left; margin: 15px 0; }
         .iti__input { width: 100% !important; padding: 12px !important; padding-left: 50px !important; border: 1px solid #ddd; border-radius: 6px; font-size: 16px; box-sizing: border-box; }
 
@@ -42,7 +41,6 @@
         .chat-header { padding: 25px 30px; background: white; border-bottom: 1px solid #eaeaea; font-weight: 600; font-size: 22px; color: #0a0a0a; display: flex; align-items: center; justify-content: space-between; }
         .messages { flex-grow: 1; padding: 30px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; background: #fafafa; }
         
-        /* CHAT BUBBLES & AVATAR */
         .message-wrapper { display: flex; align-items: flex-end; gap: 12px; max-width: 80%; }
         .wrapper-bot { align-self: flex-start; }
         .wrapper-user { align-self: flex-end; flex-direction: row-reverse; }
@@ -53,7 +51,6 @@
         .msg-user { background: #0a0a0a; color: white; border-bottom-right-radius: 2px; }
         .msg-bot { background: #ffffff; color: #333; border-bottom-left-radius: 2px; border: 1px solid #eaeaea; box-shadow: 0 2px 5px rgba(0,0,0,0.02); }
         
-        /* CHAT INPUT */
         .chat-input-area { padding: 25px 30px; background: white; border-top: 1px solid #eaeaea; display: flex; gap: 15px; align-items: center; }
         .chat-input-area input { flex-grow: 1; padding: 16px 20px; border: 1px solid #ddd; border-radius: 30px; outline: none; font-size: 15px; background: #fafafa; transition: border 0.3s; }
         .chat-input-area input:focus { border-color: #0a0a0a; background: white; }
@@ -65,15 +62,11 @@
 
 <div id="loginContainer">
     <h2 style="color: #0a0a0a; margin-bottom: 5px;">David Beatty AI</h2>
-    
     <div id="step1">
         <p style="color: #666; font-size: 14px; margin-bottom: 25px;">Enter your phone number to access your portal.</p>
-        
         <input type="tel" id="phoneInput" />
-        
         <button class="btn" onclick="sendCode()">Send Secure Code</button>
     </div>
-
     <div id="step2">
         <p style="color: #666; font-size: 14px; margin-bottom: 25px;">Code sent! Enter the 6-digit pin below:</p>
         <input type="text" id="codeInput" class="input-group" placeholder="123456" />
@@ -87,7 +80,6 @@
         <p style="font-size: 14px; line-height: 1.6; color: #aaa;">
             Upload board packages, meeting minutes, or reports. David will read and recall them instantly for your future chats and calls.
         </p>
-        
         <div class="upload-box">
             <input type="file" id="fileInput" accept=".pdf,.docx,.txt" />
             <button class="upload-btn" onclick="uploadDocument()" id="uploadBtn">Upload Document</button>
@@ -100,10 +92,7 @@
             <span>Corporate Governance AI</span>
             <span style="font-size: 13px; font-weight: 400; color: #888; font-family: 'Inter', sans-serif;" id="loginTag"></span>
         </div>
-        
-        <div class="messages" id="chatMessages">
-            </div>
-
+        <div class="messages" id="chatMessages"></div>
         <div class="chat-input-area">
             <input type="text" id="chatInput" placeholder="Ask David a question..." onkeypress="handleEnter(event)" />
             <button onclick="sendMessage()">Send</button>
@@ -112,97 +101,66 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/intl-tel-input/17.0.8/js/intlTelInput.min.js"></script>
-
 <script>
     let globalUserId = "";
     let userPhone = "";
     
-    // David's specific Avatar URL (Pulled from your Google Drive)
-    const botAvatar = "https://drive.google.com/uc?export=view&id=1KP0RP7dV229uUohHaTozmCk6rledboPv";
+    // UPDATED LOCAL PATH
+    const botAvatar = "/avatar.jpg";
 
-    // Initialize the Phone Input Flag Dropdown
     const phoneInputField = document.querySelector("#phoneInput");
     const phoneInput = window.intlTelInput(phoneInputField, {
         utilsScript: "https://cdnjs.cloudflare.com/ajax/libs/intl-tel-input/17.0.8/js/utils.js",
-        preferredCountries: ["ca", "us", "gb", "au"], // Puts these flags at the top of the list
-        separateDialCode: true // Makes it look super clean
+        preferredCountries: ["ca", "us", "gb", "au"],
+        separateDialCode: true
     });
 
-    // --- AUTHENTICATION ---
     async function sendCode() {
-        // Grab the FULL E.164 formatted number (e.g. +1647...) automatically from the plugin!
         userPhone = phoneInput.getNumber(); 
-        
-        if (!userPhone) {
-            alert("Please enter a valid phone number.");
-            return;
-        }
-
+        if (!userPhone) { alert("Please enter a valid phone number."); return; }
         const btn = document.querySelector('#step1 .btn');
         btn.innerText = "Sending...";
-        
         const res = await fetch('/api/auth/send-code', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ phone: userPhone })
         });
         const data = await res.json();
-        
         if(data.success) {
             document.getElementById('step1').style.display = 'none';
             document.getElementById('step2').style.display = 'block';
-        } else {
-            alert(data.error);
-            btn.innerText = "Send Secure Code";
-        }
+        } else { alert(data.error); btn.innerText = "Send Secure Code"; }
     }
 
     async function verifyCode() {
         const code = document.getElementById('codeInput').value;
         const btn = document.querySelector('#step2 .btn');
         btn.innerText = "Verifying...";
-
         const res = await fetch('/api/auth/verify-code', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ phone: userPhone, code: code })
         });
         const data = await res.json();
-        
         if(data.success) {
             globalUserId = data.userId;
-            
             let firstName = "Guest";
-            if (data.name && data.name.toLowerCase() !== "null") {
-                firstName = data.name.split(' ')[0];
-            }
+            if (data.name && data.name.toLowerCase() !== "null") { firstName = data.name.split(' ')[0]; }
             document.getElementById('loginTag').innerText = `Logged in as ${firstName}`;
-
-            // Swap UI
             document.getElementById('loginContainer').style.display = 'none';
             document.getElementById('dashboardContainer').style.display = 'flex';
-            
-            // Add initial bot greeting
             addMessageToUI(`Welcome back, ${firstName}. I have securely loaded your profile and document history. How can I assist you with board governance today?`, 'bot');
-        } else {
-            alert(data.error);
-            btn.innerText = "Login to Portal";
-        }
+        } else { alert(data.error); btn.innerText = "Login to Portal"; }
     }
 
-    // --- CHAT SYSTEM ---
-    function handleEnter(e) {
-        if (e.key === 'Enter') sendMessage();
-    }
+    function handleEnter(e) { if (e.key === 'Enter') sendMessage(); }
 
     async function sendMessage() {
         const inputField = document.getElementById('chatInput');
         const message = inputField.value.trim();
         if (!message) return;
-
         addMessageToUI(message, 'user');
         inputField.value = "";
-
         try {
             const res = await fetch('/api/chat', {
                 method: 'POST',
@@ -210,92 +168,52 @@
                 body: JSON.stringify({ userId: globalUserId, message: message })
             });
             const data = await res.json();
-
-            if (data.success) {
-                addMessageToUI(data.reply, 'bot');
-            } else {
-                addMessageToUI("Error: Could not reach David's brain.", 'bot');
-            }
-        } catch (error) {
-            addMessageToUI("Network Error: Try again.", 'bot');
-        }
+            if (data.success) { addMessageToUI(data.reply, 'bot'); }
+            else { addMessageToUI("Error: Could not reach David's brain.", 'bot'); }
+        } catch (error) { addMessageToUI("Network Error: Try again.", 'bot'); }
     }
 
     function addMessageToUI(text, sender) {
         const msgContainer = document.getElementById('chatMessages');
-        
-        // Create the wrapper that holds the avatar and the bubble
         const wrapperDiv = document.createElement('div');
         wrapperDiv.classList.add('message-wrapper');
         wrapperDiv.classList.add(sender === 'bot' ? 'wrapper-bot' : 'wrapper-user');
-        
-        let innerHTML = '';
-        
-        // Format text to handle basic line breaks
         const formattedText = text.replace(/\n/g, '<br>');
-
         if (sender === 'bot') {
-            innerHTML = `
-                <img src="${botAvatar}" class="avatar" alt="David AI" />
-                <div class="message msg-bot">${formattedText}</div>
-            `;
+            wrapperDiv.innerHTML = `<img src="${botAvatar}" class="avatar" alt="David AI" /><div class="message msg-bot">${formattedText}</div>`;
         } else {
-            // User messages don't need an avatar
-            innerHTML = `<div class="message msg-user">${formattedText}</div>`;
+            wrapperDiv.innerHTML = `<div class="message msg-user">${formattedText}</div>`;
         }
-
-        wrapperDiv.innerHTML = innerHTML;
         msgContainer.appendChild(wrapperDiv);
-        
-        // Auto-scroll
         msgContainer.scrollTop = msgContainer.scrollHeight;
     }
 
-    // --- DOCUMENT UPLOAD ---
     async function uploadDocument() {
         const fileInput = document.getElementById('fileInput');
         const statusText = document.getElementById('uploadStatus');
         const uploadBtn = document.getElementById('uploadBtn');
-
-        if (!fileInput.files.length) {
-            statusText.innerText = "Please select a file first.";
-            return;
-        }
-
+        if (!fileInput.files.length) { statusText.innerText = "Please select a file first."; return; }
         const file = fileInput.files[0];
         const formData = new FormData();
         formData.append("userId", globalUserId);
         formData.append("document", file);
-
         statusText.innerText = "Analyzing document... please wait.";
         statusText.style.color = "#ccc";
         uploadBtn.disabled = true;
         uploadBtn.innerText = "Uploading...";
-
         try {
-            const res = await fetch('/api/upload', {
-                method: 'POST',
-                body: formData 
-            });
+            const res = await fetch('/api/upload', { method: 'POST', body: formData });
             const data = await res.json();
-
             if (data.success) {
                 statusText.innerText = "✅ Saved to Secure Memory";
                 statusText.style.color = "#4CAF50"; 
                 fileInput.value = ""; 
-            } else {
-                statusText.innerText = "❌ Error: " + data.error;
-                statusText.style.color = "#ff4c4c"; 
-            }
+            } else { statusText.innerText = "❌ Error: " + data.error; statusText.style.color = "#ff4c4c"; }
         } catch (error) {
             statusText.innerText = "❌ Upload failed. Check connection.";
             statusText.style.color = "#ff4c4c";
-        } finally {
-            uploadBtn.disabled = false;
-            uploadBtn.innerText = "Upload Document";
-        }
+        } finally { uploadBtn.disabled = false; uploadBtn.innerText = "Upload Document"; }
     }
 </script>
-
 </body>
 </html>
