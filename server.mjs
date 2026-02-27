@@ -805,10 +805,17 @@ app.post("/api/upload", upload.single("document"), async (req, res) => {
 
     let extractedText = "";
 
-    // A. Parse PDF (Safely unwraps the function if Node.js hid it in .default)
+// A. Parse PDF
     if (file.mimetype === "application/pdf") {
-      const parsePdf = typeof pdfParse === "function" ? pdfParse : pdfParse.default;
-      const pdfData = await parsePdf(file.buffer);
+      // Safely force Node 22 to unwrap the older package
+      const { createRequire } = await import("module");
+      const dynamicRequire = createRequire(import.meta.url);
+      const pdfModule = dynamicRequire("pdf-parse");
+      
+      // Hunt down the actual function no matter where Node hid it
+      const extractPdf = typeof pdfModule === "function" ? pdfModule : (pdfModule.default || pdfModule.pdfParse);
+      
+      const pdfData = await extractPdf(file.buffer);
       extractedText = pdfData.text;
     }
     // B. Parse Word Doc (.docx)
