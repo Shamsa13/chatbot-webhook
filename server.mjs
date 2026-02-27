@@ -5,6 +5,12 @@ import express from "express";
 import twilio from "twilio";
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
+import multer from 'multer';
+import pdfParse from 'pdf-parse';
+import mammoth from 'mammoth';
+
+// Tell multer to store uploaded files temporarily in the server's memory
+const upload = multer({ storage: multer.memoryStorage() });
 
 const app = express();
 app.use(express.static('public'));
@@ -780,5 +786,138 @@ app.post("/api/auth/verify-code", async (req, res) => {
     res.status(500).json({ error: "Verification failed." });
   }
 });
+
+// ==========================================
+// PHASE 3: WEB CHAT & DOCUMENT UPLOAD APIs
+// ==========================================
+
+// 1. DOCUMENT UPLOAD ENDPOINT
+app.post("/api/upload", upload.single("document"), async (req, res) => {
+  try {
+    const userId = req.body.userId;
+    const file = req.file;
+
+    if (!userId || !file) {
+      return res.status(400).json({ error: "Missing user ID or file." });
+    }
+
+    let extractedText = "";
+
+    // A. Parse PDF
+    if (file.mimetype === "application/pdf") {
+      const pdfData = await pdfParse(file.buffer);
+      extractedText = pdfData.text;
+    }
+    // B. Parse Word Doc (.docx)
+    else if (file.mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+      const docData = await mammoth.extractRawText({ buffer: file.buffer });
+      extractedText = docData.value;
+    }
+    // C. Parse Plain Text (.txt)
+    else if (file.mimetype === "text/plain") {
+      extractedText = file.buffer.toString("utf8");
+    } else {
+      return res.status(400).json({ error: "Unsupported file type. Please upload PDF, DOCX, or TXT." });
+    }
+
+    // D. Have OpenAI summarize the document for permanent memory
+    const summaryResponse = await openai.chat.completions.create({
+      model: "gpt-4o-mini", // Fast and cheap for summarizing
+      messages: [
+        { role: "system", content: "You are an AI assistant. Summarize the core facts, numbers, and themes of this document so you can recall them later. Keep it concise." },
+        { role: "user", content: `Document Name: ${file.originalname}\n\nText:\n${extractedText.substring(0, 25000)}` }
+      ]
+    });
+
+    const summary = summaryResponse.choices[0].message.content;
+
+    // E. Save the summary to the user's new document table in Supabase
+    const { error } = await supabase
+      .from("user_documents")
+      .insert([{
+          user_id: userId,
+          document_name: file.originalname,
+          summary: summary,
+          full_text: extractedText.substring(0, 30000) 
+      }]);
+
+    if (error) throw error;
+
+    res.json({ success: true, message: "Document processed and memorized!" });
+
+  } catch (err) {
+    console.error("Upload Error:", err);
+    res.status(500).json({ error: "Failed to process document." });
+  }
+});
+
+
+// 2. WEB CHAT ENDPOINT
+app.post("/api/chat", async (req, res) => {
+    try {
+        const { userId, message } = req.body;
+        if (!userId || !message) return res.status(400).json({ error: "Missing userId or message." });
+
+        // A. Fetch User Data & Core SMS/Voice Memory
+        const { data: user, error: userError } = await supabase
+            .from("users")
+            .select("full_name, memory_summary, phone")
+            .eq("id", userId)
+            .single();
+
+        if (userError || !user) throw new Error("User not found");
+
+        // B. Fetch the summaries of all documents this user has uploaded
+        const { data: docs } = await supabase
+            .from("user_documents")
+            .select("document_name, summary")
+            .eq("user_id", userId);
+
+        let docContext = "";
+        if (docs && docs.length > 0) {
+            docContext = "The user has uploaded the following documents in the web portal:\n";
+            docs.forEach(doc => {
+                docContext += `\n- Document Name: ${doc.document_name}\nSummary: ${doc.summary}\n`;
+            });
+        }
+
+        // C. Combine everything and talk to OpenAI
+        const systemPrompt = `You are David Beatty AI. You are talking to ${user.full_name || 'the user'} via a web chat interface.
+        
+        Here is your core memory of this user from past conversations:
+        ${user.memory_summary || "No past memory yet."}
+
+        ${docContext}
+
+        Respond helpfully and conversationally to their new message. Use their uploaded documents to answer questions if relevant.`;
+
+        const completion = await openai.chat.completions.create({
+            model: "gpt-4o",
+            messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: message }
+            ]
+        });
+
+        const reply = completion.choices[0].message.content;
+
+// D. Trigger your existing memory update function in the background
+        if (typeof updateMemorySummary === "function") {
+            updateMemorySummary({ 
+                oldSummary: user.memory_summary, 
+                userText: message, 
+                assistantText: reply 
+            })
+            .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
+            .catch(e => console.error("Memory update failed:", e));
+        }
+        res.json({ success: true, reply: reply });
+
+    } catch (err) {
+        console.error("Chat Error:", err);
+        res.status(500).json({ error: "Failed to generate reply." });
+    }
+});
+
 
 app.listen(PORT, () => console.log(`Server live on ${PORT}`));
