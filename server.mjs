@@ -1,4 +1,3 @@
-// Triggering new Render server build
 // server.mjs
 import "dotenv/config";
 import express from "express";
@@ -6,8 +5,11 @@ import twilio from "twilio";
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 import multer from 'multer';
-import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+const pdfParse = require("pdf-parse");
 
 // Tell multer to store uploaded files temporarily in the server's memory
 const upload = multer({ storage: multer.memoryStorage() });
