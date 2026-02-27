@@ -6,10 +6,7 @@ import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 import multer from 'multer';
 import mammoth from 'mammoth';
-import { createRequire } from "module";
-
-const require = createRequire(import.meta.url);
-const pdfParse = require("pdf-parse");
+import { extractText, getDocumentProxy } from 'unpdf';
 
 // Tell multer to store uploaded files temporarily in the server's memory
 const upload = multer({ storage: multer.memoryStorage() });
@@ -805,23 +802,12 @@ app.post("/api/upload", upload.single("document"), async (req, res) => {
 
     let extractedText = "";
     
-    // A. Parse PDF
+    // A. Parse PDF (Using modern unpdf library)
     if (file.mimetype === "application/pdf") {
-      const { createRequire } = await import("module");
-      const dynamicRequire = createRequire(import.meta.url);
-      
-      // Bypass the broken index file and grab the core function directly from the source code
-      const extractPdf = dynamicRequire("pdf-parse/lib/pdf-parse.js");
-      
-      // Safety check so it logs exactly what it is if it fails again
-      if (typeof extractPdf !== "function") {
-         console.error("PDF CORE DEBUG:", extractPdf);
-         throw new Error("Node 22 is still rejecting the PDF function.");
-      }
-
-      const pdfData = await extractPdf(file.buffer);
-      extractedText = pdfData.text;
-    }	
+      const pdf = await getDocumentProxy(new Uint8Array(file.buffer));
+      const extracted = await extractText(pdf, { mergePages: true });
+      extractedText = extracted.text;
+    }
 
     // B. Parse Word Doc (.docx)
     else if (file.mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
