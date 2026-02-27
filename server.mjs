@@ -221,7 +221,7 @@ async function callModel({ systemPrompt, profileContext, ragContext, memorySumma
   return out.trim() || "Sorry, I could not generate a reply.";
 }
 
-async function updateMemorySummary({ oldSummary, userText, assistantText }) {
+async function updateMemorySummary({ oldSummary, userText, assistantText, channelLabel = "UNKNOWN" }) {
   const today = new Date().toISOString().split('T')[0];
   const prompt = [
     "You are a strict memory archiver for an AI assistant.",
@@ -231,7 +231,7 @@ async function updateMemorySummary({ oldSummary, userText, assistantText }) {
     "",
     "STRICT FORMATTING RULE:",
     "1. Every new line MUST start with this exact structure: [CHANNEL] [YYYY-MM-DD] [TAG] Fact.",
-    "2. Replace [CHANNEL] with either [SMS] or [VOICE].",
+    `2. Replace [CHANNEL] with exactly: [${channelLabel}].`,
     `3. Replace [YYYY-MM-DD] with exactly today's date: [${today}].`,
     "4. Replace [TAG] with ONE of these categories: [NAME], [COMPANY], [FACT], [SUBJECT], [PREFERENCE], [GOAL], [ACTION].",
     "5. Capture SPECIFIC details only. No vague summaries.",
@@ -514,7 +514,7 @@ app.post("/twilio/sms", async (req, res) => {
       }).catch(e => console.error("Intent error:", e));
     }
 
-    updateMemorySummary({ oldSummary: memorySummary, userText: body, assistantText: cleanReplyText })
+updateMemorySummary({ oldSummary: memorySummary, userText: body, assistantText: cleanReplyText, channelLabel: "SMS" })
       .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
       .catch(e => console.error("Memory error:", e));
 
@@ -589,8 +589,8 @@ app.post("/elevenlabs/post-call", async (req, res) => {
     const userId = await getOrCreateUser(phone);
     checkAndSendVCard(userId, phone).catch(e => console.error("vCard error", e));
 
-    const oldSummary = await getUserMemorySummary(userId);
-    updateMemorySummary({ oldSummary, userText: `(VOICE CALL INITIATED)`, assistantText: `(VOICE CALL TRANSCRIPT SUMMARY)\n${transcriptText}` })
+const oldSummary = await getUserMemorySummary(userId);
+    updateMemorySummary({ oldSummary, userText: `(VOICE CALL INITIATED)`, assistantText: `(VOICE CALL TRANSCRIPT SUMMARY)\n${transcriptText}`, channelLabel: "VOICE" })
       .then(async (newSummary) => { if (newSummary) await setUserMemorySummary(userId, newSummary); })
       .catch(e => console.error("Memory err", e));
 
@@ -805,9 +805,10 @@ app.post("/api/upload", upload.single("document"), async (req, res) => {
 
     let extractedText = "";
 
-    // A. Parse PDF
+    // A. Parse PDF (Safely unwraps the function if Node.js hid it in .default)
     if (file.mimetype === "application/pdf") {
-      const pdfData = await pdfParse(file.buffer);
+      const parsePdf = typeof pdfParse === "function" ? pdfParse : pdfParse.default;
+      const pdfData = await parsePdf(file.buffer);
       extractedText = pdfData.text;
     }
     // B. Parse Word Doc (.docx)
@@ -824,7 +825,7 @@ app.post("/api/upload", upload.single("document"), async (req, res) => {
 
     // D. Have OpenAI summarize the document for permanent memory
     const summaryResponse = await openai.chat.completions.create({
-      model: "gpt-4o-mini", // Fast and cheap for summarizing
+      model: "gpt-4o-mini",
       messages: [
         { role: "system", content: "You are an AI assistant. Summarize the core facts, numbers, and themes of this document so you can recall them later. Keep it concise." },
         { role: "user", content: `Document Name: ${file.originalname}\n\nText:\n${extractedText.substring(0, 25000)}` }
@@ -903,12 +904,13 @@ app.post("/api/chat", async (req, res) => {
 
         const reply = completion.choices[0].message.content;
 
-// D. Trigger your existing memory update function in the background
+	// D. Trigger your existing memory update function in the background
         if (typeof updateMemorySummary === "function") {
             updateMemorySummary({ 
                 oldSummary: user.memory_summary, 
                 userText: message, 
-                assistantText: reply 
+                assistantText: reply,
+                channelLabel: "WEB"
             })
             .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
             .catch(e => console.error("Memory update failed:", e));
