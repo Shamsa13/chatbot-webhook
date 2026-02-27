@@ -7,6 +7,7 @@ import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 
 const app = express();
+app.use(express.static('public'));
 
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json({ limit: "5mb" })); 
@@ -689,5 +690,96 @@ app.post("/elevenlabs/post-call", async (req, res) => {
     return res.status(200).json({ ok: false });
   }
 });
+
+// ==========================================
+// WEB AUTHENTICATION (OTP VIA TWILIO)
+// ==========================================
+
+// Helper to generate a random 6-digit code
+function generateOTP() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+// 1. SEND CODE ENDPOINT
+app.post("/api/auth/send-code", async (req, res) => {
+  try {
+    const rawPhone = req.body.phone;
+    if (!rawPhone) return res.status(400).json({ error: "Phone number is required" });
+    
+    // Use our existing helper to clean the phone number and grab the user's ID
+    const cleanPhone = normalizeFrom(rawPhone);
+    const userId = await getOrCreateUser(cleanPhone);
+    
+    const otpCode = generateOTP();
+    // Set expiration for 10 minutes from now
+    const expiresAt = new Date(Date.now() + 10 * 60000).toISOString();
+    
+    // Save the code to the user's row in Supabase
+    const { error } = await supabase
+      .from("users")
+      .update({ otp_code: otpCode, otp_expires_at: expiresAt })
+      .eq("id", userId);
+      
+    if (error) throw error;
+    
+    // Text the code using Twilio
+    if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
+      const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+      const outboundPhone = cleanPhone.startsWith("+") ? cleanPhone : "+" + cleanPhone;
+      
+      await twilioClient.messages.create({
+        body: `Your David Beatty AI web login code is: ${otpCode}. It expires in 10 minutes.`,
+        from: process.env.TWILIO_PHONE_NUMBER,
+        to: outboundPhone
+      });
+    }
+    
+    res.json({ success: true, message: "Verification code sent via SMS." });
+  } catch (err) {
+    console.error("OTP Send Error:", err.message);
+    res.status(500).json({ error: "Failed to send verification code." });
+  }
+});
+
+// 2. VERIFY CODE ENDPOINT
+app.post("/api/auth/verify-code", async (req, res) => {
+  try {
+    const rawPhone = req.body.phone;
+    const code = req.body.code;
+    if (!rawPhone || !code) return res.status(400).json({ error: "Phone and code are required." });
+    
+    const cleanPhone = normalizeFrom(rawPhone);
+    
+    // Look up the user's saved code
+    const { data: user, error } = await supabase
+      .from("users")
+      .select("id, otp_code, otp_expires_at")
+      .eq("phone", cleanPhone)
+      .single();
+      
+    if (error || !user) return res.status(400).json({ error: "User not found." });
+    
+    // Check if code matches
+    if (user.otp_code !== code) return res.status(400).json({ error: "Invalid code." });
+    
+    // Check if code is expired
+    if (new Date() > new Date(user.otp_expires_at)) {
+      return res.status(400).json({ error: "Code expired. Please request a new one." });
+    }
+    
+    // Success! Clear the OTP from the database so it can't be reused
+    await supabase
+      .from("users")
+      .update({ otp_code: null, otp_expires_at: null })
+      .eq("id", user.id);
+      
+    // Send back the userId. (The frontend will save this to know who is logged in!)
+    res.json({ success: true, userId: user.id });
+  } catch (err) {
+    console.error("OTP Verify Error:", err.message);
+    res.status(500).json({ error: "Verification failed." });
+  }
+});
+
 
 app.listen(PORT, () => console.log(`Server live on ${PORT}`));
