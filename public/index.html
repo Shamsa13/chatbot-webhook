@@ -32,8 +32,8 @@
 
     <div id="step3">
         <h3 style="color: green;">✅ Verified!</h3>
-        <p>Your Supabase User ID is:</p>
-        <code id="userIdDisplay" style="font-size: 10px; word-break: break-all;"></code>
+        <h3 id="welcomeMessage" style="color: #1B2032; margin-top: 15px;"></h3>
+        <p style="font-size: 12px; color: #666; margin-top: 20px;">Ready to launch the dashboard...</p>
     </div>
 </div>
 
@@ -69,7 +69,14 @@
         if(data.success) {
             document.getElementById('step2').style.display = 'none';
             document.getElementById('step3').style.display = 'block';
-            document.getElementById('userIdDisplay').innerText = data.userId;
+            
+            // Format the name nicely (use first name if available, fallback to "there")
+            let firstName = "there";
+            if (data.name && data.name.toLowerCase() !== "null") {
+                firstName = data.name.split(' ')[0]; // Grabs just the first name
+            }
+            
+            document.getElementById('welcomeMessage').innerText = `Welcome back, ${firstName}!`;
         } else {
             alert(data.error);
         }

@@ -750,10 +750,10 @@ app.post("/api/auth/verify-code", async (req, res) => {
     
     const cleanPhone = normalizeFrom(rawPhone);
     
-    // Look up the user's saved code
+    // Look up the user's saved code AND their full name
     const { data: user, error } = await supabase
       .from("users")
-      .select("id, otp_code, otp_expires_at")
+      .select("id, otp_code, otp_expires_at, full_name")
       .eq("phone", cleanPhone)
       .single();
       
@@ -767,19 +767,18 @@ app.post("/api/auth/verify-code", async (req, res) => {
       return res.status(400).json({ error: "Code expired. Please request a new one." });
     }
     
-    // Success! Clear the OTP from the database so it can't be reused
+    // Success! Clear the OTP from the database
     await supabase
       .from("users")
       .update({ otp_code: null, otp_expires_at: null })
       .eq("id", user.id);
       
-    // Send back the userId. (The frontend will save this to know who is logged in!)
-    res.json({ success: true, userId: user.id });
+    // Send back the userId AND the user's name
+    res.json({ success: true, userId: user.id, name: user.full_name });
   } catch (err) {
     console.error("OTP Verify Error:", err.message);
     res.status(500).json({ error: "Verification failed." });
   }
 });
-
 
 app.listen(PORT, () => console.log(`Server live on ${PORT}`));
