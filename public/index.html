@@ -4,80 +4,105 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>David Beatty AI</title>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/intl-tel-input/17.0.8/css/intlTelInput.css" />
+
     <style>
-        body { font-family: Arial, sans-serif; background: #f4f5f7; margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; height: 100vh; }
+        body { font-family: 'Inter', sans-serif; background: #f4f4f4; margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; height: 100vh; color: #333; }
+        h1, h2, h3, .chat-header { font-family: 'Playfair Display', serif; }
         
         /* LOGIN SCREEN STYLES */
-        #loginContainer { background: white; padding: 40px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 320px; text-align: center; }
-        .input-group { width: 90%; padding: 10px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; font-size: 16px; }
-        .btn { background: #1B2032; color: white; border: none; padding: 12px 20px; border-radius: 4px; cursor: pointer; font-size: 16px; width: 100%; transition: 0.3s; }
-        .btn:hover { background: #b89374; }
+        #loginContainer { background: white; padding: 50px 40px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); width: 340px; text-align: center; }
+        .input-group { width: 100%; padding: 12px; margin: 15px 0; border: 1px solid #ddd; border-radius: 6px; font-size: 16px; box-sizing: border-box; transition: border 0.3s; }
+        .input-group:focus { border-color: #0a0a0a; outline: none; }
+        .btn { background: #0a0a0a; color: white; border: none; padding: 14px 20px; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: 500; width: 100%; transition: 0.3s; margin-top: 10px; }
+        .btn:hover { background: #333; }
         #step2 { display: none; }
+        
+        /* Force the phone dropdown to take full width */
+        .iti { width: 100%; text-align: left; margin: 15px 0; }
+        .iti__input { width: 100% !important; padding: 12px !important; padding-left: 50px !important; border: 1px solid #ddd; border-radius: 6px; font-size: 16px; box-sizing: border-box; }
 
         /* DASHBOARD STYLES */
-        #dashboardContainer { display: none; width: 90%; max-width: 1000px; height: 85vh; background: white; border-radius: 12px; box-shadow: 0 5px 20px rgba(0,0,0,0.1); overflow: hidden; flex-direction: row; }
+        #dashboardContainer { display: none; width: 95%; max-width: 1100px; height: 88vh; background: white; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.08); overflow: hidden; flex-direction: row; }
         
         /* SIDEBAR (DOCUMENTS) */
-        .sidebar { width: 30%; background: #1B2032; color: white; padding: 20px; display: flex; flex-direction: column; }
-        .sidebar h3 { margin-top: 0; color: #b89374; border-bottom: 1px solid #333; padding-bottom: 10px; }
-        .upload-box { background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; margin-top: 20px; }
-        .upload-box input[type="file"] { margin-bottom: 10px; width: 100%; font-size: 12px; }
-        .upload-btn { background: #b89374; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer; width: 100%; font-weight: bold; }
-        .upload-btn:hover { background: #a07d60; }
-        #uploadStatus { font-size: 12px; margin-top: 10px; color: #b89374; }
+        .sidebar { width: 28%; background: #0a0a0a; color: white; padding: 30px; display: flex; flex-direction: column; border-right: 1px solid #eee; }
+        .sidebar h3 { margin-top: 0; color: #fff; font-size: 22px; border-bottom: 1px solid #333; padding-bottom: 15px; margin-bottom: 20px; }
+        .upload-box { background: rgba(255,255,255,0.05); padding: 20px; border-radius: 8px; margin-top: auto; border: 1px dashed #444; }
+        .upload-box input[type="file"] { margin-bottom: 15px; width: 100%; font-size: 13px; color: #ccc; }
+        .upload-btn { background: #fff; color: #0a0a0a; border: none; padding: 12px; border-radius: 6px; cursor: pointer; width: 100%; font-weight: 600; font-size: 14px; transition: 0.3s; }
+        .upload-btn:hover { background: #e0e0e0; }
+        #uploadStatus { font-size: 13px; margin-top: 12px; color: #aaa; text-align: center; }
 
         /* CHAT AREA */
-        .chat-area { width: 70%; display: flex; flex-direction: column; background: #fafafa; }
-        .chat-header { padding: 20px; background: white; border-bottom: 1px solid #eee; font-weight: bold; font-size: 18px; color: #1B2032; }
-        .messages { flex-grow: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
-        .message { max-width: 75%; padding: 12px 16px; border-radius: 8px; line-height: 1.4; }
-        .msg-user { align-self: flex-end; background: #1B2032; color: white; border-bottom-right-radius: 0; }
-        .msg-bot { align-self: flex-start; background: #e0e0e0; color: black; border-bottom-left-radius: 0; }
+        .chat-area { width: 72%; display: flex; flex-direction: column; background: #ffffff; }
+        .chat-header { padding: 25px 30px; background: white; border-bottom: 1px solid #eaeaea; font-weight: 600; font-size: 22px; color: #0a0a0a; display: flex; align-items: center; justify-content: space-between; }
+        .messages { flex-grow: 1; padding: 30px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; background: #fafafa; }
         
-        .chat-input-area { padding: 20px; background: white; border-top: 1px solid #eee; display: flex; gap: 10px; }
-        .chat-input-area input { flex-grow: 1; padding: 12px; border: 1px solid #ccc; border-radius: 20px; outline: none; font-size: 15px; }
-        .chat-input-area button { background: #1B2032; color: white; border: none; padding: 10px 20px; border-radius: 20px; cursor: pointer; font-weight: bold; }
-        .chat-input-area button:hover { background: #b89374; }
+        /* CHAT BUBBLES & AVATAR */
+        .message-wrapper { display: flex; align-items: flex-end; gap: 12px; max-width: 80%; }
+        .wrapper-bot { align-self: flex-start; }
+        .wrapper-user { align-self: flex-end; flex-direction: row-reverse; }
+        
+        .avatar { width: 38px; height: 38px; border-radius: 50%; object-fit: cover; box-shadow: 0 2px 5px rgba(0,0,0,0.1); border: 1px solid #ddd; }
+        
+        .message { padding: 14px 18px; border-radius: 12px; line-height: 1.5; font-size: 15px; }
+        .msg-user { background: #0a0a0a; color: white; border-bottom-right-radius: 2px; }
+        .msg-bot { background: #ffffff; color: #333; border-bottom-left-radius: 2px; border: 1px solid #eaeaea; box-shadow: 0 2px 5px rgba(0,0,0,0.02); }
+        
+        /* CHAT INPUT */
+        .chat-input-area { padding: 25px 30px; background: white; border-top: 1px solid #eaeaea; display: flex; gap: 15px; align-items: center; }
+        .chat-input-area input { flex-grow: 1; padding: 16px 20px; border: 1px solid #ddd; border-radius: 30px; outline: none; font-size: 15px; background: #fafafa; transition: border 0.3s; }
+        .chat-input-area input:focus { border-color: #0a0a0a; background: white; }
+        .chat-input-area button { background: #0a0a0a; color: white; border: none; padding: 15px 30px; border-radius: 30px; cursor: pointer; font-weight: 600; font-size: 15px; transition: 0.3s; }
+        .chat-input-area button:hover { background: #333; }
     </style>
 </head>
 <body>
 
 <div id="loginContainer">
-    <h2 style="color: #1B2032;">David Beatty AI</h2>
+    <h2 style="color: #0a0a0a; margin-bottom: 5px;">David Beatty AI</h2>
     
     <div id="step1">
-        <p style="color: #666; font-size: 14px;">Enter your phone number to access your memory and documents.</p>
-        <input type="text" id="phoneInput" class="input-group" placeholder="+1234567890" />
+        <p style="color: #666; font-size: 14px; margin-bottom: 25px;">Enter your phone number to access your portal.</p>
+        
+        <input type="tel" id="phoneInput" />
+        
         <button class="btn" onclick="sendCode()">Send Secure Code</button>
     </div>
 
     <div id="step2">
-        <p style="color: #666; font-size: 14px;">Code sent! Enter it below:</p>
+        <p style="color: #666; font-size: 14px; margin-bottom: 25px;">Code sent! Enter the 6-digit pin below:</p>
         <input type="text" id="codeInput" class="input-group" placeholder="123456" />
-        <button class="btn" onclick="verifyCode()">Login</button>
+        <button class="btn" onclick="verifyCode()">Login to Portal</button>
     </div>
 </div>
 
 <div id="dashboardContainer">
     <div class="sidebar">
         <h3>Memory Bank</h3>
-        <p style="font-size: 13px; line-height: 1.5; color: #ccc;">
-            Upload board packages, PDFs, or Word documents. David will read them and remember them for your future chats and phone calls.
+        <p style="font-size: 14px; line-height: 1.6; color: #aaa;">
+            Upload board packages, meeting minutes, or reports. David will read and recall them instantly for your future chats and calls.
         </p>
         
         <div class="upload-box">
             <input type="file" id="fileInput" accept=".pdf,.docx,.txt" />
-            <button class="upload-btn" onclick="uploadDocument()" id="uploadBtn">Upload to Brain</button>
+            <button class="upload-btn" onclick="uploadDocument()" id="uploadBtn">Upload Document</button>
             <div id="uploadStatus"></div>
         </div>
     </div>
 
     <div class="chat-area">
-        <div class="chat-header" id="chatHeader">Chat with David</div>
+        <div class="chat-header" id="chatHeader">
+            <span>Corporate Governance AI</span>
+            <span style="font-size: 13px; font-weight: 400; color: #888; font-family: 'Inter', sans-serif;" id="loginTag"></span>
+        </div>
         
         <div class="messages" id="chatMessages">
-            <div class="message msg-bot">Hello! I have your core memories loaded. How can I help you today?</div>
-        </div>
+            </div>
 
         <div class="chat-input-area">
             <input type="text" id="chatInput" placeholder="Ask David a question..." onkeypress="handleEnter(event)" />
@@ -86,13 +111,33 @@
     </div>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/intl-tel-input/17.0.8/js/intlTelInput.min.js"></script>
+
 <script>
     let globalUserId = "";
     let userPhone = "";
+    
+    // David's specific Avatar URL (Pulled from your Google Drive)
+    const botAvatar = "https://drive.google.com/uc?export=view&id=1KP0RP7dV229uUohHaTozmCk6rledboPv";
+
+    // Initialize the Phone Input Flag Dropdown
+    const phoneInputField = document.querySelector("#phoneInput");
+    const phoneInput = window.intlTelInput(phoneInputField, {
+        utilsScript: "https://cdnjs.cloudflare.com/ajax/libs/intl-tel-input/17.0.8/js/utils.js",
+        preferredCountries: ["ca", "us", "gb", "au"], // Puts these flags at the top of the list
+        separateDialCode: true // Makes it look super clean
+    });
 
     // --- AUTHENTICATION ---
     async function sendCode() {
-        userPhone = document.getElementById('phoneInput').value;
+        // Grab the FULL E.164 formatted number (e.g. +1647...) automatically from the plugin!
+        userPhone = phoneInput.getNumber(); 
+        
+        if (!userPhone) {
+            alert("Please enter a valid phone number.");
+            return;
+        }
+
         const btn = document.querySelector('#step1 .btn');
         btn.innerText = "Sending...";
         
@@ -127,19 +172,21 @@
         if(data.success) {
             globalUserId = data.userId;
             
-            // Format name for the header
-            let firstName = "there";
+            let firstName = "Guest";
             if (data.name && data.name.toLowerCase() !== "null") {
                 firstName = data.name.split(' ')[0];
             }
-            document.getElementById('chatHeader').innerText = `Chatting with David (Logged in as ${firstName})`;
+            document.getElementById('loginTag').innerText = `Logged in as ${firstName}`;
 
-            // Swap UI from Login to Dashboard
+            // Swap UI
             document.getElementById('loginContainer').style.display = 'none';
             document.getElementById('dashboardContainer').style.display = 'flex';
+            
+            // Add initial bot greeting
+            addMessageToUI(`Welcome back, ${firstName}. I have securely loaded your profile and document history. How can I assist you with board governance today?`, 'bot');
         } else {
             alert(data.error);
-            btn.innerText = "Login";
+            btn.innerText = "Login to Portal";
         }
     }
 
@@ -153,11 +200,9 @@
         const message = inputField.value.trim();
         if (!message) return;
 
-        // 1. Add User Message to UI
         addMessageToUI(message, 'user');
         inputField.value = "";
 
-        // 2. Send to Backend
         try {
             const res = await fetch('/api/chat', {
                 method: 'POST',
@@ -166,7 +211,6 @@
             });
             const data = await res.json();
 
-            // 3. Add Bot Reply to UI
             if (data.success) {
                 addMessageToUI(data.reply, 'bot');
             } else {
@@ -179,13 +223,31 @@
 
     function addMessageToUI(text, sender) {
         const msgContainer = document.getElementById('chatMessages');
-        const msgDiv = document.createElement('div');
-        msgDiv.classList.add('message');
-        msgDiv.classList.add(sender === 'user' ? 'msg-user' : 'msg-bot');
-        msgDiv.innerText = text;
-        msgContainer.appendChild(msgDiv);
         
-        // Auto-scroll to bottom
+        // Create the wrapper that holds the avatar and the bubble
+        const wrapperDiv = document.createElement('div');
+        wrapperDiv.classList.add('message-wrapper');
+        wrapperDiv.classList.add(sender === 'bot' ? 'wrapper-bot' : 'wrapper-user');
+        
+        let innerHTML = '';
+        
+        // Format text to handle basic line breaks
+        const formattedText = text.replace(/\n/g, '<br>');
+
+        if (sender === 'bot') {
+            innerHTML = `
+                <img src="${botAvatar}" class="avatar" alt="David AI" />
+                <div class="message msg-bot">${formattedText}</div>
+            `;
+        } else {
+            // User messages don't need an avatar
+            innerHTML = `<div class="message msg-user">${formattedText}</div>`;
+        }
+
+        wrapperDiv.innerHTML = innerHTML;
+        msgContainer.appendChild(wrapperDiv);
+        
+        // Auto-scroll
         msgContainer.scrollTop = msgContainer.scrollHeight;
     }
 
@@ -201,36 +263,36 @@
         }
 
         const file = fileInput.files[0];
-        
-        // Prepare data
         const formData = new FormData();
         formData.append("userId", globalUserId);
         formData.append("document", file);
 
-        statusText.innerText = "Reading document... this takes a moment.";
-        statusText.style.color = "white";
+        statusText.innerText = "Analyzing document... please wait.";
+        statusText.style.color = "#ccc";
         uploadBtn.disabled = true;
+        uploadBtn.innerText = "Uploading...";
 
         try {
             const res = await fetch('/api/upload', {
                 method: 'POST',
-                body: formData // Note: no headers needed for FormData, browser sets it
+                body: formData 
             });
             const data = await res.json();
 
             if (data.success) {
-                statusText.innerText = "✅ Memorized successfully!";
-                statusText.style.color = "#4CAF50"; // Green
-                fileInput.value = ""; // Clear the input
+                statusText.innerText = "✅ Saved to Secure Memory";
+                statusText.style.color = "#4CAF50"; 
+                fileInput.value = ""; 
             } else {
                 statusText.innerText = "❌ Error: " + data.error;
-                statusText.style.color = "#ff4c4c"; // Red
+                statusText.style.color = "#ff4c4c"; 
             }
         } catch (error) {
             statusText.innerText = "❌ Upload failed. Check connection.";
             statusText.style.color = "#ff4c4c";
         } finally {
             uploadBtn.disabled = false;
+            uploadBtn.innerText = "Upload Document";
         }
     }
 </script>
