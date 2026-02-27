@@ -150,6 +150,17 @@ async function getUserMemorySummary(userId) {
   if (error) throw new Error("users memory_summary read failed: " + error.message);
   return (data?.memory_summary || "").trim();
 }
+async function getUserDocumentsContext(userId) {
+  const { data: docs } = await supabase
+    .from("user_documents")
+    .select("document_name, summary")
+    .eq("user_id", userId);
+    
+  if (!docs || docs.length === 0) return "";
+  
+  return "The user has uploaded these documents to their web portal:\n" + 
+         docs.map(d => `- ${d.document_name}: ${d.summary}`).join("\n");
+}
 
 async function setUserMemorySummary(userId, memorySummary) {
   const { data, error } = await supabase.from("users").update({ memory_summary: memorySummary, last_seen: new Date().toISOString() }).eq("id", userId).select("id, memory_summary").single();
@@ -465,11 +476,15 @@ app.post("/twilio/sms", async (req, res) => {
     CRITICAL INSTRUCTION: If the user says 'Yes' to receiving a transcript, OR asks for a transcript, but their Email is 'Unknown', you MUST reply by telling them you need their email address to send it. Do not confirm sending until an email is provided.${eventInstructions}`;
     
     const formattedHistoryForOpenAI = history.map(h => ({ role: h.role, content: `(${h.channel}) ${h.content}` }));
+    
+    // Grab the uploaded documents and attach them to his profile instructions
+    const userDocs = await getUserDocumentsContext(userId);
+    const combinedProfileContext = profileContext + "\n\n" + userDocs;
 
     console.log("  -> [OpenAI Tracer] 1. Sending message to OpenAI...");
     const replyText = await callModel({
       systemPrompt: cfg.systemPrompt, 
-      profileContext: profileContext,
+      profileContext: combinedProfileContext, // Now contains both profile info AND documents
       ragContext: ragContext,
       memorySummary, 
       history: formattedHistoryForOpenAI.slice(0, -1), 
@@ -554,9 +569,13 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
       }
     }
 
+// Fetch documents and append them directly to his memory summary for the call
+    const userDocs = await getUserDocumentsContext(userId);
+    const fullVoiceMemory = memorySummary ? (memorySummary + "\n\n" + userDocs) : userDocs || "No previous memory.";
+
     return res.status(200).json({ 
       dynamic_variables: { 
-        memory_summary: memorySummary || "No previous memory.", 
+        memory_summary: fullVoiceMemory, 
         caller_phone: phone, 
         channel: "call", 
         recent_history: formatRecentHistoryForCall(history) || "No recent history.", 
@@ -689,10 +708,8 @@ const oldSummary = await getUserMemorySummary(userId);
       }
     }
 
-    return res.status(200).json({ ok: true });
   } catch (err) {
     console.error("ERROR post-call", err?.message);
-    return res.status(200).json({ ok: false });
   }
 });
 
