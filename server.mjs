@@ -803,9 +803,22 @@ app.post("/api/auth/verify-code", async (req, res) => {
   }
 });
 
+
 // ==========================================
 // PHASE 3: WEB CHAT & DOCUMENT UPLOAD APIs
 // ==========================================
+
+// HELPER: Chunks text into smaller pieces so David can recall specific paragraphs
+function chunkText(text, size = 1500) {
+  const chunks = [];
+  let i = 0;
+  while (i < text.length) {
+    // We use a 200-character overlap so context isn't lost between chunks
+    chunks.push(text.slice(i, i + size));
+    i += size - 200; 
+  }
+  return chunks;
+}
 
 // 1. DOCUMENT UPLOAD ENDPOINT
 app.post("/api/upload", upload.single("document"), async (req, res) => {
@@ -825,7 +838,6 @@ app.post("/api/upload", upload.single("document"), async (req, res) => {
       const extracted = await extractText(pdf, { mergePages: true });
       extractedText = extracted.text;
     }
-
     // B. Parse Word Doc (.docx)
     else if (file.mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
       const docData = await mammoth.extractRawText({ buffer: file.buffer });
@@ -838,7 +850,44 @@ app.post("/api/upload", upload.single("document"), async (req, res) => {
       return res.status(400).json({ error: "Unsupported file type. Please upload PDF, DOCX, or TXT." });
     }
 
-    // D. Have OpenAI summarize the document for permanent memory
+    // D. Create the main document record in Supabase FIRST to get an ID
+    const { data: docRecord, error: docError } = await supabase
+      .from("user_documents")
+      .insert([{ 
+          user_id: userId, 
+          document_name: file.originalname, 
+          full_text: extractedText.substring(0, 30000) // Cap to prevent DB overload
+      }])
+      .select()
+      .single();
+
+    if (docError) throw docError;
+
+    // E. CHUNKING & EMBEDDING: Dice the document and save to the Vector Vault
+    const textChunks = chunkText(extractedText);
+    console.log(`📦 Chunking complete: ${textChunks.length} pieces created for ${file.originalname}`);
+
+    for (const chunk of textChunks) {
+      // Generate a mathematical vector for this specific paragraph
+      const embResp = await openai.embeddings.create({
+        model: "text-embedding-3-small",
+        input: chunk.replace(/\n/g, " "),
+      });
+
+      // Save the chunk and its vector to the NEW table
+      const { error: chunkError } = await supabase
+        .from("user_document_chunks")
+        .insert({
+          user_id: userId,
+          document_id: docRecord.id,
+          content: chunk,
+          embedding: embResp.data[0].embedding
+        });
+        
+      if (chunkError) console.error("Chunk save error:", chunkError.message);
+    }
+
+    // F. Generate a quick summary for the 'Memory Bank' sidebar
     const summaryResponse = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -848,20 +897,11 @@ app.post("/api/upload", upload.single("document"), async (req, res) => {
     });
 
     const summary = summaryResponse.choices[0].message.content;
+    
+    // Update the original document record with the generated summary
+    await supabase.from("user_documents").update({ summary: summary }).eq("id", docRecord.id);
 
-    // E. Save the summary to the user's new document table in Supabase
-    const { error } = await supabase
-      .from("user_documents")
-      .insert([{
-          user_id: userId,
-          document_name: file.originalname,
-          summary: summary,
-          full_text: extractedText.substring(0, 30000) 
-      }]);
-
-    if (error) throw error;
-
-    res.json({ success: true, message: "Document processed and memorized!" });
+    res.json({ success: true, message: "Document chunked and fully memorized!" });
 
   } catch (err) {
     console.error("Upload Error:", err);
@@ -876,7 +916,7 @@ app.post("/api/chat", async (req, res) => {
         const { userId, message } = req.body;
         if (!userId || !message) return res.status(400).json({ error: "Missing userId or message." });
 
-        // A. Fetch User Data & Core SMS/Voice Memory
+        // A. Fetch User Data & Core Memory
         const { data: user, error: userError } = await supabase
             .from("users")
             .select("full_name, memory_summary, phone")
@@ -885,27 +925,49 @@ app.post("/api/chat", async (req, res) => {
 
         if (userError || !user) throw new Error("User not found");
 
-        // B. Fetch the summaries of all documents this user has uploaded
-        const { data: docs } = await supabase
-            .from("user_documents")
-            .select("document_name, summary")
-            .eq("user_id", userId);
+        // B. Search David's core Knowledge Base (The "Real David" part)
+        const davidContext = await searchKnowledgeBase(message);
 
-        let docContext = "";
-        if (docs && docs.length > 0) {
-            docContext = "The user has uploaded the following documents in the web portal:\n";
-            docs.forEach(doc => {
-                docContext += `\n- Document Name: ${doc.document_name}\nSummary: ${doc.summary}\n`;
+        // C. Search User's Private Document Chunks (The "Deep Dive" part)
+        let privateDocContext = "";
+        try {
+            const userEmb = await openai.embeddings.create({
+                model: "text-embedding-3-small",
+                input: message,
             });
+
+            const { data: userChunks } = await supabase.rpc('match_user_chunks', {
+                query_embedding: userEmb.data[0].embedding,
+                match_threshold: 0.3, // How closely the question must match the text
+                match_count: 3,       // Pull top 3 paragraphs
+                p_user_id: userId     // STRICT PRIVACY: Only search this user's files!
+            });
+
+            if (userChunks && userChunks.length > 0) {
+                privateDocContext = "Relevant excerpts from the user's privately uploaded documents:\n";
+                userChunks.forEach(c => {
+                    privateDocContext += `\n[From Document: ${c.document_name}]\n${c.content}\n`;
+                });
+            }
+        } catch (e) {
+            console.error("Chunk search failed:", e);
         }
 
-        // C. Combine everything and talk to OpenAI
-        const systemPrompt = `You are David Beatty AI. You are talking to ${user.full_name || 'the user'} via a web chat interface.
+        // D. Fetch the Bot's Core System Prompt
+        const cfg = await getBotConfig();
+
+        // E. Combine everything and talk to OpenAI
+        const systemPrompt = `${cfg.systemPrompt}
         
-        Here is your core memory of this user from past conversations:
+        You are talking to ${user.full_name || 'the user'} via a web chat interface.
+        
+        Long term memory about this user:
         ${user.memory_summary || "No past memory yet."}
 
-        ${docContext}
+        Relevant Knowledge Base Context (David's Core Writings):
+        ${davidContext || "No relevant public writings found."}
+
+        ${privateDocContext}
 
         Respond helpfully and conversationally to their new message. Use their uploaded documents to answer questions if relevant.`;
 
@@ -919,7 +981,7 @@ app.post("/api/chat", async (req, res) => {
 
         const reply = completion.choices[0].message.content;
 
-	// D. Trigger your existing memory update function in the background
+        // F. Trigger your existing memory update function in the background
         if (typeof updateMemorySummary === "function") {
             updateMemorySummary({ 
                 oldSummary: user.memory_summary, 
