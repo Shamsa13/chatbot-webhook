@@ -928,6 +928,8 @@ app.post("/api/chat", async (req, res) => {
         // B. Search David's core Knowledge Base (The "Real David" part)
         const davidContext = await searchKnowledgeBase(message);
 
+const selectedDocIds = req.body.selectedDocIds || [];
+
         // C. Search User's Private Document Chunks (The "Deep Dive" part)
         let privateDocContext = "";
         try {
@@ -936,12 +938,29 @@ app.post("/api/chat", async (req, res) => {
                 input: message,
             });
 
-            const { data: userChunks } = await supabase.rpc('match_user_chunks', {
-                query_embedding: userEmb.data[0].embedding,
-                match_threshold: 0.3, // How closely the question must match the text
-                match_count: 3,       // Pull top 3 paragraphs
-                p_user_id: userId     // STRICT PRIVACY: Only search this user's files!
-            });
+            let userChunks = [];
+
+            // If the user checked specific boxes, search ONLY those documents
+            if (selectedDocIds.length > 0) {
+                const { data } = await supabase.rpc('match_selected_user_chunks', {
+                    query_embedding: userEmb.data[0].embedding,
+                    match_threshold: 0.2, 
+                    match_count: 4,
+                    p_user_id: userId,
+                    p_document_ids: selectedDocIds
+                });
+                userChunks = data;
+            } 
+            // Otherwise, search across ALL their documents like normal
+            else {
+                const { data } = await supabase.rpc('match_user_chunks', {
+                    query_embedding: userEmb.data[0].embedding,
+                    match_threshold: 0.2,
+                    match_count: 4,
+                    p_user_id: userId
+                });
+                userChunks = data;
+            }
 
             if (userChunks && userChunks.length > 0) {
                 privateDocContext = "Relevant excerpts from the user's privately uploaded documents:\n";
@@ -952,7 +971,6 @@ app.post("/api/chat", async (req, res) => {
         } catch (e) {
             console.error("Chunk search failed:", e);
         }
-
         // D. Fetch the Bot's Core System Prompt
         const cfg = await getBotConfig();
 
@@ -1000,5 +1018,25 @@ app.post("/api/chat", async (req, res) => {
     }
 });
 
+
+// 1.5 GET USER DOCUMENTS ENDPOINT
+app.get("/api/documents", async (req, res) => {
+    try {
+        const userId = req.query.userId;
+        if (!userId) return res.status(400).json({ error: "Missing userId" });
+
+        const { data: docs, error } = await supabase
+            .from("user_documents")
+            .select("id, document_name")
+            .eq("user_id", userId)
+            .order("uploaded_at", { ascending: false }); // <-- Fixed to match your DB!
+
+        if (error) throw error;
+        res.json({ success: true, documents: docs || [] });
+    } catch (err) {
+        console.error("Fetch Docs Error:", err);
+        res.status(500).json({ error: "Failed to load documents." });
+    }
+});
 
 app.listen(PORT, () => console.log(`Server live on ${PORT}`));
