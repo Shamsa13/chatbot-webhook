@@ -477,9 +477,25 @@ app.post("/twilio/sms", async (req, res) => {
     
     const formattedHistoryForOpenAI = history.map(h => ({ role: h.role, content: `(${h.channel}) ${h.content}` }));
     
-    // Grab the uploaded documents and attach them to his profile instructions
-    const userDocs = await getUserDocumentsContext(userId);
-    const combinedProfileContext = profileContext + "\n\n" + userDocs;
+    // Grab the uploaded documents using the DEEP DIVE Vector Search
+    let privateDocContext = "";
+    try {
+        const userEmb = await openai.embeddings.create({ model: "text-embedding-3-small", input: body });
+        const { data: userChunks } = await supabase.rpc('match_user_chunks', {
+            query_embedding: userEmb.data[0].embedding,
+            match_threshold: 0.2,
+            match_count: 3,
+            p_user_id: userId
+        });
+        if (userChunks && userChunks.length > 0) {
+            privateDocContext = "Relevant excerpts from the user's uploaded documents:\n";
+            userChunks.forEach(c => { privateDocContext += `\n[From Document: ${c.document_name}]\n${c.content}\n`; });
+        }
+    } catch (e) {
+        console.error("SMS Chunk search failed:", e);
+    }
+    
+    const combinedProfileContext = profileContext + "\n\n" + privateDocContext;    
 
     console.log("  -> [OpenAI Tracer] 1. Sending message to OpenAI...");
     const replyText = await callModel({
@@ -910,106 +926,110 @@ app.post("/api/upload", upload.single("document"), async (req, res) => {
 });
 
 
-// 2. WEB CHAT ENDPOINT
+// 2. WEB CHAT ENDPOINT (Upgraded with History & GPT-5.4)
 app.post("/api/chat", async (req, res) => {
     try {
         const { userId, message } = req.body;
         if (!userId || !message) return res.status(400).json({ error: "Missing userId or message." });
 
-        // A. Fetch User Data & Core Memory
-        const { data: user, error: userError } = await supabase
-            .from("users")
-            .select("full_name, memory_summary, phone")
-            .eq("id", userId)
-            .single();
+        // 1. Get or Create a Conversation ID for the Web
+        const conversationId = await getOrCreateConversation(userId, "web");
 
-        if (userError || !user) throw new Error("User not found");
+        // 2. Save the User's new message to the database
+        await supabase.from("messages").insert({
+            conversation_id: conversationId, 
+            channel: "web", 
+            direction: "user",
+            text: message, 
+            provider: "web"
+        });
 
-        // B. Search David's core Knowledge Base (The "Real David" part)
+        // 3. Fetch History & Profile Data
+        const [userDb, history] = await Promise.all([
+            supabase.from("users").select("full_name, memory_summary, phone").eq("id", userId).single(),
+            getRecentUserMessages(userId, 8) // Pulls the last 8 messages!
+        ]);
+        
+        const user = userDb.data;
+        if (!user) throw new Error("User not found");
+
         const davidContext = await searchKnowledgeBase(message);
+        const selectedDocIds = req.body.selectedDocIds || [];
+        let privateDocContext = "";
 
-const selectedDocIds = req.body.selectedDocIds || [];
-
-        // C. Search User's Private Document Chunks (The "Deep Dive" part)
+	// 4. Vector Search the Documents (Upgraded with Contextual Retrieval)
         let privateDocContext = "";
         try {
-            const userEmb = await openai.embeddings.create({
-                model: "text-embedding-3-small",
-                input: message,
-            });
+            // THE FIX: Combine the last question with the current one so the search engine has context!
+            let searchQuery = message;
+            const pastUserMsgs = history.filter(h => h.role === 'user');
+            if (pastUserMsgs.length > 0) {
+                const lastQuestion = pastUserMsgs[pastUserMsgs.length - 1].content;
+                // e.g., "Context: What is the secret password | New Question: How about this document?"
+                searchQuery = `Context: ${lastQuestion} | New Question: ${message}`;
+            }
 
+            const userEmb = await openai.embeddings.create({ model: "text-embedding-3-small", input: searchQuery });
             let userChunks = [];
 
-            // If the user checked specific boxes, search ONLY those documents
+            // NOTE: Lowered threshold to 0.1 and increased count to 5 so it's more generous when reading files
             if (selectedDocIds.length > 0) {
                 const { data } = await supabase.rpc('match_selected_user_chunks', {
-                    query_embedding: userEmb.data[0].embedding,
-                    match_threshold: 0.2, 
-                    match_count: 4,
-                    p_user_id: userId,
-                    p_document_ids: selectedDocIds
+                    query_embedding: userEmb.data[0].embedding, match_threshold: 0.1, match_count: 5, p_user_id: userId, p_document_ids: selectedDocIds
                 });
                 userChunks = data;
-            } 
-            // Otherwise, search across ALL their documents like normal
-            else {
+            } else {
                 const { data } = await supabase.rpc('match_user_chunks', {
-                    query_embedding: userEmb.data[0].embedding,
-                    match_threshold: 0.2,
-                    match_count: 4,
-                    p_user_id: userId
+                    query_embedding: userEmb.data[0].embedding, match_threshold: 0.1, match_count: 5, p_user_id: userId
                 });
                 userChunks = data;
             }
 
             if (userChunks && userChunks.length > 0) {
                 privateDocContext = "Relevant excerpts from the user's privately uploaded documents:\n";
-                userChunks.forEach(c => {
-                    privateDocContext += `\n[From Document: ${c.document_name}]\n${c.content}\n`;
-                });
+                userChunks.forEach(c => { privateDocContext += `\n[From Document: ${c.document_name}]\n${c.content}\n`; });
             }
-        } catch (e) {
-            console.error("Chunk search failed:", e);
-        }
-        // D. Fetch the Bot's Core System Prompt
+        } catch (e) { console.error("Chunk search failed:", e); }
+
         const cfg = await getBotConfig();
+        
+        // 5. Format History for OpenAI
+        const formattedHistory = history.map(h => ({ role: h.role, content: `(${h.channel}) ${h.content}` }));
 
-        // E. Combine everything and talk to OpenAI
         const systemPrompt = `${cfg.systemPrompt}
-        
         You are talking to ${user.full_name || 'the user'} via a web chat interface.
-        
-        Long term memory about this user:
-        ${user.memory_summary || "No past memory yet."}
-
-        Relevant Knowledge Base Context (David's Core Writings):
-        ${davidContext || "No relevant public writings found."}
-
+        Long term memory about this user: ${user.memory_summary || "No past memory yet."}
+        Relevant Knowledge Base Context (David's Core Writings): ${davidContext || "No relevant public writings found."}
         ${privateDocContext}
-
         Respond helpfully and conversationally to their new message. Use their uploaded documents to answer questions if relevant.`;
 
+        // 6. Call the upgraded GPT-5.4 model
         const completion = await openai.chat.completions.create({
-            model: "gpt-4o",
+	    model: OPENAI_MODEL,
             messages: [
                 { role: "system", content: systemPrompt },
+                ...formattedHistory.slice(0, -1), // Inject chat history
                 { role: "user", content: message }
             ]
         });
 
         const reply = completion.choices[0].message.content;
 
-        // F. Trigger your existing memory update function in the background
+        // 7. Save David's reply to the database
+        await supabase.from("messages").insert({
+            conversation_id: conversationId, 
+            channel: "web", 
+            direction: "agent",
+            text: reply, 
+            provider: "openai"
+        });
+
+        // 8. Update Long-Term Memory
         if (typeof updateMemorySummary === "function") {
-            updateMemorySummary({ 
-                oldSummary: user.memory_summary, 
-                userText: message, 
-                assistantText: reply,
-                channelLabel: "WEB"
-            })
-            .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
-            .catch(e => console.error("Memory update failed:", e));
+            updateMemorySummary({ oldSummary: user.memory_summary, userText: message, assistantText: reply, channelLabel: "WEB" })
+            .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); }).catch(e => console.error("Memory update failed:", e));
         }
+
         res.json({ success: true, reply: reply });
 
     } catch (err) {
@@ -1017,7 +1037,6 @@ const selectedDocIds = req.body.selectedDocIds || [];
         res.status(500).json({ error: "Failed to generate reply." });
     }
 });
-
 
 // 1.5 GET USER DOCUMENTS ENDPOINT (Now includes timestamp)
 app.get("/api/documents", async (req, res) => {
