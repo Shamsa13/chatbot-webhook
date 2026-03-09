@@ -1019,7 +1019,7 @@ const selectedDocIds = req.body.selectedDocIds || [];
 });
 
 
-// 1.5 GET USER DOCUMENTS ENDPOINT
+// 1.5 GET USER DOCUMENTS ENDPOINT (Now includes timestamp)
 app.get("/api/documents", async (req, res) => {
     try {
         const userId = req.query.userId;
@@ -1027,15 +1027,39 @@ app.get("/api/documents", async (req, res) => {
 
         const { data: docs, error } = await supabase
             .from("user_documents")
-            .select("id, document_name")
+            .select("id, document_name, uploaded_at")
             .eq("user_id", userId)
-            .order("uploaded_at", { ascending: false }); // <-- Fixed to match your DB!
+            .order("uploaded_at", { ascending: false });
 
         if (error) throw error;
         res.json({ success: true, documents: docs || [] });
     } catch (err) {
         console.error("Fetch Docs Error:", err);
         res.status(500).json({ error: "Failed to load documents." });
+    }
+});
+
+// 1.6 DELETE USER DOCUMENT ENDPOINT
+app.delete("/api/documents/:id", async (req, res) => {
+    try {
+        const docId = req.params.id;
+        const userId = req.body.userId; // Secure it by requiring the userId!
+
+        if (!docId || !userId) return res.status(400).json({ error: "Missing docId or userId" });
+
+        // Because we set ON DELETE CASCADE in Phase 1, deleting this row 
+        // will automatically delete all the vector chunks too!
+        const { error } = await supabase
+            .from("user_documents")
+            .delete()
+            .eq("id", docId)
+            .eq("user_id", userId);
+
+        if (error) throw error;
+        res.json({ success: true, message: "Document completely deleted." });
+    } catch (err) {
+        console.error("Delete Doc Error:", err);
+        res.status(500).json({ error: "Failed to delete document." });
     }
 });
 

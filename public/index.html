@@ -14,9 +14,9 @@
         
         #loginContainer { background: white; padding: 50px 40px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); width: 340px; text-align: center; }
         .input-group { width: 100%; padding: 12px; margin: 15px 0; border: 1px solid #ddd; border-radius: 6px; font-size: 16px; box-sizing: border-box; transition: border 0.3s; }
-        .input-group:focus { border-color: #0a0a0a; outline: none; }
-        .btn { background: #0a0a0a; color: white; border: none; padding: 14px 20px; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: 500; width: 100%; transition: 0.3s; margin-top: 10px; }
-        .btn:hover { background: #333; }
+        .input-group:focus { border-color: #181d32; outline: none; }
+        .btn { background: #181d32; color: white; border: none; padding: 14px 20px; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: 500; width: 100%; transition: 0.3s; margin-top: 10px; }
+        .btn:hover { background: #252b48; }
         #step2 { display: none; }
         
         .iti { width: 100%; text-align: left; margin: 15px 0; }
@@ -24,22 +24,26 @@
 
         #dashboardContainer { display: none; width: 95%; max-width: 1100px; height: 88vh; background: white; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.08); overflow: hidden; flex-direction: row; }
         
-        .sidebar { width: 28%; background: #0a0a0a; color: white; padding: 30px; display: flex; flex-direction: column; border-right: 1px solid #eee; }
-        .sidebar h3 { margin-top: 0; color: #fff; font-size: 22px; border-bottom: 1px solid #333; padding-bottom: 15px; margin-bottom: 20px; }
+        .sidebar { width: 30%; background: #181d32; color: white; padding: 30px; display: flex; flex-direction: column; border-right: 1px solid #eee; }
+        .sidebar h3 { margin-top: 0; color: #fff; font-size: 22px; border-bottom: 1px solid #252b48; padding-bottom: 15px; margin-bottom: 20px; }
         .upload-box { background: rgba(255,255,255,0.05); padding: 20px; border-radius: 8px; margin-top: auto; border: 1px dashed #444; }
         .upload-box input[type="file"] { margin-bottom: 15px; width: 100%; font-size: 13px; color: #ccc; }
-        .upload-btn { background: #fff; color: #0a0a0a; border: none; padding: 12px; border-radius: 6px; cursor: pointer; width: 100%; font-weight: 600; font-size: 14px; transition: 0.3s; }
+        .upload-btn { background: #fff; color: #181d32; border: none; padding: 12px; border-radius: 6px; cursor: pointer; width: 100%; font-weight: 600; font-size: 14px; transition: 0.3s; }
         .upload-btn:hover { background: #e0e0e0; }
         #uploadStatus { font-size: 13px; margin-top: 12px; color: #aaa; text-align: center; }
 
-        /* Custom scrollbar for the document list */
         #documentList::-webkit-scrollbar { width: 6px; }
-        #documentList::-webkit-scrollbar-track { background: #111; border-radius: 4px; }
+        #documentList::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); border-radius: 4px; }
         #documentList::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
         #documentList::-webkit-scrollbar-thumb:hover { background: #555; }
 
-        .chat-area { width: 72%; display: flex; flex-direction: column; background: #ffffff; }
-        .chat-header { padding: 25px 30px; background: white; border-bottom: 1px solid #eaeaea; font-weight: 600; font-size: 22px; color: #0a0a0a; display: flex; align-items: center; justify-content: space-between; }
+        .chat-area { width: 70%; display: flex; flex-direction: column; background: #ffffff; }
+        .chat-header { padding: 20px 30px; background: white; border-bottom: 1px solid #eaeaea; display: flex; align-items: center; justify-content: space-between; }
+        .header-title { font-weight: 600; font-size: 22px; color: #181d32; }
+        .header-actions { display: flex; align-items: center; gap: 15px; font-size: 13px; font-family: 'Inter', sans-serif; }
+        .logout-btn { background: transparent; border: 1px solid #ddd; padding: 6px 12px; border-radius: 4px; cursor: pointer; color: #666; transition: 0.3s; }
+        .logout-btn:hover { background: #f4f4f4; color: #181d32; }
+
         .messages { flex-grow: 1; padding: 30px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; background: #fafafa; }
         
         .message-wrapper { display: flex; align-items: flex-end; gap: 12px; max-width: 80%; }
@@ -49,20 +53,20 @@
         .avatar { width: 38px; height: 38px; border-radius: 50%; object-fit: cover; box-shadow: 0 2px 5px rgba(0,0,0,0.1); border: 1px solid #ddd; }
         
         .message { padding: 14px 18px; border-radius: 12px; line-height: 1.5; font-size: 15px; }
-        .msg-user { background: #0a0a0a; color: white; border-bottom-right-radius: 2px; }
+        .msg-user { background: #181d32; color: white; border-bottom-right-radius: 2px; }
         .msg-bot { background: #ffffff; color: #333; border-bottom-left-radius: 2px; border: 1px solid #eaeaea; box-shadow: 0 2px 5px rgba(0,0,0,0.02); }
         
         .chat-input-area { padding: 25px 30px; background: white; border-top: 1px solid #eaeaea; display: flex; gap: 15px; align-items: center; }
         .chat-input-area input { flex-grow: 1; padding: 16px 20px; border: 1px solid #ddd; border-radius: 30px; outline: none; font-size: 15px; background: #fafafa; transition: border 0.3s; }
-        .chat-input-area input:focus { border-color: #0a0a0a; background: white; }
-        .chat-input-area button { background: #0a0a0a; color: white; border: none; padding: 15px 30px; border-radius: 30px; cursor: pointer; font-weight: 600; font-size: 15px; transition: 0.3s; }
-        .chat-input-area button:hover { background: #333; }
+        .chat-input-area input:focus { border-color: #181d32; background: white; }
+        .chat-input-area button { background: #181d32; color: white; border: none; padding: 15px 30px; border-radius: 30px; cursor: pointer; font-weight: 600; font-size: 15px; transition: 0.3s; }
+        .chat-input-area button:hover { background: #252b48; }
     </style>
 </head>
 <body>
 
 <div id="loginContainer">
-    <h2 style="color: #0a0a0a; margin-bottom: 5px;">David Beatty AI</h2>
+    <h2 style="color: #181d32; margin-bottom: 5px;">David Beatty AI</h2>
     <div id="step1">
         <p style="color: #666; font-size: 14px; margin-bottom: 25px;">Enter your phone number to access your portal.</p>
         <input type="tel" id="phoneInput" />
@@ -79,13 +83,13 @@
     <div class="sidebar">
         <h3>Memory Bank</h3>
         <p style="font-size: 14px; line-height: 1.6; color: #aaa;">
-            Upload board packages, meeting minutes, or reports. David will read and recall them instantly for your future chats and calls.
+            Securely upload board packages, meeting minutes, or reports. David will read and recall them instantly for your future chats and calls.
         </p>
         
-        <div id="documentListContainer" style="margin-top: 15px; border-top: 1px solid #333; padding-top: 15px; display: none;">
+        <div id="documentListContainer" style="margin-top: 15px; border-top: 1px solid #252b48; padding-top: 15px; display: none;">
             <h4 style="margin: 0 0 5px 0; font-size: 14px; color: #fff;">Active Documents</h4>
             <p style="font-size: 12px; color: #888; margin-top: 0; margin-bottom: 12px;">Select to focus David's memory:</p>
-            <div id="documentList" style="max-height: 140px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 5px;">
+            <div id="documentList" style="max-height: 250px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 5px;">
                 </div>
         </div>
 
@@ -98,8 +102,11 @@
 
     <div class="chat-area">
         <div class="chat-header" id="chatHeader">
-            <span>Corporate Governance AI</span>
-            <span style="font-size: 13px; font-weight: 400; color: #888; font-family: 'Inter', sans-serif;" id="loginTag"></span>
+            <span class="header-title">Corporate Governance AI</span>
+            <div class="header-actions">
+                <span style="color: #888;" id="loginTag"></span>
+                <button class="logout-btn" onclick="logoutUser()">Logout</button>
+            </div>
         </div>
         <div class="messages" id="chatMessages"></div>
         <div class="chat-input-area">
@@ -122,7 +129,6 @@
         separateDialCode: true
     });
 
-    // NEW FUNCTION: Fetch and display the user's uploaded documents as checkboxes
     async function loadUserDocuments() {
         if (!globalUserId) return;
         try {
@@ -136,15 +142,51 @@
                 
                 data.documents.forEach(doc => {
                     const shortName = doc.document_name.length > 25 ? doc.document_name.substring(0, 22) + '...' : doc.document_name;
+                    
+                    // Format the date nicely
+                    let dateStr = "Unknown Date";
+                    if (doc.uploaded_at) {
+                        const d = new Date(doc.uploaded_at);
+                        dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    }
+
                     list.innerHTML += `
-                        <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #ccc; cursor: pointer;">
-                            <input type="checkbox" class="doc-checkbox" value="${doc.id}" checked />
-                            <span title="${doc.document_name}">${shortName}</span>
-                        </label>
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 5px; padding-bottom: 5px; border-bottom: 1px solid rgba(255,255,255,0.05);">
+                            <label style="display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: #ccc; cursor: pointer; flex-grow: 1;">
+                                <input type="checkbox" class="doc-checkbox" value="${doc.id}" style="margin-top: 4px;" />
+                                <div style="display: flex; flex-direction: column;">
+                                    <span title="${doc.document_name}" style="color: white; font-weight: 500;">${shortName}</span>
+                                    <span style="font-size: 11px; color: #888;">${dateStr}</span>
+                                </div>
+                            </label>
+                            <button onclick="deleteDocument('${doc.id}')" style="background: transparent; border: none; color: #ff4c4c; cursor: pointer; font-size: 16px; padding: 0 5px;" title="Delete Document">×</button>
+                        </div>
                     `;
                 });
+            } else {
+                document.getElementById('documentListContainer').style.display = 'none';
             }
         } catch (e) { console.error("Failed to load docs", e); }
+    }
+
+    async function deleteDocument(docId) {
+        if (!confirm("Are you sure you want to permanently delete this document from your secure vault?")) return;
+        
+        try {
+            const res = await fetch(`/api/documents/${docId}`, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: globalUserId })
+            });
+            const data = await res.json();
+            if (data.success) {
+                loadUserDocuments(); 
+            } else {
+                alert("Failed to delete document.");
+            }
+        } catch (e) {
+            console.error("Delete error:", e);
+        }
     }
 
     async function sendCode() {
@@ -182,11 +224,24 @@
             document.getElementById('loginContainer').style.display = 'none';
             document.getElementById('dashboardContainer').style.display = 'flex';
             
-            // Fetch documents right after logging in
             loadUserDocuments();
             
+            document.getElementById('chatMessages').innerHTML = ""; // Clear old chat on login
             addMessageToUI(`Welcome back, ${firstName}. I have securely loaded your profile and document history. How can I assist you with board governance today?`, 'bot');
         } else { alert(data.error); btn.innerText = "Login to Portal"; }
+    }
+
+    function logoutUser() {
+        globalUserId = "";
+        userPhone = "";
+        document.getElementById('dashboardContainer').style.display = 'none';
+        document.getElementById('loginContainer').style.display = 'block';
+        document.getElementById('step2').style.display = 'none';
+        document.getElementById('step1').style.display = 'block';
+        document.getElementById('codeInput').value = "";
+        document.getElementById('uploadStatus').innerText = "";
+        document.querySelector('#step1 .btn').innerText = "Send Secure Code";
+        document.querySelector('#step2 .btn').innerText = "Login to Portal";
     }
 
     function handleEnter(e) { if (e.key === 'Enter') sendMessage(); }
@@ -199,7 +254,6 @@
         addMessageToUI(message, 'user');
         inputField.value = "";
 
-        // NEW: Grab all checked boxes
         const checkedBoxes = document.querySelectorAll('.doc-checkbox:checked');
         const selectedDocIds = Array.from(checkedBoxes).map(cb => cb.value);
 
@@ -207,11 +261,7 @@
             const res = await fetch('/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    userId: globalUserId, 
-                    message: message,
-                    selectedDocIds: selectedDocIds // Send the checked IDs to the server
-                })
+                body: JSON.stringify({ userId: globalUserId, message: message, selectedDocIds: selectedDocIds })
             });
             const data = await res.json();
             if (data.success) { addMessageToUI(data.reply, 'bot'); }
@@ -256,8 +306,325 @@
                 statusText.innerText = "✅ Saved to Secure Memory";
                 statusText.style.color = "#4CAF50"; 
                 fileInput.value = ""; 
+                loadUserDocuments();
+            } else { statusText.innerText = "❌ Error: " + data.error; statusText.style.color = "#ff4c4c"; }
+        } catch (error) {
+            statusText.innerText = "❌ Upload failed. Check connection.";
+            statusText.style.color = "#ff4c4c";
+        } finally { uploadBtn.disabled = false; uploadBtn.innerText = "Upload Document"; }
+    }
+</script>
+</body>
+</html>
+EOFcat << 'EOF' > public/index.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>David Beatty AI</title>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/intl-tel-input/17.0.8/css/intlTelInput.css" />
+
+    <style>
+        body { font-family: 'Inter', sans-serif; background: #f4f4f4; margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; height: 100vh; color: #333; }
+        h1, h2, h3, .chat-header { font-family: 'Playfair Display', serif; }
+        
+        #loginContainer { background: white; padding: 50px 40px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); width: 340px; text-align: center; }
+        .input-group { width: 100%; padding: 12px; margin: 15px 0; border: 1px solid #ddd; border-radius: 6px; font-size: 16px; box-sizing: border-box; transition: border 0.3s; }
+        .input-group:focus { border-color: #181d32; outline: none; }
+        .btn { background: #181d32; color: white; border: none; padding: 14px 20px; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: 500; width: 100%; transition: 0.3s; margin-top: 10px; }
+        .btn:hover { background: #252b48; }
+        #step2 { display: none; }
+        
+        .iti { width: 100%; text-align: left; margin: 15px 0; }
+        .iti__input { width: 100% !important; padding: 12px !important; padding-left: 50px !important; border: 1px solid #ddd; border-radius: 6px; font-size: 16px; box-sizing: border-box; }
+
+        #dashboardContainer { display: none; width: 95%; max-width: 1100px; height: 88vh; background: white; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.08); overflow: hidden; flex-direction: row; }
+        
+        .sidebar { width: 30%; background: #181d32; color: white; padding: 30px; display: flex; flex-direction: column; border-right: 1px solid #eee; }
+        .sidebar h3 { margin-top: 0; color: #fff; font-size: 22px; border-bottom: 1px solid #252b48; padding-bottom: 15px; margin-bottom: 20px; }
+        .upload-box { background: rgba(255,255,255,0.05); padding: 20px; border-radius: 8px; margin-top: auto; border: 1px dashed #444; }
+        .upload-box input[type="file"] { margin-bottom: 15px; width: 100%; font-size: 13px; color: #ccc; }
+        .upload-btn { background: #fff; color: #181d32; border: none; padding: 12px; border-radius: 6px; cursor: pointer; width: 100%; font-weight: 600; font-size: 14px; transition: 0.3s; }
+        .upload-btn:hover { background: #e0e0e0; }
+        #uploadStatus { font-size: 13px; margin-top: 12px; color: #aaa; text-align: center; }
+
+        #documentList::-webkit-scrollbar { width: 6px; }
+        #documentList::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); border-radius: 4px; }
+        #documentList::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+        #documentList::-webkit-scrollbar-thumb:hover { background: #555; }
+
+        .chat-area { width: 70%; display: flex; flex-direction: column; background: #ffffff; }
+        .chat-header { padding: 20px 30px; background: white; border-bottom: 1px solid #eaeaea; display: flex; align-items: center; justify-content: space-between; }
+        .header-title { font-weight: 600; font-size: 22px; color: #181d32; }
+        .header-actions { display: flex; align-items: center; gap: 15px; font-size: 13px; font-family: 'Inter', sans-serif; }
+        .logout-btn { background: transparent; border: 1px solid #ddd; padding: 6px 12px; border-radius: 4px; cursor: pointer; color: #666; transition: 0.3s; }
+        .logout-btn:hover { background: #f4f4f4; color: #181d32; }
+
+        .messages { flex-grow: 1; padding: 30px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; background: #fafafa; }
+        
+        .message-wrapper { display: flex; align-items: flex-end; gap: 12px; max-width: 80%; }
+        .wrapper-bot { align-self: flex-start; }
+        .wrapper-user { align-self: flex-end; flex-direction: row-reverse; }
+        
+        .avatar { width: 38px; height: 38px; border-radius: 50%; object-fit: cover; box-shadow: 0 2px 5px rgba(0,0,0,0.1); border: 1px solid #ddd; }
+        
+        .message { padding: 14px 18px; border-radius: 12px; line-height: 1.5; font-size: 15px; }
+        .msg-user { background: #181d32; color: white; border-bottom-right-radius: 2px; }
+        .msg-bot { background: #ffffff; color: #333; border-bottom-left-radius: 2px; border: 1px solid #eaeaea; box-shadow: 0 2px 5px rgba(0,0,0,0.02); }
+        
+        .chat-input-area { padding: 25px 30px; background: white; border-top: 1px solid #eaeaea; display: flex; gap: 15px; align-items: center; }
+        .chat-input-area input { flex-grow: 1; padding: 16px 20px; border: 1px solid #ddd; border-radius: 30px; outline: none; font-size: 15px; background: #fafafa; transition: border 0.3s; }
+        .chat-input-area input:focus { border-color: #181d32; background: white; }
+        .chat-input-area button { background: #181d32; color: white; border: none; padding: 15px 30px; border-radius: 30px; cursor: pointer; font-weight: 600; font-size: 15px; transition: 0.3s; }
+        .chat-input-area button:hover { background: #252b48; }
+    </style>
+</head>
+<body>
+
+<div id="loginContainer">
+    <h2 style="color: #181d32; margin-bottom: 5px;">David Beatty AI</h2>
+    <div id="step1">
+        <p style="color: #666; font-size: 14px; margin-bottom: 25px;">Enter your phone number to access your portal.</p>
+        <input type="tel" id="phoneInput" />
+        <button class="btn" onclick="sendCode()">Send Secure Code</button>
+    </div>
+    <div id="step2">
+        <p style="color: #666; font-size: 14px; margin-bottom: 25px;">Code sent! Enter the 6-digit pin below:</p>
+        <input type="text" id="codeInput" class="input-group" placeholder="123456" />
+        <button class="btn" onclick="verifyCode()">Login to Portal</button>
+    </div>
+</div>
+
+<div id="dashboardContainer">
+    <div class="sidebar">
+        <h3>Memory Bank</h3>
+        <p style="font-size: 14px; line-height: 1.6; color: #aaa;">
+            Securely upload board packages, meeting minutes, or reports. David will read and recall them instantly for your future chats and calls.
+        </p>
+        
+        <div id="documentListContainer" style="margin-top: 15px; border-top: 1px solid #252b48; padding-top: 15px; display: none;">
+            <h4 style="margin: 0 0 5px 0; font-size: 14px; color: #fff;">Active Documents</h4>
+            <p style="font-size: 12px; color: #888; margin-top: 0; margin-bottom: 12px;">Select to focus David's memory:</p>
+            <div id="documentList" style="max-height: 250px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 5px;">
+                </div>
+        </div>
+
+        <div class="upload-box">
+            <input type="file" id="fileInput" accept=".pdf,.docx,.txt" />
+            <button class="upload-btn" onclick="uploadDocument()" id="uploadBtn">Upload Document</button>
+            <div id="uploadStatus"></div>
+        </div>
+    </div>
+
+    <div class="chat-area">
+        <div class="chat-header" id="chatHeader">
+            <span class="header-title">Corporate Governance AI</span>
+            <div class="header-actions">
+                <span style="color: #888;" id="loginTag"></span>
+                <button class="logout-btn" onclick="logoutUser()">Logout</button>
+            </div>
+        </div>
+        <div class="messages" id="chatMessages"></div>
+        <div class="chat-input-area">
+            <input type="text" id="chatInput" placeholder="Ask David a question..." onkeypress="handleEnter(event)" />
+            <button onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/intl-tel-input/17.0.8/js/intlTelInput.min.js"></script>
+<script>
+    let globalUserId = "";
+    let userPhone = "";
+    const botAvatar = "/avatar.jpg";
+
+    const phoneInputField = document.querySelector("#phoneInput");
+    const phoneInput = window.intlTelInput(phoneInputField, {
+        utilsScript: "https://cdnjs.cloudflare.com/ajax/libs/intl-tel-input/17.0.8/js/utils.js",
+        preferredCountries: ["ca", "us", "gb", "au"],
+        separateDialCode: true
+    });
+
+    async function loadUserDocuments() {
+        if (!globalUserId) return;
+        try {
+            const res = await fetch(`/api/documents?userId=${globalUserId}`);
+            const data = await res.json();
+            
+            if (data.success && data.documents.length > 0) {
+                document.getElementById('documentListContainer').style.display = 'block';
+                const list = document.getElementById('documentList');
+                list.innerHTML = ""; 
                 
-                // Refresh the document list so the new file shows up!
+                data.documents.forEach(doc => {
+                    const shortName = doc.document_name.length > 25 ? doc.document_name.substring(0, 22) + '...' : doc.document_name;
+                    
+                    // Format the date nicely
+                    let dateStr = "Unknown Date";
+                    if (doc.uploaded_at) {
+                        const d = new Date(doc.uploaded_at);
+                        dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    }
+
+                    list.innerHTML += `
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 5px; padding-bottom: 5px; border-bottom: 1px solid rgba(255,255,255,0.05);">
+                            <label style="display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: #ccc; cursor: pointer; flex-grow: 1;">
+                                <input type="checkbox" class="doc-checkbox" value="${doc.id}" style="margin-top: 4px;" />
+                                <div style="display: flex; flex-direction: column;">
+                                    <span title="${doc.document_name}" style="color: white; font-weight: 500;">${shortName}</span>
+                                    <span style="font-size: 11px; color: #888;">${dateStr}</span>
+                                </div>
+                            </label>
+                            <button onclick="deleteDocument('${doc.id}')" style="background: transparent; border: none; color: #ff4c4c; cursor: pointer; font-size: 16px; padding: 0 5px;" title="Delete Document">×</button>
+                        </div>
+                    `;
+                });
+            } else {
+                document.getElementById('documentListContainer').style.display = 'none';
+            }
+        } catch (e) { console.error("Failed to load docs", e); }
+    }
+
+    async function deleteDocument(docId) {
+        if (!confirm("Are you sure you want to permanently delete this document from your secure vault?")) return;
+        
+        try {
+            const res = await fetch(`/api/documents/${docId}`, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: globalUserId })
+            });
+            const data = await res.json();
+            if (data.success) {
+                loadUserDocuments(); 
+            } else {
+                alert("Failed to delete document.");
+            }
+        } catch (e) {
+            console.error("Delete error:", e);
+        }
+    }
+
+    async function sendCode() {
+        userPhone = phoneInput.getNumber(); 
+        if (!userPhone) { alert("Please enter a valid phone number."); return; }
+        const btn = document.querySelector('#step1 .btn');
+        btn.innerText = "Sending...";
+        const res = await fetch('/api/auth/send-code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone: userPhone })
+        });
+        const data = await res.json();
+        if(data.success) {
+            document.getElementById('step1').style.display = 'none';
+            document.getElementById('step2').style.display = 'block';
+        } else { alert(data.error); btn.innerText = "Send Secure Code"; }
+    }
+
+    async function verifyCode() {
+        const code = document.getElementById('codeInput').value;
+        const btn = document.querySelector('#step2 .btn');
+        btn.innerText = "Verifying...";
+        const res = await fetch('/api/auth/verify-code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone: userPhone, code: code })
+        });
+        const data = await res.json();
+        if(data.success) {
+            globalUserId = data.userId;
+            let firstName = "Guest";
+            if (data.name && data.name.toLowerCase() !== "null") { firstName = data.name.split(' ')[0]; }
+            document.getElementById('loginTag').innerText = `Logged in as ${firstName}`;
+            document.getElementById('loginContainer').style.display = 'none';
+            document.getElementById('dashboardContainer').style.display = 'flex';
+            
+            loadUserDocuments();
+            
+            document.getElementById('chatMessages').innerHTML = ""; // Clear old chat on login
+            addMessageToUI(`Welcome back, ${firstName}. I have securely loaded your profile and document history. How can I assist you with board governance today?`, 'bot');
+        } else { alert(data.error); btn.innerText = "Login to Portal"; }
+    }
+
+    function logoutUser() {
+        globalUserId = "";
+        userPhone = "";
+        document.getElementById('dashboardContainer').style.display = 'none';
+        document.getElementById('loginContainer').style.display = 'block';
+        document.getElementById('step2').style.display = 'none';
+        document.getElementById('step1').style.display = 'block';
+        document.getElementById('codeInput').value = "";
+        document.getElementById('uploadStatus').innerText = "";
+        document.querySelector('#step1 .btn').innerText = "Send Secure Code";
+        document.querySelector('#step2 .btn').innerText = "Login to Portal";
+    }
+
+    function handleEnter(e) { if (e.key === 'Enter') sendMessage(); }
+
+    async function sendMessage() {
+        const inputField = document.getElementById('chatInput');
+        const message = inputField.value.trim();
+        if (!message) return;
+        
+        addMessageToUI(message, 'user');
+        inputField.value = "";
+
+        const checkedBoxes = document.querySelectorAll('.doc-checkbox:checked');
+        const selectedDocIds = Array.from(checkedBoxes).map(cb => cb.value);
+
+        try {
+            const res = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: globalUserId, message: message, selectedDocIds: selectedDocIds })
+            });
+            const data = await res.json();
+            if (data.success) { addMessageToUI(data.reply, 'bot'); }
+            else { addMessageToUI("Error: Could not reach David's brain.", 'bot'); }
+        } catch (error) { addMessageToUI("Network Error: Try again.", 'bot'); }
+    }
+
+    function addMessageToUI(text, sender) {
+        const msgContainer = document.getElementById('chatMessages');
+        const wrapperDiv = document.createElement('div');
+        wrapperDiv.classList.add('message-wrapper');
+        wrapperDiv.classList.add(sender === 'bot' ? 'wrapper-bot' : 'wrapper-user');
+        const formattedText = text.replace(/\n/g, '<br>');
+        if (sender === 'bot') {
+            wrapperDiv.innerHTML = `<img src="${botAvatar}" class="avatar" alt="David AI" /><div class="message msg-bot">${formattedText}</div>`;
+        } else {
+            wrapperDiv.innerHTML = `<div class="message msg-user">${formattedText}</div>`;
+        }
+        msgContainer.appendChild(wrapperDiv);
+        msgContainer.scrollTop = msgContainer.scrollHeight;
+    }
+
+    async function uploadDocument() {
+        const fileInput = document.getElementById('fileInput');
+        const statusText = document.getElementById('uploadStatus');
+        const uploadBtn = document.getElementById('uploadBtn');
+        if (!fileInput.files.length) { statusText.innerText = "Please select a file first."; return; }
+        const file = fileInput.files[0];
+        const formData = new FormData();
+        formData.append("userId", globalUserId);
+        formData.append("document", file);
+        
+        statusText.innerText = "Analyzing document... please wait.";
+        statusText.style.color = "#ccc";
+        uploadBtn.disabled = true;
+        uploadBtn.innerText = "Uploading...";
+        
+        try {
+            const res = await fetch('/api/upload', { method: 'POST', body: formData });
+            const data = await res.json();
+            if (data.success) {
+                statusText.innerText = "✅ Saved to Secure Memory";
+                statusText.style.color = "#4CAF50"; 
+                fileInput.value = ""; 
                 loadUserDocuments();
             } else { statusText.innerText = "❌ Error: " + data.error; statusText.style.color = "#ff4c4c"; }
         } catch (error) {
