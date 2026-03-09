@@ -453,9 +453,7 @@ app.post("/twilio/sms", async (req, res) => {
       searchKnowledgeBase(body)
     ]);
 
-// 👉 NEW: Trigger Smart Profile Extractor for Voice Transcripts
-    smartProfileExtractor(userId, transcriptText, [], userRecord?.full_name).catch(e => console.error("Extractor Error:", e));
-    
+    smartProfileExtractor(userId, body, history, userDb?.full_name).catch(e => console.error("Extractor Error:", e));    
     let pitchCounts = userDb?.event_pitch_counts || {};
     
     let eventInstructions = "";
