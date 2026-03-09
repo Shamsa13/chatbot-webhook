@@ -452,6 +452,9 @@ app.post("/twilio/sms", async (req, res) => {
       supabase.from("users").select("full_name, email, event_pitch_counts").eq("id", userId).single(),
       searchKnowledgeBase(body)
     ]);
+
+// 👉 NEW: Trigger Smart Profile Extractor for Voice Transcripts
+    smartProfileExtractor(userId, transcriptText, [], userRecord?.full_name).catch(e => console.error("Extractor Error:", e));
     
     let pitchCounts = userDb?.event_pitch_counts || {};
     
@@ -628,7 +631,8 @@ const oldSummary = await getUserMemorySummary(userId);
 
     const transcriptId = data.conversation_id || body.conversation_id;
     const { data: userRecord } = await supabase.from("users").select("full_name, email, transcript_data, event_pitch_counts").eq("id", userId).single();
-    
+    // Trigger Smart Profile Extractor in the background for Voice Transcripts
+    smartProfileExtractor(userId, transcriptText, [], userRecord?.full_name).catch(e => console.error(e));
     let transcriptDataArray = userRecord?.transcript_data || [];
     if (!Array.isArray(transcriptDataArray)) transcriptDataArray = [];
     transcriptDataArray = transcriptDataArray.map(t => typeof t === 'string' ? { id: t, summary: "Older call" } : t).filter(t => t && t.id);
@@ -819,6 +823,60 @@ app.post("/api/auth/verify-code", async (req, res) => {
   }
 });
 
+// 🔥 SMART PROFILE EXTRACTOR: Silently updates names and nicknames in the background
+async function smartProfileExtractor(userId, currentText, historyMsgs, currentFullName) {
+    // 1. Decide if we need to run the scan
+    const nameKeywords = /\b(my name is|i am|i'm|im |call me|spelled|name is|change my name|nickname)\b/i;
+    const isNameMissing = !currentFullName || currentFullName.toLowerCase() === 'null';
+    const mentionedName = nameKeywords.test(currentText);
+
+    // If they already have a name AND they aren't trying to change it, skip to save processing power
+    if (!isNameMissing && !mentionedName) return; 
+
+    // 2. Format recent history so the AI has context of the conversation
+    const recentContext = historyMsgs && historyMsgs.length > 0 
+        ? historyMsgs.slice(-4).map(m => `${m.role}: ${m.content}`).join("\n") 
+        : "No recent history.";
+
+    // 3. The Strict AI Prompt
+    const prompt = `You are a highly accurate profile extraction AI.
+    Current Saved Name: "${currentFullName || 'null'}"
+
+    Recent Conversation Context:
+    ${recentContext}
+    
+    User's Latest Message: "${currentText}"
+
+    Task: Identify if the user stated their own name, corrected their name's spelling, or provided a nickname.
+    
+    CRITICAL RULES - DO NOT VIOLATE:
+    1. ONLY extract the name if it is UNDENIABLY the user referring to themselves (e.g., "Hi, I'm David", "Call me Dave", "It's spelled Davis").
+    2. DO NOT extract names of external people, book authors, companies, or subjects being discussed.
+    3. If there is no clear, definitive name for the user, return null. DO NOT guess.
+
+    Respond STRICTLY in JSON format:
+    {
+        "extracted_name": "The exact first name, full name, or nickname, or null"
+    }`;
+
+    try {
+        const resp = await openai.chat.completions.create({
+            model: OPENAI_MEMORY_MODEL, // Uses the fast/cheap mini model
+            messages: [{ role: "system", content: prompt }],
+            response_format: { type: "json_object" }
+        });
+
+        const result = JSON.parse(resp.choices[0].message.content);
+        
+        // 4. Save to Database if a valid name was found
+        if (result.extracted_name && result.extracted_name.toLowerCase() !== 'null' && result.extracted_name !== currentFullName) {
+            await supabase.from("users").update({ full_name: result.extracted_name }).eq("id", userId);
+            console.log(`👤 Smart Extractor: Safely updated user ${userId} name to: ${result.extracted_name}`);
+        }
+    } catch (e) {
+        console.error("Smart Profile Extractor Error:", e);
+    }
+}
 
 // ==========================================
 // PHASE 3: WEB CHAT & DOCUMENT UPLOAD APIs
@@ -950,6 +1008,8 @@ app.post("/api/chat", async (req, res) => {
         ]);
         
         const user = userDb.data;
+// Trigger Smart Profile Extractor in the background
+        smartProfileExtractor(userId, message, history, user.full_name).catch(e => console.error(e));
         if (!user) throw new Error("User not found");
 
         const davidContext = await searchKnowledgeBase(message);
