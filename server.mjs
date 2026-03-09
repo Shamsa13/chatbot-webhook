@@ -958,36 +958,56 @@ app.post("/api/chat", async (req, res) => {
         // DECLARED ONLY ONCE HERE!
         let privateDocContext = "";
 
-        // 4. Vector Search the Documents (Upgraded with Contextual Retrieval)
+	// 4. Vector Search the Documents (Upgraded for EXACT Document Focus)
+        let privateDocContext = "";
         try {
+            // Glue the previous question to the new one so he remembers the topic
             let searchQuery = message;
             const pastUserMsgs = history.filter(h => h.role === 'user');
-            
-            // We need at least 2 messages (the current one, and the previous one) to build context
             if (pastUserMsgs.length > 1) {
-                // Grab the SECOND TO LAST message (the previous question)
                 const lastQuestion = pastUserMsgs[pastUserMsgs.length - 2].content;
-                searchQuery = `Context: ${lastQuestion} | New Question: ${message}`;
+                searchQuery = `${lastQuestion}. ${message}`;
             }
 
             const userEmb = await openai.embeddings.create({ model: "text-embedding-3-small", input: searchQuery });
             let userChunks = [];
 
-            if (selectedDocIds.length > 0) {
+            if (selectedDocIds && selectedDocIds.length > 0) {
+                // THE FOCUS MODE FIX: If a box is checked, set threshold to -1. 
+                // This FORCES the database to pull text from the checked document no matter what!
                 const { data } = await supabase.rpc('match_selected_user_chunks', {
-                    query_embedding: userEmb.data[0].embedding, match_threshold: 0.1, match_count: 5, p_user_id: userId, p_document_ids: selectedDocIds
+                    query_embedding: userEmb.data[0].embedding, 
+                    match_threshold: -1, 
+                    match_count: 6, 
+                    p_user_id: userId, 
+                    p_document_ids: selectedDocIds
                 });
                 userChunks = data;
+                
+                privateDocContext = "CRITICAL INSTRUCTION: The user has explicitly selected specific documents to focus on. Base your answer primarily on these excerpts:\n";
             } else {
+                // UNCHECKED: Search normally across everything with a standard threshold
                 const { data } = await supabase.rpc('match_user_chunks', {
-                    query_embedding: userEmb.data[0].embedding, match_threshold: 0.1, match_count: 5, p_user_id: userId
+                    query_embedding: userEmb.data[0].embedding, 
+                    match_threshold: 0.1, 
+                    match_count: 4, 
+                    p_user_id: userId
                 });
                 userChunks = data;
+                
+                if (userChunks && userChunks.length > 0) {
+                    privateDocContext = "Relevant excerpts from the user's uploaded documents:\n";
+                }
             }
 
+            // Append the actual text to David's instructions
             if (userChunks && userChunks.length > 0) {
-                privateDocContext = "Relevant excerpts from the user's privately uploaded documents:\n";
-                userChunks.forEach(c => { privateDocContext += `\n[From Document: ${c.document_name}]\n${c.content}\n`; });
+                userChunks.forEach(c => { 
+                    privateDocContext += `\n[From Document: ${c.document_name}]\n${c.content}\n`; 
+                });
+            } else if (selectedDocIds && selectedDocIds.length > 0) {
+                // Failsafe in case the uploaded document is completely blank
+                privateDocContext += "\n(Note: The selected document appears to have no readable text. It might be an image-based PDF or empty.)\n";
             }
         } catch (e) { console.error("Chunk search failed:", e); }
 
