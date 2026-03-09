@@ -925,8 +925,7 @@ app.post("/api/upload", upload.single("document"), async (req, res) => {
   }
 });
 
-
-// 2. WEB CHAT ENDPOINT (Upgraded with History & GPT-5.4)
+// 2. WEB CHAT ENDPOINT (Upgraded with History, GPT, & Contextual Retrieval)
 app.post("/api/chat", async (req, res) => {
     try {
         const { userId, message } = req.body;
@@ -935,7 +934,7 @@ app.post("/api/chat", async (req, res) => {
         // 1. Get or Create a Conversation ID for the Web
         const conversationId = await getOrCreateConversation(userId, "web");
 
-        // 2. Save the User's new message to the database
+        // 2. Save the User's new message to the database FIRST
         await supabase.from("messages").insert({
             conversation_id: conversationId, 
             channel: "web", 
@@ -947,7 +946,7 @@ app.post("/api/chat", async (req, res) => {
         // 3. Fetch History & Profile Data
         const [userDb, history] = await Promise.all([
             supabase.from("users").select("full_name, memory_summary, phone").eq("id", userId).single(),
-            getRecentUserMessages(userId, 8) // Pulls the last 8 messages!
+            getRecentUserMessages(userId, 8) // Pulls the last 8 messages
         ]);
         
         const user = userDb.data;
@@ -955,24 +954,25 @@ app.post("/api/chat", async (req, res) => {
 
         const davidContext = await searchKnowledgeBase(message);
         const selectedDocIds = req.body.selectedDocIds || [];
+        
+        // DECLARED ONLY ONCE HERE!
         let privateDocContext = "";
 
-	// 4. Vector Search the Documents (Upgraded with Contextual Retrieval)
-        let privateDocContext = "";
+        // 4. Vector Search the Documents (Upgraded with Contextual Retrieval)
         try {
-            // THE FIX: Combine the last question with the current one so the search engine has context!
             let searchQuery = message;
             const pastUserMsgs = history.filter(h => h.role === 'user');
-            if (pastUserMsgs.length > 0) {
-                const lastQuestion = pastUserMsgs[pastUserMsgs.length - 1].content;
-                // e.g., "Context: What is the secret password | New Question: How about this document?"
+            
+            // We need at least 2 messages (the current one, and the previous one) to build context
+            if (pastUserMsgs.length > 1) {
+                // Grab the SECOND TO LAST message (the previous question)
+                const lastQuestion = pastUserMsgs[pastUserMsgs.length - 2].content;
                 searchQuery = `Context: ${lastQuestion} | New Question: ${message}`;
             }
 
             const userEmb = await openai.embeddings.create({ model: "text-embedding-3-small", input: searchQuery });
             let userChunks = [];
 
-            // NOTE: Lowered threshold to 0.1 and increased count to 5 so it's more generous when reading files
             if (selectedDocIds.length > 0) {
                 const { data } = await supabase.rpc('match_selected_user_chunks', {
                     query_embedding: userEmb.data[0].embedding, match_threshold: 0.1, match_count: 5, p_user_id: userId, p_document_ids: selectedDocIds
@@ -1003,12 +1003,12 @@ app.post("/api/chat", async (req, res) => {
         ${privateDocContext}
         Respond helpfully and conversationally to their new message. Use their uploaded documents to answer questions if relevant.`;
 
-        // 6. Call the upgraded GPT-5.4 model
+        // 6. Call the upgraded model using your Environment Variable
         const completion = await openai.chat.completions.create({
-	    model: OPENAI_MODEL,
+            model: OPENAI_MODEL, 
             messages: [
                 { role: "system", content: systemPrompt },
-                ...formattedHistory.slice(0, -1), // Inject chat history
+                ...formattedHistory.slice(0, -1), // Inject chat history, excluding the very last one to avoid duplication
                 { role: "user", content: message }
             ]
         });
