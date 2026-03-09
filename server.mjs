@@ -925,7 +925,7 @@ app.post("/api/upload", upload.single("document"), async (req, res) => {
   }
 });
 
-// 2. WEB CHAT ENDPOINT (Upgraded with History, GPT, & Contextual Retrieval)
+// 2. WEB CHAT ENDPOINT (Upgraded with History, GPT, & EXACT Document Focus)
 app.post("/api/chat", async (req, res) => {
     try {
         const { userId, message } = req.body;
@@ -955,11 +955,10 @@ app.post("/api/chat", async (req, res) => {
         const davidContext = await searchKnowledgeBase(message);
         const selectedDocIds = req.body.selectedDocIds || [];
         
-        // DECLARED ONLY ONCE HERE!
+        // DECLARED EXACTLY ONCE HERE!
         let privateDocContext = "";
 
-	// 4. Vector Search the Documents (Upgraded for EXACT Document Focus)
-        let privateDocContext = "";
+        // 4. Vector Search the Documents (Upgraded for EXACT Document Focus)
         try {
             // Glue the previous question to the new one so he remembers the topic
             let searchQuery = message;
