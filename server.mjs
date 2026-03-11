@@ -697,6 +697,7 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
     // === STEP 1: EXTRACT PHONE NUMBER ===
     // ElevenLabs sends the phone in various places depending on config
     const phoneRaw = data?.metadata?.caller_id 
+      || data?.user_id      
       || data?.caller_id
       || data?.phone_number
       || data?.from
