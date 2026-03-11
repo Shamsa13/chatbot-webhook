@@ -361,12 +361,24 @@ async function processSmsIntent(userId, userText) {
     });
     
     const result = JSON.parse(resp.choices[0].message.content);
+    console.log("🧠 Intent Extractor Decided:", result, "| Current DB Email:", user?.email);
+
     const updates = {};
     
-    if (result.full_name && result.full_name.toLowerCase() !== 'null' && !user?.full_name) updates.full_name = result.full_name;
-    if (result.email && result.email.toLowerCase() !== 'null' && !user?.email) updates.email = result.email;
+    // BULLETPROOF CHECKS: Only update if the DB is truly empty, or holds a fake "null"
+    const needsName = !user?.full_name || user.full_name.toLowerCase() === 'null' || user.full_name.trim() === '';
+    const needsEmail = !user?.email || user.email.toLowerCase() === 'null' || user.email.trim() === '';
+
+    if (result.full_name && result.full_name.toLowerCase() !== 'null' && needsName) {
+      updates.full_name = result.full_name;
+    }
+    
+    if (result.email && result.email.toLowerCase() !== 'null' && needsEmail) {
+      updates.email = result.email;
+    }
     
     if (Object.keys(updates).length > 0) {
+      console.log("💾 Updating Supabase with:", updates);
       await supabase.from("users").update(updates).eq("id", userId);
     }
 
