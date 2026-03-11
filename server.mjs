@@ -1,4 +1,5 @@
 // server.mjs
+import crypto from 'crypto';
 import "dotenv/config";
 import express from "express";
 import twilio from "twilio";
@@ -71,7 +72,12 @@ console.log("ENV CHECK", {
 });
 
 function normalizeFrom(fromRaw = "") {
-  return String(fromRaw).replace(/^whatsapp:/, "").trim();
+  let normalized = String(fromRaw).replace(/^whatsapp:/, "").trim();
+  // Always ensure phone starts with +
+  if (normalized && !normalized.startsWith("+")) {
+    normalized = "+" + normalized;
+  }
+  return normalized;
 }
 
 function twimlReply(text) {
@@ -612,52 +618,200 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
   }
 });
 
-app.post("/elevenlabs/post-call", async (req, res) => {
+function verifyElevenLabsSignature(req, res, next) {
+  const secret = process.env.ELEVENLABS_WEBHOOK_SECRET;
+  
+  // If no secret is configured, skip verification (for testing)
+  if (!secret) {
+    console.log("⚠️ No ELEVENLABS_WEBHOOK_SECRET set — skipping HMAC verification");
+    return next();
+  }
+
+  // ElevenLabs sends the signature in one of these headers
+  const signature = req.headers['x-elevenlabs-signature'] 
+    || req.headers['x-webhook-signature']
+    || req.headers['x-signature']
+    || req.headers['authorization'];
+
+  if (!signature) {
+    console.error("❌ POST-CALL: No signature header found. Headers:", JSON.stringify(req.headers));
+    // Still process it but log the warning
+    return next();
+  }
+
   try {
-    console.log("🔔 POST-CALL WEBHOOK RECEIVED. Body snippet:", JSON.stringify(req.body).substring(0, 250));
+    // ElevenLabs HMAC uses SHA-256
+    const expectedSignature = crypto
+      .createHmac('sha256', secret)
+      .update(JSON.stringify(req.body))
+      .digest('hex');
+
+    const isValid = signature === expectedSignature 
+      || signature === `sha256=${expectedSignature}`
+      || crypto.timingSafeEqual(
+          Buffer.from(signature.replace('sha256=', '')), 
+          Buffer.from(expectedSignature)
+        );
+
+    if (!isValid) {
+      console.error("❌ POST-CALL: HMAC signature mismatch!");
+      console.error("  Received:", signature);
+      console.error("  Expected:", expectedSignature);
+      // Don't reject — just log it so we can debug
+    } else {
+      console.log("✅ HMAC signature verified successfully");
+    }
+  } catch (e) {
+    console.error("⚠️ HMAC verification error:", e.message);
+  }
+  
+  next();
+}
+
+app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) => {
+  // === STEP 0: IMMEDIATE LOGGING — This MUST appear in Render logs ===
+  console.log("═══════════════════════════════════════════");
+  console.log("🔔 POST-CALL WEBHOOK HIT AT:", new Date().toISOString());
+  console.log("📋 Request Headers:", JSON.stringify({
+    'content-type': req.headers['content-type'],
+    'user-agent': req.headers['user-agent'],
+    'x-elevenlabs-signature': req.headers['x-elevenlabs-signature'] || 'none',
+    'x-webhook-signature': req.headers['x-webhook-signature'] || 'none',
+  }));
+  console.log("📦 Raw Body Type:", typeof req.body);
+  console.log("📦 Body Keys:", req.body ? Object.keys(req.body) : 'NO BODY');
+  console.log("📦 Full Body (first 500 chars):", JSON.stringify(req.body).substring(0, 500));
+  console.log("═══════════════════════════════════════════");
+
+  // === RESPOND TO ELEVENLABS IMMEDIATELY ===
+  // This prevents timeout issues — ElevenLabs won't retry if it gets a 200
+  res.status(200).json({ ok: true, received: true });
+
+  // === Now process everything asynchronously ===
+  try {
     const body = req.body || {};
-    const data = body.data || {};
-    const phoneRaw = data.metadata?.caller_id || data.user_id || body.caller_id || body.callerId || body.from || body.From || "";
+    
+    // ElevenLabs can nest data differently depending on the event type
+    const data = body.data || body;
+    
+    // === STEP 1: EXTRACT PHONE NUMBER ===
+    // ElevenLabs sends the phone in various places depending on config
+    const phoneRaw = data?.metadata?.caller_id 
+      || data?.caller_id
+      || data?.phone_number
+      || data?.from
+      || body?.caller_id 
+      || body?.callerId 
+      || body?.from 
+      || body?.From 
+      || data?.call?.from
+      || data?.conversation_initiation_metadata?.caller_id
+      || "";
+
     const phone = normalizeFrom(String(phoneRaw).trim());
+    console.log("📞 Extracted phone:", phone || "NONE FOUND");
+    
+    if (!phone) {
+      console.error("❌ POST-CALL: Could not extract phone number from webhook payload");
+      console.log("Full payload for debugging:", JSON.stringify(body, null, 2));
+      return;
+    }
+
+    // === STEP 2: EXTRACT TRANSCRIPT ===
     const transcriptText = extractElevenTranscript(body);
+    console.log("📝 Transcript length:", transcriptText?.length || 0);
+    console.log("📝 Transcript preview:", (transcriptText || "").substring(0, 200));
 
-    if (!phone || !transcriptText) return res.status(200).json({ ok: true });
+    if (!transcriptText) {
+      console.error("❌ POST-CALL: No transcript text could be extracted");
+      return;
+    }
 
+    // === STEP 3: GET/CREATE USER ===
     const userId = await getOrCreateUser(phone);
+    console.log("👤 User ID:", userId);
+
+    // Fire-and-forget vCard
     checkAndSendVCard(userId, phone).catch(e => console.error("vCard error", e));
 
-const oldSummary = await getUserMemorySummary(userId);
-    updateMemorySummary({ oldSummary, userText: `(VOICE CALL INITIATED)`, assistantText: `(VOICE CALL TRANSCRIPT SUMMARY)\n${transcriptText}`, channelLabel: "VOICE" })
-      .then(async (newSummary) => { if (newSummary) await setUserMemorySummary(userId, newSummary); })
+    // === STEP 4: UPDATE MEMORY ===
+    const oldSummary = await getUserMemorySummary(userId);
+    updateMemorySummary({ 
+      oldSummary, 
+      userText: `(VOICE CALL INITIATED)`, 
+      assistantText: `(VOICE CALL TRANSCRIPT SUMMARY)\n${transcriptText}`, 
+      channelLabel: "VOICE" 
+    })
+      .then(async (newSummary) => { 
+        if (newSummary) await setUserMemorySummary(userId, newSummary); 
+      })
       .catch(e => console.error("Memory err", e));
 
-    const transcriptId = data.conversation_id || body.conversation_id;
-    const { data: userRecord } = await supabase.from("users").select("full_name, email, transcript_data, event_pitch_counts").eq("id", userId).single();
-    // Trigger Smart Profile Extractor in the background for Voice Transcripts
-    smartProfileExtractor(userId, transcriptText, [], userRecord?.full_name).catch(e => console.error(e));
+    // === STEP 5: SAVE TRANSCRIPT ID ===
+    const transcriptId = data?.conversation_id || body?.conversation_id;
+    console.log("🆔 Transcript/Conversation ID:", transcriptId || "NONE");
+
+    const { data: userRecord } = await supabase
+      .from("users")
+      .select("full_name, email, transcript_data, event_pitch_counts")
+      .eq("id", userId)
+      .single();
+
+    // Smart Profile Extractor
+    smartProfileExtractor(userId, transcriptText, [], userRecord?.full_name)
+      .catch(e => console.error(e));
+
     let transcriptDataArray = userRecord?.transcript_data || [];
     if (!Array.isArray(transcriptDataArray)) transcriptDataArray = [];
-    transcriptDataArray = transcriptDataArray.map(t => typeof t === 'string' ? { id: t, summary: "Older call" } : t).filter(t => t && t.id);
+    transcriptDataArray = transcriptDataArray
+      .map(t => typeof t === 'string' ? { id: t, summary: "Older call" } : t)
+      .filter(t => t && t.id);
 
     if (transcriptId && !transcriptDataArray.find(t => t.id === transcriptId)) {
+      console.log("💾 Saving new transcript to user record...");
+      
       const previewText = (data?.analysis?.transcript_summary || transcriptText.substring(0, 150)).replace(/\n/g, " ") + "...";
       transcriptDataArray.push({ 
         id: transcriptId, 
         timestamp: new Date().toISOString(), 
         summary: previewText 
       });
-      await supabase.from("users").update({ transcript_data: transcriptDataArray }).eq("id", userId);
+      
+      const { error: updateErr } = await supabase
+        .from("users")
+        .update({ transcript_data: transcriptDataArray })
+        .eq("id", userId);
+      
+      if (updateErr) {
+        console.error("❌ Failed to save transcript_data:", updateErr.message);
+      } else {
+        console.log("✅ Transcript saved to user record");
+      }
 
+      // === STEP 6: TRIGGER GOOGLE APPS SCRIPT ===
       if (GOOGLE_SCRIPT_WEBHOOK_URL) {
+        console.log("🚀 Triggering Google Apps Script...");
+        console.log("   URL:", GOOGLE_SCRIPT_WEBHOOK_URL);
+        console.log("   Payload:", JSON.stringify({ action: "fetch_transcripts" }));
+        
         try {
-          fetch(GOOGLE_SCRIPT_WEBHOOK_URL, { 
+          const gsResponse = await fetch(GOOGLE_SCRIPT_WEBHOOK_URL, { 
             method: "POST", 
             headers: { "Content-Type": "application/json" }, 
             body: JSON.stringify({ action: "fetch_transcripts" }) 
-          }).catch(err => console.error("Fetch trigger failed", err));
-        } catch (err) {}
+          });
+          
+          const gsStatus = gsResponse.status;
+          const gsText = await gsResponse.text();
+          console.log(`✅ Google Script Response: Status=${gsStatus}, Body=${gsText.substring(0, 200)}`);
+        } catch (gsErr) {
+          console.error("❌ Google Script trigger FAILED:", gsErr.message);
+        }
+      } else {
+        console.log("⚠️ GOOGLE_SCRIPT_WEBHOOK_URL is not set — skipping trigger");
       }
 
+      // === STEP 7: SEND EVENT LINK (if relevant) ===
       if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
         const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
         const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
@@ -672,12 +826,11 @@ const oldSummary = await getUserMemorySummary(userId);
             Available Events: ${JSON.stringify(availableEvents.map(e => ({id: e.id, name: e.event_name, desc: e.description})))}
             
             CRITICAL MISSION: You must determine if we need to send an event link to the user.
-            
-            Rule 1 (The Promise Rule): If the Agent explicitly mentions an upcoming event, session, or promises to text/send a link, you MUST match it to the correct event and return the ID. Never break a promise made by the Agent.
-            Rule 2 (The Relevance Rule): If no explicit promise was made, but the core topic of the user's conversation is highly relevant to an available event, return the ID to suggest it.
-            
+            Rule 1 (The Promise Rule): If the Agent explicitly mentions an upcoming event, session, or promises to text/send a link, you MUST match it to the correct event and return the ID.
+            Rule 2 (The Relevance Rule): If no explicit promise was made, but the core topic is highly relevant to an available event, return the ID.
             If neither rule applies, return null.
             Respond strictly in JSON: {"event_id_to_send": "exact UUID or null"}`;
+            
             try {
               const resp = await openai.chat.completions.create({
                 model: OPENAI_MEMORY_MODEL, 
@@ -713,28 +866,72 @@ const oldSummary = await getUserMemorySummary(userId);
           }
         }
 
+      // === STEP 8: DELAYED TRANSCRIPT OFFER SMS ===
         setTimeout(async () => {
           try {
-            const { data: latestUser } = await supabase.from("users").select("full_name, email").eq("id", userId).single();
-            const hasInfo = latestUser?.email && latestUser?.full_name;
-            const textMessage = hasInfo 
-              ? `Hi ${latestUser.full_name.split(' ')[0]}! It's David AI. Would you like me to email you the transcript from our recent call? Just reply 'Yes'.`
-              : `Hi! It's David AI. Thanks for the chat. If you'd like me to email you a copy of our call transcript, just reply with your full name and email address!`;
-            await twilioClient.messages.create({ body: textMessage, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
+            console.log(`📨 Sending delayed transcript offer to ${outboundPhone}...`);
+            const { data: latestUser } = await supabase
+              .from("users")
+              .select("full_name, email")
+              .eq("id", userId)
+              .single();
+
+            // BULLETPROOF CHECKS: Ignores literal "null", "Unknown", or blank spaces
+            const isValidData = (val) => val && val.toLowerCase() !== 'null' && val.toLowerCase() !== 'unknown' && val.trim() !== '';
+            
+            const hasName = isValidData(latestUser?.full_name);
+            const hasEmail = isValidData(latestUser?.email) && latestUser?.email.includes('@');
+            
+            const firstName = hasName ? latestUser.full_name.split(' ')[0] : "";
+
+            let textMessage;
+
+            if (hasName && hasEmail) {
+              // Have everything — just ask if they want it
+              textMessage = `Hi ${firstName}! It's David AI. Would you like me to email you the transcript from our recent call? Just reply 'Yes'.`;
+            } else if (hasName && !hasEmail) {
+              // Have name but missing email
+              textMessage = `Hi ${firstName}! It's David AI. I'd love to send you the transcript from our call. What's the best email address to send it to?`;
+            } else if (!hasName && hasEmail) {
+              // Have email but missing name (rare)
+              textMessage = `Hi! It's David AI. Would you like me to email you the transcript from our recent call to ${latestUser.email}? Just reply 'Yes'.`;
+            } else {
+              // Missing both
+              textMessage = `Hi! It's David AI. Thanks for the chat. If you'd like me to email you a copy of our call transcript, just reply with your name and email address!`;
+            }
+
+            await twilioClient.messages.create({ 
+              body: textMessage, 
+              from: process.env.TWILIO_PHONE_NUMBER, 
+              to: outboundPhone 
+            });
+            
             const smsConversationId = await getOrCreateConversation(userId, "sms");
-            await supabase.from("messages").insert({ conversation_id: smsConversationId, channel: "sms", direction: "agent", text: textMessage, provider: "twilio" });
+            await supabase.from("messages").insert({ 
+              conversation_id: smsConversationId, 
+              channel: "sms", 
+              direction: "agent",
+              text: textMessage, 
+              provider: "twilio" 
+            });
+            
+            console.log("✅ Transcript offer SMS sent successfully!");
           } catch (smsErr) {
-            console.error("⚠️ Failed to send/log delayed SMS:", smsErr.message);
+            console.error("❌ Failed to send delayed SMS:", smsErr.message);
           }
         }, 120000);
+      } else {
+        console.log("⚠️ Twilio credentials not configured — skipping SMS");
       }
+    } else {
+      console.log("ℹ️ No new transcript ID to save (already exists or missing)");
     }
 
   } catch (err) {
-    console.error("ERROR post-call", err?.message);
+    console.error("❌ POST-CALL PROCESSING ERROR:", err?.message || err);
+    console.error("Stack:", err?.stack);
   }
 });
-
 // ==========================================
 // WEB AUTHENTICATION (OTP VIA TWILIO)
 // ==========================================
@@ -828,7 +1025,8 @@ app.post("/api/auth/verify-code", async (req, res) => {
 // 🔥 SMART PROFILE EXTRACTOR: Silently updates names and nicknames in the background
 async function smartProfileExtractor(userId, currentText, historyMsgs, currentFullName) {
     // 1. Decide if we need to run the scan
-    const nameKeywords = /\b(my name is|i am|i'm|im |call me|spelled|name is|change my name|nickname)\b/i;
+    // Add conversational voice triggers like "this is" and "speaking"
+const nameKeywords = /\b(my name is|i am|i'm|im |call me|spelled|name is|change my name|nickname|this is|speaking)\b/i;
     const isNameMissing = !currentFullName || currentFullName.toLowerCase() === 'null';
     const mentionedName = nameKeywords.test(currentText);
 
