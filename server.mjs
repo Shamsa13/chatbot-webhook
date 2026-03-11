@@ -329,25 +329,25 @@ async function processSmsIntent(userId, userText) {
     const prompt = `Analyze the user's latest text message: "${userText}"
     Current DB Data: Name=${user?.full_name || 'null'}, Email=${user?.email || 'null'}
     
-    Recent Chat Context:
+    Recent Chat Context (Last 3 messages):
     ${historyText}
 
     Available Transcripts (Pre-sorted list with positions):
     ${JSON.stringify(cleanTranscriptArray)}
     
-    CRITICAL SELECTION RULES:
-    1. Extract full_name and email if present.
-    2. To find the correct transcript, map the user's request to the 'position' field exactly.
-    3. Generate a 'transcript_description' for the email (e.g., "from your recent call").
+    CRITICAL TWO-STEP FULFILLMENT RULES:
+    1. If the user's text contains an email address, AND the Recent Chat Context shows they were just asking for a transcript (or the Agent just asked for their email), YOU MUST return both the extracted email AND the target transcript ID. This completes the loop.
+    2. If the user is asking for a transcript right now, and they already have a valid email in the DB Data, return the target transcript ID.
+    3. Match the exact transcript based on terms like "latest", "last", or "2 calls ago" to the positions in the Available Transcripts list.
 
     Respond STRICTLY in JSON:
     {
       "full_name": "extracted name or null",
-      "email": "extracted email or null",
+      "email": "extracted user email or null",
       "transcript_id_to_send": "exact ID, or null",
       "transcript_description": "short description, or null"
     }`;
-
+	
     const resp = await openai.chat.completions.create({
       model: OPENAI_MODEL, 
       messages: [{ role: "system", content: prompt }],
@@ -474,7 +474,10 @@ app.post("/twilio/sms", async (req, res) => {
     }
 
     const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}, Email: ${userDb?.email || 'Unknown'}. 
-    CRITICAL INSTRUCTION: If the user says 'Yes' to receiving a transcript, OR asks for a transcript, but their Email is 'Unknown', you MUST reply by telling them you need their email address to send it. Do not confirm sending until an email is provided.${eventInstructions}`;
+CRITICAL RULE FOR SENDING DOCUMENTS/TRANSCRIPTS: 
+1. If the user asks you to send something, look at their Profile Data. 
+2. If their Email is 'Unknown' or null, YOU MUST NOT confirm sending it. You must reply: "I'd be happy to send that! What is the best email address to send it to?"
+3. If their Email is a valid address, you can say "Perfect, I've triggered the system to send that to your email."`;
     
     const formattedHistoryForOpenAI = history.map(h => ({ role: h.role, content: `(${h.channel}) ${h.content}` }));
     
@@ -534,7 +537,7 @@ app.post("/twilio/sms", async (req, res) => {
       if (msgErr) console.error("Message insert error:", msgErr);
     })();
 
-    const intentKeywords = /\b(transcript|email|send|call|recent|yes|back|ago)\b/i; 
+    const intentKeywords = /(@|\b(transcript|email|send|call|recent|yes|back|ago)\b)/i; 
     if (intentKeywords.test(body)) {
       processSmsIntent(userId, body).then(pendingTask => {
         if (pendingTask) {
@@ -611,6 +614,7 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
 
 app.post("/elevenlabs/post-call", async (req, res) => {
   try {
+    console.log("🔔 POST-CALL WEBHOOK RECEIVED. Body snippet:", JSON.stringify(req.body).substring(0, 250));
     const body = req.body || {};
     const data = body.data || {};
     const phoneRaw = data.metadata?.caller_id || data.user_id || body.caller_id || body.callerId || body.from || body.From || "";
