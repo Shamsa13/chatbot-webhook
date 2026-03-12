@@ -591,8 +591,19 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
       getUserMemorySummary(userId), getRecentUserMessages(userId, 12), supabase.from("users").select("full_name, email, event_pitch_counts").eq("id", userId).single()
     ]);
     
-    const name = userRecord?.full_name ? userRecord.full_name.split(' ')[0] : "there";
-    const greeting = memorySummary ? `Welcome back, ${name}. Shall we continue where we left off?` : "Hi! I'm David AI. How can I help you with your board decisions today?";
+    // === DYNAMIC GREETING LOGIC ===
+    const hasName = userRecord?.full_name && userRecord.full_name.toLowerCase() !== 'null' && userRecord.full_name.trim() !== '';
+    const name = hasName ? userRecord.full_name.split(' ')[0] : "";
+    
+    let greeting;
+    if (hasName && memorySummary) {
+      greeting = `Welcome back, ${name}. Shall we continue where we left off?`;
+    } else if (hasName && !memorySummary) {
+      greeting = `Hi ${name}! I'm David AI. How can I help you with your board decisions today?`;
+    } else {
+      // BRAND NEW USER - Ask for their name!
+      greeting = "Hi! I'm David AI. Before we dive into your board decisions, what can I call you?";
+    }
 
     const userPitchCounts = userRecord?.event_pitch_counts || {};
     let voiceEventContext = "No upcoming events.";
@@ -1382,6 +1393,46 @@ app.delete("/api/documents/:id", async (req, res) => {
         console.error("Delete Doc Error:", err);
         res.status(500).json({ error: "Failed to delete document." });
     }
+});
+
+// ==========================================
+// ADMIN DEV TOOLS
+// ==========================================
+app.post("/api/admin/send-sms", async (req, res) => {
+  try {
+    const { secret, phone, message } = req.body;
+    
+    // Security check: Use your Supabase Secret Key as your admin password
+    if (secret !== process.env.SUPABASE_SECRET_KEY) {
+      return res.status(401).json({ error: "Unauthorized admin access." });
+    }
+
+    const cleanPhone = normalizeFrom(phone);
+    const userId = await getOrCreateUser(cleanPhone);
+    const conversationId = await getOrCreateConversation(userId, "sms");
+
+    // 1. Send Twilio SMS
+    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    await twilioClient.messages.create({ 
+      body: message, 
+      from: process.env.TWILIO_PHONE_NUMBER, 
+      to: cleanPhone.startsWith("+") ? cleanPhone : "+" + cleanPhone 
+    });
+
+    // 2. Log it in the DB as the "agent" so the AI has context for their reply!
+    await supabase.from("messages").insert({
+      conversation_id: conversationId, 
+      channel: "sms", 
+      direction: "agent",
+      text: message, 
+      provider: "twilio_admin" // Tagged as admin so you know you sent it
+    });
+
+    res.json({ success: true, message: `Admin SMS sent to ${cleanPhone} and logged in DB!` });
+  } catch (err) {
+    console.error("Admin SMS Error:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.listen(PORT, () => console.log(`Server live on ${PORT}`));
