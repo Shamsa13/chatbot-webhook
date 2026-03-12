@@ -340,13 +340,13 @@ async function processSmsIntent(userId, userText) {
     Recent Chat Context (Last 3 messages):
     ${historyText}
 
-    Available Transcripts (Pre-sorted list with positions):
+    Available Transcripts (Pre-sorted list):
     ${JSON.stringify(cleanTranscriptArray)}
     
-    CRITICAL TWO-STEP FULFILLMENT RULES:
-    1. If the user's text contains an email address, AND the Recent Chat Context shows they were just asking for a transcript (or the Agent just asked for their email), YOU MUST return both the extracted email AND the target transcript ID. This completes the loop.
-    2. If the user is asking for a transcript right now, and they already have a valid email in the DB Data, return the target transcript ID.
-    3. Match the exact transcript based on terms like "latest", "last", or "2 calls ago" to the positions in the Available Transcripts list.
+    CRITICAL RULES FOR EXTRACTION:
+    1. PROFILE UPDATES: If the user provides an email address or a name, you MUST extract them into "email" and "full_name".
+    2. THE TRANSCRIPT TRIGGER (STRICT): You must ONLY return a "transcript_id_to_send" if the user is EXPLICITLY requesting a transcript right now, OR if they are providing their email in direct response to the Agent offering to send a transcript right now.
+    3. THE "FUTURE" RULE: If the user is merely updating their email address for future use (e.g., "use this email from now on", "update my email to"), extract the email but YOU MUST SET "transcript_id_to_send" to null. Do not send a transcript unless actively requested.
 
     Respond STRICTLY in JSON:
     {
@@ -367,23 +367,26 @@ async function processSmsIntent(userId, userText) {
 
     const updates = {};
     
-    // BULLETPROOF CHECKS: Only update if the DB is truly empty, or holds a fake "null"
-    const needsName = !user?.full_name || user.full_name.toLowerCase() === 'null' || user.full_name.trim() === '';
-    const needsEmail = !user?.email || user.email.toLowerCase() === 'null' || user.email.trim() === '';
-
-    if (result.full_name && result.full_name.toLowerCase() !== 'null' && needsName) {
-      updates.full_name = result.full_name;
+    // ALLOW OVERWRITES: If the AI extracted a valid name/email that is DIFFERENT from the database, update it!
+    const extractedName = result.full_name ? result.full_name.trim() : null;
+    const currentName = user?.full_name ? user.full_name.trim() : null;
+    
+    if (extractedName && extractedName.toLowerCase() !== 'null' && extractedName !== currentName) {
+      updates.full_name = extractedName;
     }
     
-    if (result.email && result.email.toLowerCase() !== 'null' && needsEmail) {
-      updates.email = result.email;
+    const extractedEmail = result.email ? result.email.trim().toLowerCase() : null;
+    const currentEmail = user?.email ? user.email.trim().toLowerCase() : null;
+
+    if (extractedEmail && extractedEmail !== 'null' && extractedEmail !== currentEmail) {
+      updates.email = extractedEmail;
     }
     
     if (Object.keys(updates).length > 0) {
       console.log("💾 Updating Supabase with:", updates);
       await supabase.from("users").update(updates).eq("id", userId);
     }
-
+   
     if (result.transcript_id_to_send && result.transcript_id_to_send !== 'null') {
       const finalEmail = updates.email || user?.email;
       if (finalEmail && finalEmail.includes('@')) {
