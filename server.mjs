@@ -607,9 +607,16 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
       }
     }
 
-// Fetch documents and append them directly to his memory summary for the call
+    // Fetch documents and append them directly to his memory summary for the call
     const userDocs = await getUserDocumentsContext(userId);
     const fullVoiceMemory = memorySummary ? (memorySummary + "\n\n" + userDocs) : userDocs || "No previous memory.";
+
+    // === NEW: DYNAMIC TRANSCRIPT PROTOCOL ===
+    const hasValidEmail = userRecord?.email && userRecord.email.toLowerCase() !== 'null' && userRecord.email.trim() !== '';
+    
+    const transcriptInstruction = hasValidEmail
+      ? "TRANSCRIPT PROTOCOL: If the user asks for a transcript or recording during this call, DO NOT promise to email it immediately. Instead, say: 'After we hang up, I will send you a quick text message to confirm if you want the transcript sent to your email.'"
+      : "TRANSCRIPT PROTOCOL: If the user asks for a transcript or recording during this call, DO NOT promise to email it immediately. Instead, say: 'After we hang up, I will send you a quick text message to get your email address so I can send the transcript over.'";
 
     return res.status(200).json({ 
       dynamic_variables: { 
@@ -620,7 +627,8 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
         first_greeting: greeting,
         user_name: userRecord?.full_name || "Unknown",
         user_email: userRecord?.email || "Unknown",
-        upcoming_events: voiceEventContext 
+        upcoming_events: voiceEventContext,
+        transcript_protocol: transcriptInstruction // <-- OUR NEW DEDICATED VARIABLE
       } 
     });
 
