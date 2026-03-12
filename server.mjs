@@ -491,12 +491,14 @@ app.post("/twilio/sms", async (req, res) => {
       4. RICH PREVIEW RULE: The registration_url MUST be the absolute LAST text in your entire message. Do not type a single word, period, or parenthesis after the URL.`;
     }
 
-    const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}, Email: ${userDb?.email || 'Unknown'}. 
-CRITICAL RULE FOR SENDING DOCUMENTS/TRANSCRIPTS: 
-1. If the user asks you to send something, look at their Profile Data. 
-2. If their Email is 'Unknown' or null, YOU MUST NOT confirm sending it. You must reply: "I'd be happy to send that! What is the best email address to send it to?"
-3. If their Email is a valid address, you can say "Perfect, I've triggered the system to send that to your email."`;
+    // === BULLETPROOF SMS TRANSCRIPT RULE ===
+    const hasValidSmsEmail = userDb?.email && userDb.email.toLowerCase() !== 'null' && userDb.email.trim() !== '';
     
+    const smsTranscriptRule = hasValidSmsEmail
+      ? `CRITICAL RULE: The user already has a valid email on file (${userDb.email}). If they ask for a transcript or document, confirm the action by saying: "Perfect, I've triggered the system to send that to your email."`
+      : `CRITICAL RULE: The user DOES NOT have an email on file. If they ask for a transcript or document, YOU MUST NOT confirm sending it. You MUST reply exactly like this: "I'd be happy to send that! What is the best email address to send it to?"`;
+
+    const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}.\n\n${smsTranscriptRule}`;    
     const formattedHistoryForOpenAI = history.map(h => ({ role: h.role, content: `(${h.channel}) ${h.content}` }));
     
     // Grab the uploaded documents using the DEEP DIVE Vector Search
