@@ -1065,8 +1065,7 @@ app.post("/api/auth/verify-code", async (req, res) => {
 // 🔥 SMART PROFILE EXTRACTOR: Silently updates names and nicknames in the background
 async function smartProfileExtractor(userId, currentText, historyMsgs, currentFullName) {
     // 1. Decide if we need to run the scan
-    // Add conversational voice triggers like "this is" and "speaking"
-const nameKeywords = /\b(my name is|i am|i'm|im |call me|spelled|name is|change my name|nickname|this is|speaking)\b/i;
+    const nameKeywords = /\b(my name is|i am|i'm|im |call me|spelled|name is|change my name|nickname|this is|speaking)\b/i;
     const isNameMissing = !currentFullName || currentFullName.toLowerCase() === 'null';
     const mentionedName = nameKeywords.test(currentText);
 
@@ -1078,21 +1077,23 @@ const nameKeywords = /\b(my name is|i am|i'm|im |call me|spelled|name is|change 
         ? historyMsgs.slice(-4).map(m => `${m.role}: ${m.content}`).join("\n") 
         : "No recent history.";
 
-    // 3. The Strict AI Prompt
+    // 3. The Upgraded Prompt (Now handles transcripts gracefully)
     const prompt = `You are a highly accurate profile extraction AI.
     Current Saved Name: "${currentFullName || 'null'}"
 
     Recent Conversation Context:
     ${recentContext}
     
-    User's Latest Message: "${currentText}"
+    Input Text (Might be a short text message, or a full multi-speaker call transcript):
+    "${currentText}"
 
-    Task: Identify if the user stated their own name, corrected their name's spelling, or provided a nickname.
+    Task: Identify if the user stated their own name, corrected their name's spelling, or requested a new nickname in the Input Text.
     
     CRITICAL RULES - DO NOT VIOLATE:
-    1. ONLY extract the name if it is UNDENIABLY the user referring to themselves (e.g., "Hi, I'm David", "Call me Dave", "It's spelled Davis").
-    2. DO NOT extract names of external people, book authors, companies, or subjects being discussed.
-    3. If there is no clear, definitive name for the user, return null. DO NOT guess.
+    1. ONLY extract the name if it is UNDENIABLY the user referring to themselves (e.g., "Hi, I'm David", "Call me Sunshine").
+    2. If reading a call transcript, look specifically at what the "USER" says to find the name.
+    3. DO NOT extract names of external people, the agent's name, or subjects being discussed.
+    4. If there is no clear, definitive name for the user, return null. DO NOT guess.
 
     Respond STRICTLY in JSON format:
     {
@@ -1101,17 +1102,23 @@ const nameKeywords = /\b(my name is|i am|i'm|im |call me|spelled|name is|change 
 
     try {
         const resp = await openai.chat.completions.create({
-            model: OPENAI_MEMORY_MODEL, // Uses the fast/cheap mini model
+            model: OPENAI_MEMORY_MODEL, 
             messages: [{ role: "system", content: prompt }],
             response_format: { type: "json_object" }
         });
 
         const result = JSON.parse(resp.choices[0].message.content);
         
-        // 4. Save to Database if a valid name was found
-        if (result.extracted_name && result.extracted_name.toLowerCase() !== 'null' && result.extracted_name !== currentFullName) {
-            await supabase.from("users").update({ full_name: result.extracted_name }).eq("id", userId);
-            console.log(`👤 Smart Extractor: Safely updated user ${userId} name to: ${result.extracted_name}`);
+        // NEW: Log the AI's decision to Render so we can debug if it fails!
+        console.log(`🧠 Smart Name Extractor Decided:`, result, `| Current DB Name: ${currentFullName}`);
+        
+        // 4. Safe Database Overwrite Logic
+        const extracted = result.extracted_name ? result.extracted_name.trim() : null;
+        const current = currentFullName ? currentFullName.trim() : null;
+
+        if (extracted && extracted.toLowerCase() !== 'null' && extracted !== current) {
+            await supabase.from("users").update({ full_name: extracted }).eq("id", userId);
+            console.log(`👤 Smart Extractor: Safely updated user ${userId} name to: ${extracted}`);
         }
     } catch (e) {
         console.error("Smart Profile Extractor Error:", e);
