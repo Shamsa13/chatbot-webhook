@@ -497,10 +497,11 @@ app.post("/twilio/sms", async (req, res) => {
     const hasValidSmsEmail = userDb?.email && userDb.email.toLowerCase() !== 'null' && userDb.email.trim() !== '';
     
     const smsTranscriptRule = hasValidSmsEmail
-      ? `CRITICAL RULE: The user already has a valid email on file (${userDb.email}). If they ask for a transcript or document, confirm the action by saying: "Perfect, I've triggered the system to send that to your email."`
+      ? `CRITICAL RULE: The user already has a valid email on file (${userDb.email}). If they ask for a transcript or document, confirm the action and KEEP THE CONVERSATION ALIVE by saying something like: "Perfect, I've triggered the system to send that to your email. What else is on your mind today?"`
       : `CRITICAL RULE: The user DOES NOT have an email on file. If they ask for a transcript or document, YOU MUST NOT confirm sending it. You MUST reply exactly like this: "I'd be happy to send that! What is the best email address to send it to?"`;
 
-    const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}.\n\n${smsTranscriptRule}`;    
+    const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}.\n\n${smsTranscriptRule}`;
+
     const formattedHistoryForOpenAI = history.map(h => ({ role: h.role, content: `(${h.channel}) ${h.content}` }));
     
     // Grab the uploaded documents using the DEEP DIVE Vector Search
