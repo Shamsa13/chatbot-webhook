@@ -1441,4 +1441,48 @@ app.post("/api/admin/send-sms", async (req, res) => {
   }
 });
 
+
+// GET FULL USER CONVERSATION HISTORY
+app.post("/api/admin/get-history", async (req, res) => {
+  try {
+    const { secret, phone } = req.body;
+    
+    if (secret !== process.env.SUPABASE_SECRET_KEY) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const cleanPhone = normalizeFrom(phone);
+    const userId = await getOrCreateUser(cleanPhone);
+
+    // Get all conversation IDs for this user
+    const convoIds = await getUserConversationIds(userId);
+    if (!convoIds.length) return res.json({ success: true, history: "No history found." });
+
+    // Fetch EVERY message across all channels, oldest to newest
+    const { data: messages, error } = await supabase
+      .from("messages")
+      .select("direction, text, created_at, channel")
+      .in("conversation_id", convoIds)
+      .order("created_at", { ascending: true });
+
+    if (error) throw error;
+
+    // Format it into a beautiful, readable script
+    let fullTranscript = `--- FULL HISTORY FOR ${cleanPhone} ---\n\n`;
+    
+    messages.forEach(m => {
+      const date = new Date(m.created_at).toLocaleString();
+      const speaker = m.direction === "agent" ? "🤖 DAVID" : "👤 USER";
+      const channel = String(m.channel).toUpperCase(); // "SMS", "VOICE", "WEB"
+      
+      fullTranscript += `[${date}] [${channel}] ${speaker}:\n${m.text}\n\n`;
+    });
+
+    res.json({ success: true, history: fullTranscript });
+  } catch (err) {
+    console.error("History fetch error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(PORT, () => console.log(`Server live on ${PORT}`));
