@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>David AI - Admin Control Panel</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f4f9; padding: 40px; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        h1 { margin-top: 0; font-size: 24px; color: #111; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        label { font-weight: bold; display: block; margin-top: 15px; margin-bottom: 5px; font-size: 14px; }
+        input[type="text"], input[type="password"], textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; font-family: inherit; }
+        textarea { resize: vertical; height: 100px; }
+        button { margin-top: 20px; width: 100%; background-color: #007bff; color: white; border: none; padding: 12px; font-size: 16px; font-weight: bold; border-radius: 5px; cursor: pointer; transition: 0.2s; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #aaa; cursor: not-allowed; }
+        .status { margin-top: 20px; padding: 15px; border-radius: 5px; display: none; font-weight: bold; }
+        .success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .note { font-size: 12px; color: #666; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🎛️ David AI Admin Panel</h1>
+    
+    <label>Render Server URL</label>
+    <input type="text" id="serverUrl" placeholder="https://your-app-name.onrender.com" value="">
+    
+    <label>Admin Password (Supabase Secret Key)</label>
+    <input type="password" id="secretKey" placeholder="eyJh...">
+    
+    <hr style="margin: 25px 0; border: 0; border-top: 1px solid #eee;">
+    
+    <h3>Direct Message User</h3>
+    
+    <label>User Phone Number</label>
+    <input type="text" id="targetPhone" placeholder="+16475551234">
+    <div class="note">Make sure to include the + and country code.</div>
+    
+    <label>Message to Send as David</label>
+    <textarea id="messageBody" placeholder="Hi! It's David. We had a glitch earlier—what is the best email to send your transcript to?"></textarea>
+    
+    <button id="sendBtn" onclick="sendAdminSms()">Send Message</button>
+    
+    <div id="statusBox" class="status"></div>
+</div>
+
+<script>
+    async function sendAdminSms() {
+        const serverUrl = document.getElementById('serverUrl').value.replace(/\/$/, ""); // removes trailing slash
+        const secret = document.getElementById('secretKey').value;
+        const phone = document.getElementById('targetPhone').value;
+        const message = document.getElementById('messageBody').value;
+        
+        const statusBox = document.getElementById('statusBox');
+        const sendBtn = document.getElementById('sendBtn');
+
+        // Basic validation
+        if (!serverUrl || !secret || !phone || !message) {
+            showStatus('Please fill in all fields.', false);
+            return;
+        }
+
+        sendBtn.disabled = true;
+        sendBtn.innerText = "Sending...";
+        statusBox.style.display = 'none';
+
+        try {
+            const response = await fetch(`${serverUrl}/api/admin/send-sms`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ secret, phone, message })
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                showStatus(`✅ Success: ${data.message}`, true);
+                document.getElementById('messageBody').value = ''; // clear message on success
+            } else {
+                showStatus(`❌ Error: ${data.error || 'Failed to send'}`, false);
+            }
+        } catch (err) {
+            showStatus(`❌ Connection Error: Make sure your Render server URL is correct and the server is awake.`, false);
+        } finally {
+            sendBtn.disabled = false;
+            sendBtn.innerText = "Send Message";
+        }
+    }
+
+    function showStatus(text, isSuccess) {
+        const statusBox = document.getElementById('statusBox');
+        statusBox.innerText = text;
+        statusBox.className = `status ${isSuccess ? 'success' : 'error'}`;
+        statusBox.style.display = 'block';
+    }
+</script>
+
+</body>
+</html>

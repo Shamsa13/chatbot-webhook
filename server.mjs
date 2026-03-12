@@ -1,4 +1,5 @@
 // server.mjs
+import cors from "cors";
 import crypto from 'crypto';
 import "dotenv/config";
 import express from "express";
@@ -13,6 +14,7 @@ import { extractText, getDocumentProxy } from 'unpdf';
 const upload = multer({ storage: multer.memoryStorage() });
 
 const app = express();
+app.use(cors());
 app.use(express.static('public'));
 
 app.use(express.urlencoded({ extended: false }));
