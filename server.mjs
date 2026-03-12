@@ -1064,14 +1064,16 @@ app.post("/api/auth/verify-code", async (req, res) => {
 
 // 🔥 SMART PROFILE EXTRACTOR: Silently updates names and nicknames in the background
 async function smartProfileExtractor(userId, currentText, historyMsgs, currentFullName) {
-    // 1. Decide if we need to run the scan
-    const nameKeywords = /\b(my name is|i am|i'm|im |call me|spelled|name is|change my name|nickname|this is|speaking)\b/i;
+       // 1. Decide if we need to run the scan (Now includes ElevenLabs summary phrases!)
+    const nameKeywords = /\b(my name is|i am|i'm|im |call me|spelled|name is|change my name|nickname|this is|speaking|addressed as|preferred name|called)\b/i;
     const isNameMissing = !currentFullName || currentFullName.toLowerCase() === 'null';
     const mentionedName = nameKeywords.test(currentText);
 
     // If they already have a name AND they aren't trying to change it, skip to save processing power
-    if (!isNameMissing && !mentionedName) return; 
-
+    if (!isNameMissing && !mentionedName) {
+        console.log(`💤 Smart Extractor skipped. No name triggers found in text.`);
+        return; 
+    }
     // 2. Format recent history so the AI has context of the conversation
     const recentContext = historyMsgs && historyMsgs.length > 0 
         ? historyMsgs.slice(-4).map(m => `${m.role}: ${m.content}`).join("\n") 
