@@ -1,6 +1,3 @@
-Part 1: Server Changes
-Fix 1: Replace getRecentUserMessages (channel tagging bug)
-Find and replace the existing function:
 // server.mjs
 import cors from "cors";
 import crypto from 'crypto';
