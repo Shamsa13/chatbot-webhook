@@ -1294,7 +1294,7 @@ app.post("/api/chat", async (req, res) => {
     const { userId, message, selectedDocIds } = req.body;
     let { conversationId } = req.body;
     if (!userId || !message) return res.status(400).json({ error: "Missing userId or message." });
-
+    console.log("📝 Web Chat Request:", { userId, conversationId: conversationId || "NONE", messagePreview: message.substring(0, 50) });
     // 1. Use provided conversationId or get/create one
     if (!conversationId) {
       conversationId = await getOrCreateConversation(userId, "web");
@@ -1651,6 +1651,32 @@ app.post("/api/web/conversations/new", async (req, res) => {
   } catch (err) {
     console.error("New conversation error:", err);
     res.status(500).json({ error: "Failed to create conversation." });
+  }
+});
+
+// Delete a web conversation and its messages
+app.delete("/api/web/conversations/:id", async (req, res) => {
+  try {
+    const conversationId = req.params.id;
+    const { userId } = req.body;
+    if (!conversationId || !userId) return res.status(400).json({ error: "Missing params" });
+
+    // Delete messages first (safe even with CASCADE)
+    await supabase.from("messages").delete().eq("conversation_id", conversationId);
+    
+    // Delete the conversation itself
+    const { error } = await supabase
+      .from("conversations")
+      .delete()
+      .eq("id", conversationId)
+      .eq("user_id", userId);
+
+    if (error) throw error;
+    console.log("🗑️ Deleted web conversation:", conversationId);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Delete conversation error:", err);
+    res.status(500).json({ error: "Failed to delete conversation." });
   }
 });
 
