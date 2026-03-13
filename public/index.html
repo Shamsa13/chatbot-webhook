@@ -40,8 +40,14 @@
         .chat-item-text { flex: 1; min-width: 0; }
         .chat-item-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
         .chat-item-date { font-size: 10px; color: #555; display: block; margin-top: 2px; }
-        .chat-delete-btn { opacity: 0; background: none; border: none; color: #ff4c4c; cursor: pointer; font-size: 16px; padding: 2px 6px; border-radius: 4px; transition: 0.15s; flex-shrink: 0; }
-        .chat-delete-btn:hover { background: rgba(255,0,0,0.15); }
+       .chat-item-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+        .chat-item-date { font-size: 10px; color: #555; display: block; margin-top: 2px; }
+        
+        .chat-action-btn { opacity: 0; background: none; border: none; color: #aaa; cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; transition: 0.15s; flex-shrink: 0; }
+        .chat-item:hover .chat-action-btn { opacity: 1; }
+        .chat-action-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
+        .chat-delete-btn:hover { background: rgba(255,0,0,0.15); color: #ff4c4c; }
+        .chat-actions-container { display: flex; gap: 2px; flex-shrink: 0; }
 
         .sidebar-divider { border: none; border-top: 1px solid #252b48; margin: 4px 0; }
 
@@ -271,12 +277,16 @@ async function loadConversationList(autoSelect = false) {
             const item = document.createElement('div');
             item.className = 'chat-item' + (isActive ? ' active' : '');
             item.dataset.id = c.id;
+           const safePreview = escapeHtml(c.preview);
             item.innerHTML = `
                 <div class="chat-item-text" onclick="switchChat('${c.id}')">
-                    <div class="chat-item-title">${escapeHtml(c.preview)}</div>
+                    <div class="chat-item-title">${safePreview}</div>
                     <span class="chat-item-date">${dateStr}</span>
                 </div>
-                <button class="chat-delete-btn" onclick="event.stopPropagation(); deleteChat('${c.id}')" title="Delete chat">×</button>
+                <div class="chat-actions-container">
+                    <button class="chat-action-btn" onclick="event.stopPropagation(); renameChat('${c.id}', '${safePreview.replace(/'/g, "\\'")}')" title="Rename chat">✏️</button>
+                    <button class="chat-action-btn chat-delete-btn" onclick="event.stopPropagation(); deleteChat('${c.id}')" title="Delete chat">×</button>
+                </div>
             `;
             list.appendChild(item);
         });
@@ -291,26 +301,54 @@ async function loadConversationList(autoSelect = false) {
 }
 
 // ==========================================
+// RENAME CHAT
+// ==========================================
+async function renameChat(conversationId, currentTitle) {
+    const newTitle = prompt("Enter a new name for this chat (leave blank to auto-generate):", currentTitle === 'New conversation' ? '' : currentTitle);
+    if (newTitle === null) return; // User clicked Cancel
+
+    try {
+        const res = await fetch(`/api/web/conversations/${conversationId}/title`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: globalUserId, title: newTitle })
+        });
+        const data = await res.json();
+        if (data.success) {
+            await loadConversationList(false); // Refresh sidebar to show new name
+        } else {
+            alert("Failed to rename chat.");
+        }
+    } catch (e) {
+        console.error("Rename error:", e);
+    }
+}
+
+// ==========================================
 // SWITCH BETWEEN CONVERSATIONS
 // ==========================================
+
 async function switchChat(conversationId) {
+    // 1. Prevent double loading or clicking the one we are already on
     if (isLoadingChat) return;
-    if (conversationId === currentConversationId) return;
+    if (conversationId === currentConversationId && document.getElementById('chatMessages').children.length > 0) return;
     
     isLoadingChat = true;
     currentConversationId = conversationId;
 
-    // Highlight in sidebar
+    // 2. Visual feedback: highlight active sidebar item
     document.querySelectorAll('.chat-item').forEach(el => {
         el.classList.toggle('active', el.dataset.id === conversationId);
     });
 
     const msgContainer = document.getElementById('chatMessages');
-    msgContainer.innerHTML = '<div style="text-align:center;padding:40px;color:#bbb;">Loading...</div>';
+    msgContainer.innerHTML = '<div style="text-align:center;padding:40px;color:#bbb;">Loading messages...</div>';
 
     try {
-        const res = await fetch("/api/web/messages?userId=" + globalUserId + "&conversationId=" + conversationId);
+        const res = await fetch(`/api/web/messages?userId=${globalUserId}&conversationId=${conversationId}`);
         const data = await res.json();
+        
+        // 3. Clear container ONLY after we get a response
         msgContainer.innerHTML = "";
 
         if (data.success && data.messages && data.messages.length > 0) {
@@ -323,36 +361,11 @@ async function switchChat(conversationId) {
     } catch (e) {
         console.error("Failed to load conversation:", e);
         msgContainer.innerHTML = '<div style="text-align:center;padding:40px;color:#ff4c4c;">Failed to load messages.</div>';
-    }
-    isLoadingChat = false;
-}
-
-// ==========================================
-// CREATE NEW CHAT
-// ==========================================
-async function startNewChat() {
-    try {
-        const res = await fetch('/api/web/conversations/new', {
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: globalUserId })
-        });
-        const data = await res.json();
-        if (data.success) {
-            currentConversationId = data.conversationId;
-            document.getElementById('chatMessages').innerHTML = "";
-            showEmptyState();
-            await loadConversationList(false);
-            // Highlight the new chat
-            document.querySelectorAll('.chat-item').forEach(el => {
-                el.classList.toggle('active', el.dataset.id === currentConversationId);
-            });
-        }
-    } catch (e) { 
-        console.error("Failed to create new chat:", e); 
+    } finally {
+        // 4. Always reset loading state so the user can try again
+        isLoadingChat = false;
     }
 }
-
 // ==========================================
 // DELETE CHAT
 // ==========================================

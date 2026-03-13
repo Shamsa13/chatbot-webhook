@@ -946,14 +946,13 @@ app.get("/api/web/conversations", async (req, res) => {
 
     const { data: convos, error } = await supabase
       .from("conversations")
-      .select("id, started_at, last_active_at, closed_at")
+      .select("id, started_at, last_active_at, closed_at, title") // <-- ADDED title here
       .eq("user_id", userId)
       .eq("channel_scope", "web")
       .order("last_active_at", { ascending: false })
       .limit(30);
 
     if (error) throw error;
-    console.log("📋 Found", (convos || []).length, "web conversations for user", userId);
 
     const results = [];
     for (const c of (convos || [])) {
@@ -966,13 +965,13 @@ app.get("/api/web/conversations", async (req, res) => {
         .limit(1);
 
       const rawPreview = firstMsg?.[0]?.text || "";
-      const preview = rawPreview
+      const autoPreview = rawPreview
         ? (rawPreview.length > 50 ? rawPreview.substring(0, 50) + "..." : rawPreview)
         : "New conversation";
 
       results.push({
         id: c.id,
-        preview: preview,
+        preview: c.title || autoPreview, // <-- Uses custom title if it exists, otherwise uses auto-preview
         lastActive: c.last_active_at
       });
     }
@@ -1397,6 +1396,28 @@ app.post("/api/admin/get-history", async (req, res) => {
   } catch (err) {
     console.error("History fetch error:", err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Rename a web conversation
+app.put("/api/web/conversations/:id/title", async (req, res) => {
+  try {
+    const conversationId = req.params.id;
+    const { userId, title } = req.body;
+    if (!conversationId || !userId || title === undefined) return res.status(400).json({ error: "Missing params" });
+
+    const { error } = await supabase
+      .from("conversations")
+      .update({ title: title.trim() || null }) // null resets it to auto-preview
+      .eq("id", conversationId)
+      .eq("user_id", userId);
+
+    if (error) throw error;
+    console.log("✏️ Renamed web conversation:", conversationId);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Rename conversation error:", err);
+    res.status(500).json({ error: "Failed to rename conversation." });
   }
 });
 
