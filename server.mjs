@@ -1422,9 +1422,9 @@ Respond helpfully. Use uploaded documents to answer questions if relevant. Do NO
     // 12. Return reply AND conversationId so frontend tracks it
     res.json({ success: true, reply, conversationId });
 
-  } catch (err) {
-    console.error("Chat Error:", err);
-    res.status(500).json({ error: "Failed to generate reply." });
+} catch (err) {
+    console.error("❌ Chat Error:", err.message, err.stack);
+    res.status(500).json({ error: "Failed to generate reply: " + err.message });
   }
 });
 
@@ -1608,6 +1608,8 @@ app.get("/api/web/messages", async (req, res) => {
     const { userId, conversationId } = req.query;
     if (!userId || !conversationId) return res.status(400).json({ error: "Missing params" });
 
+    console.log("📨 Loading messages for conversation:", conversationId);
+
     const { data: messages, error } = await supabase
       .from("messages")
       .select("direction, text, created_at")
@@ -1616,28 +1618,20 @@ app.get("/api/web/messages", async (req, res) => {
       .limit(200);
 
     if (error) throw error;
+    console.log("📨 Found", (messages || []).length, "messages");
     res.json({ success: true, messages: messages || [] });
   } catch (err) {
     console.error("Web messages error:", err);
     res.status(500).json({ error: "Failed to load messages." });
   }
 });
-
 // Create a new web conversation
 app.post("/api/web/conversations/new", async (req, res) => {
   try {
     const { userId } = req.body;
     if (!userId) return res.status(400).json({ error: "Missing userId" });
 
-    // Close all existing open web conversations
-    await supabase
-      .from("conversations")
-      .update({ closed_at: new Date().toISOString() })
-      .eq("user_id", userId)
-      .eq("channel_scope", "web")
-      .is("closed_at", null);
-
-    // Create fresh one
+    // Just create a new conversation — do NOT close old ones
     const nowIso = new Date().toISOString();
     const { data: newConvo, error } = await supabase
       .from("conversations")
