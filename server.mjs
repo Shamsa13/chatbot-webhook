@@ -1,3 +1,6 @@
+Part 1: Server Changes
+Fix 1: Replace getRecentUserMessages (channel tagging bug)
+Find and replace the existing function:
 // server.mjs
 import cors from "cors";
 import crypto from 'crypto';
@@ -208,9 +211,66 @@ async function getRecentUserMessages(userId, limit = 12) {
   const sorted = (data || []).slice().reverse();
   return sorted.map((m) => {
     const role = m.direction === "agent" ? "assistant" : "user";
-    const ch = (m.channel || "").toLowerCase() === "call" ? "CALL" : "SMS";
-    return { role, content: (m.text || "").trim(), channel: ch };
+    const ch = (m.channel || "sms").toUpperCase();
+    // Proper channel labels: SMS, WEB, CALL
+    const channelLabel = ch === "CALL" ? "CALL" : ch === "WEB" ? "WEB" : "SMS";
+    return { role, content: (m.text || "").trim(), channel: channelLabel };
   });
+}
+
+// WEB PROFILE EXTRACTOR: Handles both name AND email updates from web chat
+async function webProfileExtractor(userId, userText, currentName, currentEmail) {
+  const emailRegex = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}/;
+  const nameKeywords = /\b(my name is|call me|i'm|im |change my name|nickname|name to)\b/i;
+  const emailKeywords = /\b(my email|email is|email me|reach me|change.*email|update.*email|use this email|send.*to|@)\b/i;
+
+  const hasEmailInText = emailRegex.test(userText);
+  const hasNameTrigger = nameKeywords.test(userText);
+  const hasEmailTrigger = emailKeywords.test(userText);
+  const isNameMissing = !currentName || currentName.toLowerCase() === 'null';
+  const isEmailMissing = !currentEmail || currentEmail.toLowerCase() === 'null';
+
+  // Skip if nothing to extract
+  if (!hasEmailInText && !hasNameTrigger && !isNameMissing) return;
+
+  const prompt = `Extract profile updates from this user message: "${userText}"
+  Current saved name: "${currentName || 'null'}", Current saved email: "${currentEmail || 'null'}"
+  
+  RULES:
+  1. If the user provides THEIR OWN email address (e.g., "my email is x@y.com", "send it to x@y.com", "use x@y.com"), extract it into "email".
+  2. If the user asks to be called something new (e.g., "call me Dave", "my name is Sarah"), extract it into "full_name".
+  3. If the user is just mentioning someone else's name or email in discussion, return null for those fields.
+  4. Return null for any field that should NOT change.
+  
+  Respond STRICTLY in JSON: {"full_name": "name or null", "email": "email or null"}`;
+
+  try {
+    const resp = await openai.chat.completions.create({
+      model: OPENAI_MEMORY_MODEL,
+      messages: [{ role: "system", content: prompt }],
+      response_format: { type: "json_object" }
+    });
+
+    const result = JSON.parse(resp.choices[0].message.content);
+    const updates = {};
+
+    if (result.full_name && result.full_name.toLowerCase() !== 'null' && result.full_name.trim() !== currentName) {
+      updates.full_name = result.full_name.trim();
+    }
+    if (result.email && result.email.toLowerCase() !== 'null' && result.email.includes('@')) {
+      const newEmail = result.email.trim().toLowerCase();
+      if (newEmail !== (currentEmail || '').toLowerCase()) {
+        updates.email = newEmail;
+      }
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await supabase.from("users").update(updates).eq("id", userId);
+      console.log(`🌐 Web Profile Updated for ${userId}:`, updates);
+    }
+  } catch (e) {
+    console.error("Web Profile Extractor Error:", e.message);
+  }
 }
 
 function formatRecentHistoryForCall(msgs) {
@@ -1232,138 +1292,143 @@ app.post("/api/upload", upload.single("document"), async (req, res) => {
   }
 });
 
-// 2. WEB CHAT ENDPOINT (Upgraded with History, GPT, & EXACT Document Focus)
 app.post("/api/chat", async (req, res) => {
-    try {
-        const { userId, message } = req.body;
-        if (!userId || !message) return res.status(400).json({ error: "Missing userId or message." });
+  try {
+    const { userId, message, selectedDocIds } = req.body;
+    let { conversationId } = req.body;
+    if (!userId || !message) return res.status(400).json({ error: "Missing userId or message." });
 
-        // 1. Get or Create a Conversation ID for the Web
-        const conversationId = await getOrCreateConversation(userId, "web");
-
-        // 2. Save the User's new message to the database FIRST
-        await supabase.from("messages").insert({
-            conversation_id: conversationId, 
-            channel: "web", 
-            direction: "user",
-            text: message, 
-            provider: "web"
-        });
-
-        // 3. Fetch History & Profile Data
-        const [userDb, history] = await Promise.all([
-            supabase.from("users").select("full_name, memory_summary, phone").eq("id", userId).single(),
-            getRecentUserMessages(userId, 8) // Pulls the last 8 messages
-        ]);
-        
-        const user = userDb.data;
-// Trigger Smart Profile Extractor in the background
-        smartProfileExtractor(userId, message, history, user.full_name).catch(e => console.error(e));
-        if (!user) throw new Error("User not found");
-
-        const davidContext = await searchKnowledgeBase(message);
-        const selectedDocIds = req.body.selectedDocIds || [];
-        
-        // DECLARED EXACTLY ONCE HERE!
-        let privateDocContext = "";
-
-        // 4. Vector Search the Documents (Upgraded for EXACT Document Focus)
-        try {
-            // Glue the previous question to the new one so he remembers the topic
-            let searchQuery = message;
-            const pastUserMsgs = history.filter(h => h.role === 'user');
-            if (pastUserMsgs.length > 1) {
-                const lastQuestion = pastUserMsgs[pastUserMsgs.length - 2].content;
-                searchQuery = `${lastQuestion}. ${message}`;
-            }
-
-            const userEmb = await openai.embeddings.create({ model: "text-embedding-3-small", input: searchQuery });
-            let userChunks = [];
-
-            if (selectedDocIds && selectedDocIds.length > 0) {
-                // THE FOCUS MODE FIX: If a box is checked, set threshold to -1. 
-                // This FORCES the database to pull text from the checked document no matter what!
-                const { data } = await supabase.rpc('match_selected_user_chunks', {
-                    query_embedding: userEmb.data[0].embedding, 
-                    match_threshold: -1, 
-                    match_count: 6, 
-                    p_user_id: userId, 
-                    p_document_ids: selectedDocIds
-                });
-                userChunks = data;
-                
-                privateDocContext = "CRITICAL INSTRUCTION: The user has explicitly selected specific documents to focus on. Base your answer primarily on these excerpts:\n";
-            } else {
-                // UNCHECKED: Search normally across everything with a standard threshold
-                const { data } = await supabase.rpc('match_user_chunks', {
-                    query_embedding: userEmb.data[0].embedding, 
-                    match_threshold: 0.1, 
-                    match_count: 4, 
-                    p_user_id: userId
-                });
-                userChunks = data;
-                
-                if (userChunks && userChunks.length > 0) {
-                    privateDocContext = "Relevant excerpts from the user's uploaded documents:\n";
-                }
-            }
-
-            // Append the actual text to David's instructions
-            if (userChunks && userChunks.length > 0) {
-                userChunks.forEach(c => { 
-                    privateDocContext += `\n[From Document: ${c.document_name}]\n${c.content}\n`; 
-                });
-            } else if (selectedDocIds && selectedDocIds.length > 0) {
-                // Failsafe in case the uploaded document is completely blank
-                privateDocContext += "\n(Note: The selected document appears to have no readable text. It might be an image-based PDF or empty.)\n";
-            }
-        } catch (e) { console.error("Chunk search failed:", e); }
-
-        const cfg = await getBotConfig();
-        
-        // 5. Format History for OpenAI
-        const formattedHistory = history.map(h => ({ role: h.role, content: `(${h.channel}) ${h.content}` }));
-
-        const systemPrompt = `${cfg.systemPrompt}
-        You are talking to ${user.full_name || 'the user'} via a web chat interface.
-        Long term memory about this user: ${user.memory_summary || "No past memory yet."}
-        Relevant Knowledge Base Context (David's Core Writings): ${davidContext || "No relevant public writings found."}
-        ${privateDocContext}
-        Respond helpfully and conversationally to their new message. Use their uploaded documents to answer questions if relevant.`;
-
-        // 6. Call the upgraded model using your Environment Variable
-        const completion = await openai.chat.completions.create({
-            model: OPENAI_MODEL, 
-            messages: [
-                { role: "system", content: systemPrompt },
-                ...formattedHistory.slice(0, -1), // Inject chat history, excluding the very last one to avoid duplication
-                { role: "user", content: message }
-            ]
-        });
-
-        const reply = completion.choices[0].message.content;
-
-        // 7. Save David's reply to the database
-        await supabase.from("messages").insert({
-            conversation_id: conversationId, 
-            channel: "web", 
-            direction: "agent",
-            text: reply, 
-            provider: "openai"
-        });
-
-        // 8. Update Long-Term Memory
-        if (typeof updateMemorySummary === "function") {
-            updateMemorySummary({ oldSummary: user.memory_summary, userText: message, assistantText: reply, channelLabel: "WEB" })
-            .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); }).catch(e => console.error("Memory update failed:", e));
-        }
-
-        res.json({ success: true, reply: reply });
-
-    } catch (err) {
-        console.error("Chat Error:", err);
-        res.status(500).json({ error: "Failed to generate reply." });
+    // 1. Use provided conversationId or get/create one
+    if (!conversationId) {
+      conversationId = await getOrCreateConversation(userId, "web");
+    } else {
+      // Touch the timestamp
+      await supabase.from("conversations").update({ last_active_at: new Date().toISOString() }).eq("id", conversationId);
     }
+
+    // 2. Save user message
+    await supabase.from("messages").insert({
+      conversation_id: conversationId, channel: "web", direction: "user",
+      text: message, provider: "web"
+    });
+
+    // 3. Fetch THIS conversation's history (not cross-platform)
+    const { data: convoMessages } = await supabase
+      .from("messages")
+      .select("direction, text, created_at")
+      .eq("conversation_id", conversationId)
+      .order("created_at", { ascending: false })
+      .limit(20);
+
+    const webHistory = (convoMessages || []).reverse().map(m => ({
+      role: m.direction === "agent" ? "assistant" : "user",
+      content: m.text || ""
+    }));
+
+    // 4. Fetch user profile (memory_summary carries ALL cross-platform context)
+    const { data: userDb } = await supabase
+      .from("users")
+      .select("full_name, email, memory_summary, phone")
+      .eq("id", userId)
+      .single();
+
+    const user = userDb;
+    if (!user) throw new Error("User not found");
+
+    // 5. Run web profile extractor in background (handles name AND email)
+    webProfileExtractor(userId, message, user.full_name, user.email).catch(e => console.error("Web extractor:", e));
+
+    // 6. Knowledge base search
+    const davidContext = await searchKnowledgeBase(message);
+
+    // 7. User document vector search
+    let privateDocContext = "";
+    const docIds = selectedDocIds || [];
+    try {
+      let searchQuery = message;
+      const pastUserMsgs = webHistory.filter(h => h.role === 'user');
+      if (pastUserMsgs.length > 1) {
+        const lastQ = pastUserMsgs[pastUserMsgs.length - 2].content;
+        searchQuery = `${lastQ}. ${message}`;
+      }
+
+      const userEmb = await openai.embeddings.create({ model: "text-embedding-3-small", input: searchQuery });
+      let userChunks = [];
+
+      if (docIds.length > 0) {
+        const { data } = await supabase.rpc('match_selected_user_chunks', {
+          query_embedding: userEmb.data[0].embedding,
+          match_threshold: -1, match_count: 6,
+          p_user_id: userId, p_document_ids: docIds
+        });
+        userChunks = data;
+        privateDocContext = "CRITICAL: The user selected specific documents. Base your answer primarily on these:\n";
+      } else {
+        const { data } = await supabase.rpc('match_user_chunks', {
+          query_embedding: userEmb.data[0].embedding,
+          match_threshold: 0.1, match_count: 4, p_user_id: userId
+        });
+        userChunks = data;
+        if (userChunks?.length > 0) {
+          privateDocContext = "Relevant excerpts from the user's uploaded documents:\n";
+        }
+      }
+
+      if (userChunks?.length > 0) {
+        userChunks.forEach(c => { privateDocContext += `\n[From: ${c.document_name}]\n${c.content}\n`; });
+      } else if (docIds.length > 0) {
+        privateDocContext += "\n(The selected document appears to have no readable text.)\n";
+      }
+    } catch (e) { console.error("Chunk search failed:", e); }
+
+    // 8. Build system prompt
+    const cfg = await getBotConfig();
+
+    const systemPrompt = `${cfg.systemPrompt}
+
+PLATFORM: You are currently chatting with ${user.full_name || 'the user'} on the WEB chat interface.
+
+CROSS-PLATFORM MEMORY (from past SMS, calls, and web chats):
+${user.memory_summary || "No past memory yet."}
+
+USER PROFILE: Name: ${user.full_name || 'Unknown'}, Email: ${user.email || 'Unknown'}
+IMPORTANT: If the user asks to update their name or email, confirm you've noted the change. The system will update it automatically.
+
+${davidContext ? "KNOWLEDGE BASE:\n" + davidContext : ""}
+${privateDocContext}
+
+Respond helpfully. Use uploaded documents to answer questions if relevant. Do NOT reference SMS or call conversations directly — use the memory summary for context instead.`;
+
+    // 9. Call OpenAI (exclude the last message since it's the current one)
+    const completion = await openai.chat.completions.create({
+      model: OPENAI_MODEL,
+      messages: [
+        { role: "system", content: systemPrompt },
+        ...webHistory.slice(0, -1),
+        { role: "user", content: message }
+      ]
+    });
+
+    const reply = completion.choices[0].message.content;
+
+    // 10. Save reply
+    await supabase.from("messages").insert({
+      conversation_id: conversationId, channel: "web", direction: "agent",
+      text: reply, provider: "openai"
+    });
+
+    // 11. Update memory
+    updateMemorySummary({ oldSummary: user.memory_summary, userText: message, assistantText: reply, channelLabel: "WEB" })
+      .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
+      .catch(e => console.error("Memory update failed:", e));
+
+    // 12. Return reply AND conversationId so frontend tracks it
+    res.json({ success: true, reply, conversationId });
+
+  } catch (err) {
+    console.error("Chat Error:", err);
+    res.status(500).json({ error: "Failed to generate reply." });
+  }
 });
 
 // 1.5 GET USER DOCUMENTS ENDPOINT (Now includes timestamp)
@@ -1491,6 +1556,104 @@ app.post("/api/admin/get-history", async (req, res) => {
   } catch (err) {
     console.error("History fetch error:", err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// WEB CONVERSATION MANAGEMENT
+// ==========================================
+
+// List all web conversations for sidebar
+app.get("/api/web/conversations", async (req, res) => {
+  try {
+    const userId = req.query.userId;
+    if (!userId) return res.status(400).json({ error: "Missing userId" });
+
+    const { data: convos, error } = await supabase
+      .from("conversations")
+      .select("id, started_at, last_active_at, closed_at")
+      .eq("user_id", userId)
+      .eq("channel_scope", "web")
+      .order("last_active_at", { ascending: false })
+      .limit(30);
+
+    if (error) throw error;
+
+    const results = [];
+    for (const c of (convos || [])) {
+      const { data: firstMsg } = await supabase
+        .from("messages")
+        .select("text")
+        .eq("conversation_id", c.id)
+        .eq("direction", "user")
+        .order("created_at", { ascending: true })
+        .limit(1);
+
+      const preview = firstMsg?.[0]?.text?.substring(0, 60) || "New conversation";
+      results.push({
+        id: c.id,
+        preview: preview + (preview.length >= 60 ? "..." : ""),
+        lastActive: c.last_active_at,
+        isClosed: !!c.closed_at
+      });
+    }
+
+    res.json({ success: true, conversations: results });
+  } catch (err) {
+    console.error("Web conversations error:", err);
+    res.status(500).json({ error: "Failed to load conversations." });
+  }
+});
+
+// Get messages for a specific conversation
+app.get("/api/web/messages", async (req, res) => {
+  try {
+    const { userId, conversationId } = req.query;
+    if (!userId || !conversationId) return res.status(400).json({ error: "Missing params" });
+
+    const { data: messages, error } = await supabase
+      .from("messages")
+      .select("direction, text, created_at")
+      .eq("conversation_id", conversationId)
+      .order("created_at", { ascending: true })
+      .limit(200);
+
+    if (error) throw error;
+    res.json({ success: true, messages: messages || [] });
+  } catch (err) {
+    console.error("Web messages error:", err);
+    res.status(500).json({ error: "Failed to load messages." });
+  }
+});
+
+// Create a new web conversation
+app.post("/api/web/conversations/new", async (req, res) => {
+  try {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: "Missing userId" });
+
+    // Close all existing open web conversations
+    await supabase
+      .from("conversations")
+      .update({ closed_at: new Date().toISOString() })
+      .eq("user_id", userId)
+      .eq("channel_scope", "web")
+      .is("closed_at", null);
+
+    // Create fresh one
+    const nowIso = new Date().toISOString();
+    const { data: newConvo, error } = await supabase
+      .from("conversations")
+      .insert({ user_id: userId, started_at: nowIso, last_active_at: nowIso, channel_scope: "web" })
+      .select("id")
+      .single();
+
+    if (error) throw error;
+    console.log("🆕 New web conversation created:", newConvo.id);
+    res.json({ success: true, conversationId: newConvo.id });
+  } catch (err) {
+    console.error("New conversation error:", err);
+    res.status(500).json({ error: "Failed to create conversation." });
   }
 });
 
