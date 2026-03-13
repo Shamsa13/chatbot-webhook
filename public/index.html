@@ -4,67 +4,101 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>David Beatty AI</title>
-    
-    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/intl-tel-input/17.0.8/css/intlTelInput.css" />
-
     <style>
+        * { box-sizing: border-box; }
         body { font-family: 'Inter', sans-serif; background: #f4f4f4; margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; height: 100vh; color: #333; }
         h1, h2, h3, .chat-header { font-family: 'Playfair Display', serif; }
-        
+
+        /* LOGIN */
         #loginContainer { background: white; padding: 50px 40px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); width: 340px; text-align: center; }
         .input-group { width: 100%; padding: 12px; margin: 15px 0; border: 1px solid #ddd; border-radius: 6px; font-size: 16px; box-sizing: border-box; transition: border 0.3s; }
         .input-group:focus { border-color: #181d32; outline: none; }
         .btn { background: #181d32; color: white; border: none; padding: 14px 20px; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: 500; width: 100%; transition: 0.3s; margin-top: 10px; }
         .btn:hover { background: #252b48; }
         #step2 { display: none; }
-        
         .iti { width: 100%; text-align: left; margin: 15px 0; }
         .iti__input { width: 100% !important; padding: 12px !important; padding-left: 50px !important; border: 1px solid #ddd; border-radius: 6px; font-size: 16px; box-sizing: border-box; }
 
-        #dashboardContainer { display: none; width: 95%; max-width: 1100px; height: 88vh; background: white; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.08); overflow: hidden; flex-direction: row; }
-        
-        .sidebar { width: 30%; background: #181d32; color: white; padding: 30px; display: flex; flex-direction: column; border-right: 1px solid #eee; }
-        .sidebar h3 { margin-top: 0; color: #fff; font-size: 22px; border-bottom: 1px solid #252b48; padding-bottom: 15px; margin-bottom: 20px; }
-        .upload-box { background: rgba(255,255,255,0.05); padding: 20px; border-radius: 8px; margin-top: auto; border: 1px dashed #444; }
-        .upload-box input[type="file"] { margin-bottom: 15px; width: 100%; font-size: 13px; color: #ccc; }
-        .upload-btn { background: #fff; color: #181d32; border: none; padding: 12px; border-radius: 6px; cursor: pointer; width: 100%; font-weight: 600; font-size: 14px; transition: 0.3s; }
+        /* DASHBOARD */
+        #dashboardContainer { display: none; width: 95%; max-width: 1200px; height: 90vh; background: white; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.08); overflow: hidden; flex-direction: row; }
+
+        /* SIDEBAR */
+        .sidebar { width: 280px; min-width: 280px; background: #181d32; color: white; display: flex; flex-direction: column; overflow: hidden; }
+        .sidebar-section { padding: 20px; }
+        .sidebar-section-title { font-family: 'Playfair Display', serif; font-size: 18px; color: #fff; margin: 0 0 6px 0; }
+        .sidebar-subtitle { font-size: 12px; color: #888; margin: 0 0 12px 0; }
+
+        /* NEW CHAT BUTTON */
+        .new-chat-btn { 
+            background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.15); 
+            padding: 12px 16px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500; 
+            width: 100%; text-align: left; transition: 0.2s; display: flex; align-items: center; gap: 8px;
+        }
+        .new-chat-btn:hover { background: rgba(255,255,255,0.15); }
+
+        /* CHAT HISTORY LIST */
+        .chat-list { flex: 1; overflow-y: auto; padding: 0 12px 12px 12px; }
+        .chat-list::-webkit-scrollbar { width: 5px; }
+        .chat-list::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+        .chat-item { 
+            padding: 10px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; color: #bbb; 
+            transition: 0.2s; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .chat-item:hover { background: rgba(255,255,255,0.08); color: #fff; }
+        .chat-item.active { background: rgba(184,147,116,0.2); color: #fff; border-left: 3px solid #b89374; }
+        .chat-item-date { font-size: 10px; color: #666; display: block; margin-top: 2px; }
+
+        /* DIVIDER */
+        .sidebar-divider { border: none; border-top: 1px solid #252b48; margin: 0; }
+
+        /* DOCUMENTS SECTION */
+        .docs-section { padding: 15px 20px; overflow-y: auto; max-height: 280px; }
+        .docs-section::-webkit-scrollbar { width: 5px; }
+        .docs-section::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+
+        /* UPLOAD BOX */
+        .upload-box { padding: 15px 20px; border-top: 1px solid #252b48; margin-top: auto; }
+        .upload-box input[type="file"] { margin-bottom: 10px; width: 100%; font-size: 12px; color: #ccc; }
+        .upload-btn { background: #fff; color: #181d32; border: none; padding: 10px; border-radius: 6px; cursor: pointer; width: 100%; font-weight: 600; font-size: 13px; transition: 0.3s; }
         .upload-btn:hover { background: #e0e0e0; }
-        #uploadStatus { font-size: 13px; margin-top: 12px; color: #aaa; text-align: center; }
+        #uploadStatus { font-size: 12px; margin-top: 8px; color: #aaa; text-align: center; }
 
-        #documentList::-webkit-scrollbar { width: 6px; }
-        #documentList::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); border-radius: 4px; }
-        #documentList::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
-        #documentList::-webkit-scrollbar-thumb:hover { background: #555; }
-
-        .chat-area { width: 70%; display: flex; flex-direction: column; background: #ffffff; }
-        .chat-header { padding: 20px 30px; background: white; border-bottom: 1px solid #eaeaea; display: flex; align-items: center; justify-content: space-between; }
+        /* CHAT AREA */
+        .chat-area { flex: 1; display: flex; flex-direction: column; background: #ffffff; }
+        .chat-header { padding: 18px 30px; background: white; border-bottom: 1px solid #eaeaea; display: flex; align-items: center; justify-content: space-between; }
         .header-title { font-weight: 600; font-size: 22px; color: #181d32; }
         .header-actions { display: flex; align-items: center; gap: 15px; font-size: 13px; font-family: 'Inter', sans-serif; }
-        .logout-btn { background: transparent; border: 1px solid #ddd; padding: 6px 12px; border-radius: 4px; cursor: pointer; color: #666; transition: 0.3s; }
+        .logout-btn { background: transparent; border: 1px solid #ddd; padding: 6px 12px; border-radius: 4px; cursor: pointer; color: #666; transition: 0.3s; font-size: 13px; }
         .logout-btn:hover { background: #f4f4f4; color: #181d32; }
 
+        /* MESSAGES */
         .messages { flex-grow: 1; padding: 30px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; background: #fafafa; }
-        
         .message-wrapper { display: flex; align-items: flex-end; gap: 12px; max-width: 80%; }
         .wrapper-bot { align-self: flex-start; }
         .wrapper-user { align-self: flex-end; flex-direction: row-reverse; }
-        
         .avatar { width: 38px; height: 38px; border-radius: 50%; object-fit: cover; box-shadow: 0 2px 5px rgba(0,0,0,0.1); border: 1px solid #ddd; }
-        
-        .message { padding: 14px 18px; border-radius: 12px; line-height: 1.5; font-size: 15px; }
+        .message { padding: 14px 18px; border-radius: 12px; line-height: 1.6; font-size: 15px; }
         .msg-user { background: #181d32; color: white; border-bottom-right-radius: 2px; }
         .msg-bot { background: #ffffff; color: #333; border-bottom-left-radius: 2px; border: 1px solid #eaeaea; box-shadow: 0 2px 5px rgba(0,0,0,0.02); }
-        
-        .chat-input-area { padding: 25px 30px; background: white; border-top: 1px solid #eaeaea; display: flex; gap: 15px; align-items: center; }
-        .chat-input-area input { flex-grow: 1; padding: 16px 20px; border: 1px solid #ddd; border-radius: 30px; outline: none; font-size: 15px; background: #fafafa; transition: border 0.3s; }
+
+        /* EMPTY STATE */
+        .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; color: #bbb; text-align: center; padding: 40px; }
+        .empty-state h3 { font-family: 'Playfair Display', serif; color: #999; font-size: 20px; margin-bottom: 8px; }
+        .empty-state p { font-size: 14px; max-width: 400px; line-height: 1.6; }
+
+        /* INPUT */
+        .chat-input-area { padding: 20px 30px; background: white; border-top: 1px solid #eaeaea; display: flex; gap: 12px; align-items: center; }
+        .chat-input-area input { flex-grow: 1; padding: 14px 20px; border: 1px solid #ddd; border-radius: 30px; outline: none; font-size: 15px; background: #fafafa; transition: border 0.3s; }
         .chat-input-area input:focus { border-color: #181d32; background: white; }
-        .chat-input-area button { background: #181d32; color: white; border: none; padding: 15px 30px; border-radius: 30px; cursor: pointer; font-weight: 600; font-size: 15px; transition: 0.3s; }
+        .chat-input-area button { background: #181d32; color: white; border: none; padding: 14px 28px; border-radius: 30px; cursor: pointer; font-weight: 600; font-size: 14px; transition: 0.3s; white-space: nowrap; }
         .chat-input-area button:hover { background: #252b48; }
     </style>
 </head>
 <body>
 
+<!-- LOGIN -->
 <div id="loginContainer">
     <h2 style="color: #181d32; margin-bottom: 5px;">David Beatty AI</h2>
     <div id="step1">
@@ -79,20 +113,36 @@
     </div>
 </div>
 
+<!-- DASHBOARD -->
 <div id="dashboardContainer">
+    <!-- SIDEBAR -->
     <div class="sidebar">
-        <h3>Memory Bank</h3>
-        <p style="font-size: 14px; line-height: 1.6; color: #aaa;">
-            Securely upload board packages, meeting minutes, or reports. David will read and recall them instantly for your future chats and calls.
-        </p>
-        
-        <div id="documentListContainer" style="margin-top: 15px; border-top: 1px solid #252b48; padding-top: 15px; display: none;">
-            <h4 style="margin: 0 0 5px 0; font-size: 14px; color: #fff;">Active Documents</h4>
-            <p style="font-size: 12px; color: #888; margin-top: 0; margin-bottom: 12px;">Select to focus David's memory:</p>
-            <div id="documentList" style="max-height: 250px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 5px;">
-                </div>
+        <div class="sidebar-section" style="padding-bottom: 12px;">
+            <h3 class="sidebar-section-title" style="font-size: 20px; margin-bottom: 15px;">David AI</h3>
+            <button class="new-chat-btn" onclick="startNewChat()">
+                <span style="font-size: 18px;">+</span> New Chat
+            </button>
         </div>
 
+        <hr class="sidebar-divider" />
+
+        <!-- CHAT HISTORY -->
+        <div style="padding: 12px 20px 4px 20px;">
+            <p class="sidebar-subtitle" style="margin-bottom: 0; text-transform: uppercase; letter-spacing: 1px; font-size: 11px; color: #666;">Chat History</p>
+        </div>
+        <div class="chat-list" id="chatList">
+            <div style="padding: 15px; color: #555; font-size: 13px;">No chats yet</div>
+        </div>
+
+        <hr class="sidebar-divider" />
+
+        <!-- DOCUMENTS -->
+        <div style="padding: 12px 20px 4px 20px;">
+            <p class="sidebar-subtitle" style="margin-bottom: 0; text-transform: uppercase; letter-spacing: 1px; font-size: 11px; color: #666;">Memory Bank</p>
+        </div>
+        <div class="docs-section" id="documentList"></div>
+
+        <!-- UPLOAD -->
         <div class="upload-box">
             <input type="file" id="fileInput" accept=".pdf,.docx,.txt" />
             <button class="upload-btn" onclick="uploadDocument()" id="uploadBtn">Upload Document</button>
@@ -100,15 +150,21 @@
         </div>
     </div>
 
+    <!-- CHAT AREA -->
     <div class="chat-area">
-        <div class="chat-header" id="chatHeader">
+        <div class="chat-header">
             <span class="header-title">Corporate Governance AI</span>
             <div class="header-actions">
                 <span style="color: #888;" id="loginTag"></span>
                 <button class="logout-btn" onclick="logoutUser()">Logout</button>
             </div>
         </div>
-        <div class="messages" id="chatMessages"></div>
+        <div class="messages" id="chatMessages">
+            <div class="empty-state" id="emptyState">
+                <h3>Start a conversation</h3>
+                <p>Ask David about board governance, corporate strategy, or upload documents for analysis.</p>
+            </div>
+        </div>
         <div class="chat-input-area">
             <input type="text" id="chatInput" placeholder="Ask David a question..." onkeypress="handleEnter(event)" />
             <button onclick="sendMessage()">Send</button>
@@ -120,6 +176,8 @@
 <script>
     let globalUserId = "";
     let userPhone = "";
+    let currentConversationId = null;
+    let userName = "Guest";
     const botAvatar = "/avatar.jpg";
 
     const phoneInputField = document.querySelector("#phoneInput");
@@ -129,78 +187,20 @@
         separateDialCode: true
     });
 
-    async function loadUserDocuments() {
-        if (!globalUserId) return;
-        try {
-            const res = await fetch(`/api/documents?userId=${globalUserId}`);
-            const data = await res.json();
-            
-            if (data.success && data.documents.length > 0) {
-                document.getElementById('documentListContainer').style.display = 'block';
-                const list = document.getElementById('documentList');
-                list.innerHTML = ""; 
-                
-                data.documents.forEach(doc => {
-                    const shortName = doc.document_name.length > 25 ? doc.document_name.substring(0, 22) + '...' : doc.document_name;
-                    
-                    // Format the date nicely
-                    let dateStr = "Unknown Date";
-                    if (doc.uploaded_at) {
-                        const d = new Date(doc.uploaded_at);
-                        dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                    }
-
-                    list.innerHTML += `
-                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 5px; padding-bottom: 5px; border-bottom: 1px solid rgba(255,255,255,0.05);">
-                            <label style="display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: #ccc; cursor: pointer; flex-grow: 1;">
-                                <input type="checkbox" class="doc-checkbox" value="${doc.id}" style="margin-top: 4px;" />
-                                <div style="display: flex; flex-direction: column;">
-                                    <span title="${doc.document_name}" style="color: white; font-weight: 500;">${shortName}</span>
-                                    <span style="font-size: 11px; color: #888;">${dateStr}</span>
-                                </div>
-                            </label>
-                            <button onclick="deleteDocument('${doc.id}')" style="background: transparent; border: none; color: #ff4c4c; cursor: pointer; font-size: 16px; padding: 0 5px;" title="Delete Document">×</button>
-                        </div>
-                    `;
-                });
-            } else {
-                document.getElementById('documentListContainer').style.display = 'none';
-            }
-        } catch (e) { console.error("Failed to load docs", e); }
-    }
-
-    async function deleteDocument(docId) {
-        if (!confirm("Are you sure you want to permanently delete this document from your secure vault?")) return;
-        
-        try {
-            const res = await fetch(`/api/documents/${docId}`, {
-                method: 'DELETE',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId: globalUserId })
-            });
-            const data = await res.json();
-            if (data.success) {
-                loadUserDocuments(); 
-            } else {
-                alert("Failed to delete document.");
-            }
-        } catch (e) {
-            console.error("Delete error:", e);
-        }
-    }
-
+    // ==========================================
+    // AUTH
+    // ==========================================
     async function sendCode() {
-        userPhone = phoneInput.getNumber(); 
+        userPhone = phoneInput.getNumber();
         if (!userPhone) { alert("Please enter a valid phone number."); return; }
         const btn = document.querySelector('#step1 .btn');
         btn.innerText = "Sending...";
         const res = await fetch('/api/auth/send-code', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ phone: userPhone })
         });
         const data = await res.json();
-        if(data.success) {
+        if (data.success) {
             document.getElementById('step1').style.display = 'none';
             document.getElementById('step2').style.display = 'block';
         } else { alert(data.error); btn.innerText = "Send Secure Code"; }
@@ -211,46 +211,153 @@
         const btn = document.querySelector('#step2 .btn');
         btn.innerText = "Verifying...";
         const res = await fetch('/api/auth/verify-code', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ phone: userPhone, code: code })
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone: userPhone, code })
         });
         const data = await res.json();
-        if(data.success) {
+        if (data.success) {
             globalUserId = data.userId;
-            let firstName = "Guest";
-            if (data.name && data.name.toLowerCase() !== "null") { firstName = data.name.split(' ')[0]; }
-            document.getElementById('loginTag').innerText = `Logged in as ${firstName}`;
+            userName = (data.name && data.name.toLowerCase() !== "null") ? data.name.split(' ')[0] : "Guest";
+            document.getElementById('loginTag').innerText = `Logged in as ${userName}`;
             document.getElementById('loginContainer').style.display = 'none';
             document.getElementById('dashboardContainer').style.display = 'flex';
-            
-            loadUserDocuments();
-            
-            document.getElementById('chatMessages').innerHTML = ""; // Clear old chat on login
-            addMessageToUI(`Welcome back, ${firstName}. I have securely loaded your profile and document history. How can I assist you with board governance today?`, 'bot');
+            await initDashboard();
         } else { alert(data.error); btn.innerText = "Login to Portal"; }
     }
 
     function logoutUser() {
         globalUserId = "";
         userPhone = "";
+        currentConversationId = null;
         document.getElementById('dashboardContainer').style.display = 'none';
         document.getElementById('loginContainer').style.display = 'block';
         document.getElementById('step2').style.display = 'none';
         document.getElementById('step1').style.display = 'block';
         document.getElementById('codeInput').value = "";
-        document.getElementById('uploadStatus').innerText = "";
         document.querySelector('#step1 .btn').innerText = "Send Secure Code";
         document.querySelector('#step2 .btn').innerText = "Login to Portal";
     }
 
+    // ==========================================
+    // DASHBOARD INIT
+    // ==========================================
+    async function initDashboard() {
+        await Promise.all([
+            loadConversationList(),
+            loadUserDocuments()
+        ]);
+    }
+
+    // ==========================================
+    // CONVERSATION MANAGEMENT
+    // ==========================================
+    async function loadConversationList() {
+        try {
+            const res = await fetch(`/api/web/conversations?userId=${globalUserId}`);
+            const data = await res.json();
+
+            const list = document.getElementById('chatList');
+
+            if (!data.success || !data.conversations.length) {
+                list.innerHTML = '<div style="padding: 15px; color: #555; font-size: 13px;">No chats yet. Click + New Chat!</div>';
+                // Auto-create first conversation
+                await startNewChat();
+                return;
+            }
+
+            list.innerHTML = "";
+            data.conversations.forEach((c, i) => {
+                const d = new Date(c.lastActive);
+                const dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+
+                const item = document.createElement('div');
+                item.className = 'chat-item' + (i === 0 && !currentConversationId ? ' active' : '');
+                item.dataset.id = c.id;
+                item.innerHTML = `${c.preview}<span class="chat-item-date">${dateStr}</span>`;
+                item.onclick = () => loadConversation(c.id);
+                list.appendChild(item);
+            });
+
+            // Load the most recent conversation
+            if (!currentConversationId) {
+                await loadConversation(data.conversations[0].id);
+            }
+        } catch (e) {
+            console.error("Failed to load conversations:", e);
+        }
+    }
+
+    async function loadConversation(conversationId) {
+        currentConversationId = conversationId;
+        const msgContainer = document.getElementById('chatMessages');
+        msgContainer.innerHTML = "";
+
+        // Highlight active chat in sidebar
+        document.querySelectorAll('.chat-item').forEach(el => {
+            el.classList.toggle('active', el.dataset.id === conversationId);
+        });
+
+        try {
+            const res = await fetch(`/api/web/messages?userId=${globalUserId}&conversationId=${conversationId}`);
+            const data = await res.json();
+
+            if (data.success && data.messages.length > 0) {
+                document.getElementById('emptyState')?.remove();
+                data.messages.forEach(m => {
+                    const sender = m.direction === "agent" ? "bot" : "user";
+                    addMessageToUI(m.text, sender);
+                });
+            } else {
+                // Empty conversation — show empty state
+                msgContainer.innerHTML = `
+                    <div class="empty-state" id="emptyState">
+                        <h3>New Conversation</h3>
+                        <p>Ask David about board governance, corporate strategy, or upload documents for analysis.</p>
+                    </div>`;
+            }
+        } catch (e) {
+            console.error("Failed to load messages:", e);
+        }
+    }
+
+    async function startNewChat() {
+        try {
+            const res = await fetch('/api/web/conversations/new', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: globalUserId })
+            });
+            const data = await res.json();
+            if (data.success) {
+                currentConversationId = data.conversationId;
+                document.getElementById('chatMessages').innerHTML = `
+                    <div class="empty-state" id="emptyState">
+                        <h3>New Conversation</h3>
+                        <p>Ask David about board governance, corporate strategy, or upload documents for analysis.</p>
+                    </div>`;
+                await loadConversationList();
+                // Re-highlight the new one
+                document.querySelectorAll('.chat-item').forEach(el => {
+                    el.classList.toggle('active', el.dataset.id === currentConversationId);
+                });
+            }
+        } catch (e) {
+            console.error("Failed to create new chat:", e);
+        }
+    }
+
+    // ==========================================
+    // CHAT
+    // ==========================================
     function handleEnter(e) { if (e.key === 'Enter') sendMessage(); }
 
     async function sendMessage() {
         const inputField = document.getElementById('chatInput');
         const message = inputField.value.trim();
         if (!message) return;
-        
+
+        // Remove empty state if present
+        document.getElementById('emptyState')?.remove();
+
         addMessageToUI(message, 'user');
         inputField.value = "";
 
@@ -259,21 +366,33 @@
 
         try {
             const res = await fetch('/api/chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId: globalUserId, message: message, selectedDocIds: selectedDocIds })
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    userId: globalUserId,
+                    message,
+                    conversationId: currentConversationId,
+                    selectedDocIds
+                })
             });
             const data = await res.json();
-            if (data.success) { addMessageToUI(data.reply, 'bot'); }
-            else { addMessageToUI("Error: Could not reach David's brain.", 'bot'); }
-        } catch (error) { addMessageToUI("Network Error: Try again.", 'bot'); }
+            if (data.success) {
+                addMessageToUI(data.reply, 'bot');
+                // Update conversationId if server created one
+                if (data.conversationId) currentConversationId = data.conversationId;
+                // Refresh sidebar preview
+                loadConversationList();
+            } else {
+                addMessageToUI("Error: Could not reach David's brain.", 'bot');
+            }
+        } catch (error) {
+            addMessageToUI("Network Error: Try again.", 'bot');
+        }
     }
 
     function addMessageToUI(text, sender) {
         const msgContainer = document.getElementById('chatMessages');
         const wrapperDiv = document.createElement('div');
-        wrapperDiv.classList.add('message-wrapper');
-        wrapperDiv.classList.add(sender === 'bot' ? 'wrapper-bot' : 'wrapper-user');
+        wrapperDiv.classList.add('message-wrapper', sender === 'bot' ? 'wrapper-bot' : 'wrapper-user');
         const formattedText = text.replace(/\n/g, '<br>');
         if (sender === 'bot') {
             wrapperDiv.innerHTML = `<img src="${botAvatar}" class="avatar" alt="David AI" /><div class="message msg-bot">${formattedText}</div>`;
@@ -284,34 +403,90 @@
         msgContainer.scrollTop = msgContainer.scrollHeight;
     }
 
+    // ==========================================
+    // DOCUMENTS
+    // ==========================================
+    async function loadUserDocuments() {
+        if (!globalUserId) return;
+        try {
+            const res = await fetch(`/api/documents?userId=${globalUserId}`);
+            const data = await res.json();
+            const list = document.getElementById('documentList');
+
+            if (data.success && data.documents.length > 0) {
+                list.innerHTML = "";
+                data.documents.forEach(doc => {
+                    const shortName = doc.document_name.length > 22 ? doc.document_name.substring(0, 20) + '...' : doc.document_name;
+                    let dateStr = "";
+                    if (doc.uploaded_at) {
+                        const d = new Date(doc.uploaded_at);
+                        dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+                    }
+                    list.innerHTML += `
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.05);">
+                            <label style="display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: #ccc; cursor: pointer; flex-grow: 1;">
+                                <input type="checkbox" class="doc-checkbox" value="${doc.id}" style="margin-top: 3px;" />
+                                <div>
+                                    <span title="${doc.document_name}" style="color: white; font-weight: 500; font-size: 12px;">${shortName}</span>
+                                    <span style="font-size: 10px; color: #666; display: block;">${dateStr}</span>
+                                </div>
+                            </label>
+                            <button onclick="deleteDocument('${doc.id}')" style="background: transparent; border: none; color: #ff4c4c; cursor: pointer; font-size: 14px; padding: 0 4px;" title="Delete">×</button>
+                        </div>`;
+                });
+            } else {
+                list.innerHTML = '<div style="padding: 8px 0; color: #555; font-size: 12px;">No documents uploaded yet.</div>';
+            }
+        } catch (e) { console.error("Failed to load docs", e); }
+    }
+
+    async function deleteDocument(docId) {
+        if (!confirm("Permanently delete this document?")) return;
+        try {
+            const res = await fetch(`/api/documents/${docId}`, {
+                method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: globalUserId })
+            });
+            const data = await res.json();
+            if (data.success) loadUserDocuments();
+            else alert("Failed to delete.");
+        } catch (e) { console.error("Delete error:", e); }
+    }
+
     async function uploadDocument() {
         const fileInput = document.getElementById('fileInput');
         const statusText = document.getElementById('uploadStatus');
         const uploadBtn = document.getElementById('uploadBtn');
-        if (!fileInput.files.length) { statusText.innerText = "Please select a file first."; return; }
-        const file = fileInput.files[0];
+        if (!fileInput.files.length) { statusText.innerText = "Select a file first."; return; }
+
         const formData = new FormData();
         formData.append("userId", globalUserId);
-        formData.append("document", file);
-        
-        statusText.innerText = "Analyzing document... please wait.";
+        formData.append("document", fileInput.files[0]);
+
+        statusText.innerText = "Analyzing document...";
         statusText.style.color = "#ccc";
         uploadBtn.disabled = true;
         uploadBtn.innerText = "Uploading...";
-        
+
         try {
             const res = await fetch('/api/upload', { method: 'POST', body: formData });
             const data = await res.json();
             if (data.success) {
-                statusText.innerText = "✅ Saved to Secure Memory";
-                statusText.style.color = "#4CAF50"; 
-                fileInput.value = ""; 
+                statusText.innerText = "✅ Saved to Memory";
+                statusText.style.color = "#4CAF50";
+                fileInput.value = "";
                 loadUserDocuments();
-            } else { statusText.innerText = "❌ Error: " + data.error; statusText.style.color = "#ff4c4c"; }
-        } catch (error) {
-            statusText.innerText = "❌ Upload failed. Check connection.";
+            } else {
+                statusText.innerText = "❌ " + data.error;
+                statusText.style.color = "#ff4c4c";
+            }
+        } catch (e) {
+            statusText.innerText = "❌ Upload failed.";
             statusText.style.color = "#ff4c4c";
-        } finally { uploadBtn.disabled = false; uploadBtn.innerText = "Upload Document"; }
+        } finally {
+            uploadBtn.disabled = false;
+            uploadBtn.innerText = "Upload Document";
+        }
     }
 </script>
 </body>

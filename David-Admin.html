@@ -11,13 +11,19 @@
         label { font-weight: bold; display: block; margin-top: 15px; margin-bottom: 5px; font-size: 14px; }
         input[type="text"], input[type="password"], textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; font-family: inherit; }
         textarea { resize: vertical; height: 100px; }
-        button { margin-top: 20px; width: 100%; background-color: #007bff; color: white; border: none; padding: 12px; font-size: 16px; font-weight: bold; border-radius: 5px; cursor: pointer; transition: 0.2s; }
-        button:hover { background-color: #0056b3; }
+        button { margin-top: 20px; width: 100%; color: white; border: none; padding: 12px; font-size: 16px; font-weight: bold; border-radius: 5px; cursor: pointer; transition: 0.2s; }
+        .btn-primary { background-color: #007bff; }
+        .btn-primary:hover { background-color: #0056b3; }
+        .btn-success { background-color: #28a745; margin-top: 10px; }
+        .btn-success:hover { background-color: #218838; }
+        .btn-dark { background-color: #343a40; margin-top: 10px; display: none; }
+        .btn-dark:hover { background-color: #23272b; }
         button:disabled { background-color: #aaa; cursor: not-allowed; }
         .status { margin-top: 20px; padding: 15px; border-radius: 5px; display: none; font-weight: bold; }
         .success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
         .error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
         .note { font-size: 12px; color: #666; margin-top: 5px; }
+        #historyDisplay { height: 300px; margin-top: 15px; background: #222; color: #0f0; font-family: monospace; display: none; white-space: pre-wrap;}
     </style>
 </head>
 <body>
@@ -33,61 +39,37 @@
     
     <hr style="margin: 25px 0; border: 0; border-top: 1px solid #eee;">
     
-    <h3>Direct Message User</h3>
-    
+    <h3>User Details</h3>
     <label>User Phone Number</label>
     <input type="text" id="targetPhone" placeholder="+16475551234">
-    <div class="note">Make sure to include the + and country code.</div>
+    <div class="note">Required for both sending messages and fetching history.</div>
+
+    <hr style="margin: 25px 0; border: 0; border-top: 1px solid #eee;">
     
+    <h3>1. Direct Message User</h3>
     <label>Message to Send as David</label>
-    <textarea id="messageBody" placeholder="Hi! It's David. We had a glitch earlier—what is the best email to send your transcript to?"></textarea>
+    <textarea id="messageBody" placeholder="Hi! It's David. We had a glitch earlier..."></textarea>
+    <button id="sendBtn" class="btn-primary" onclick="sendAdminSms()">Send SMS Message</button>
     
-    <button id="sendBtn" onclick="sendAdminSms()">Send Message</button>
+    <hr style="margin: 25px 0; border: 0; border-top: 1px solid #eee;">
+
+    <h3>2. View User History</h3>
+    <button id="historyBtn" class="btn-success" onclick="fetchHistory()">Fetch Full Chat History</button>
+    <textarea id="historyDisplay" readonly></textarea>
     
+    <button id="downloadBtn" class="btn-dark" onclick="downloadHistory()">📥 Download as File</button>
+
     <div id="statusBox" class="status"></div>
 </div>
 
 <script>
-    async function sendAdminSms() {
-        const serverUrl = document.getElementById('serverUrl').value.replace(/\/$/, ""); // removes trailing slash
-        const secret = document.getElementById('secretKey').value;
-        const phone = document.getElementById('targetPhone').value;
-        const message = document.getElementById('messageBody').value;
-        
-        const statusBox = document.getElementById('statusBox');
-        const sendBtn = document.getElementById('sendBtn');
-
-        // Basic validation
-        if (!serverUrl || !secret || !phone || !message) {
-            showStatus('Please fill in all fields.', false);
-            return;
-        }
-
-        sendBtn.disabled = true;
-        sendBtn.innerText = "Sending...";
-        statusBox.style.display = 'none';
-
-        try {
-            const response = await fetch(`${serverUrl}/api/admin/send-sms`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ secret, phone, message })
-            });
-
-            const data = await response.json();
-
-            if (response.ok) {
-                showStatus(`✅ Success: ${data.message}`, true);
-                document.getElementById('messageBody').value = ''; // clear message on success
-            } else {
-                showStatus(`❌ Error: ${data.error || 'Failed to send'}`, false);
-            }
-        } catch (err) {
-            showStatus(`❌ Connection Error: Make sure your Render server URL is correct and the server is awake.`, false);
-        } finally {
-            sendBtn.disabled = false;
-            sendBtn.innerText = "Send Message";
-        }
+    function getInputs() {
+        return {
+            serverUrl: document.getElementById('serverUrl').value.replace(/\/$/, ""),
+            secret: document.getElementById('secretKey').value,
+            phone: document.getElementById('targetPhone').value,
+            message: document.getElementById('messageBody').value
+        };
     }
 
     function showStatus(text, isSuccess) {
@@ -95,6 +77,95 @@
         statusBox.innerText = text;
         statusBox.className = `status ${isSuccess ? 'success' : 'error'}`;
         statusBox.style.display = 'block';
+    }
+
+    async function sendAdminSms() {
+        const { serverUrl, secret, phone, message } = getInputs();
+        const sendBtn = document.getElementById('sendBtn');
+
+        if (!serverUrl || !secret || !phone || !message) {
+            showStatus('Please fill in URL, Password, Phone, and Message to send an SMS.', false);
+            return;
+        }
+
+        sendBtn.disabled = true; sendBtn.innerText = "Sending..."; document.getElementById('statusBox').style.display = 'none';
+
+        try {
+            const response = await fetch(`${serverUrl}/api/admin/send-sms`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ secret, phone, message })
+            });
+            const data = await response.json();
+            if (response.ok) {
+                showStatus(`✅ Success: ${data.message}`, true);
+                document.getElementById('messageBody').value = ''; 
+            } else {
+                showStatus(`❌ Error: ${data.error || 'Failed to send'}`, false);
+            }
+        } catch (err) {
+            showStatus(`❌ Connection Error: Is your Render URL correct?`, false);
+        } finally {
+            sendBtn.disabled = false; sendBtn.innerText = "Send SMS Message";
+        }
+    }
+
+    async function fetchHistory() {
+        const { serverUrl, secret, phone } = getInputs();
+        const historyBtn = document.getElementById('historyBtn');
+        const historyDisplay = document.getElementById('historyDisplay');
+        const downloadBtn = document.getElementById('downloadBtn');
+
+        if (!serverUrl || !secret || !phone) {
+            showStatus('Please fill in URL, Password, and Phone to fetch history.', false);
+            return;
+        }
+
+        historyBtn.disabled = true; historyBtn.innerText = "Fetching..."; 
+        document.getElementById('statusBox').style.display = 'none';
+        historyDisplay.style.display = 'none';
+        downloadBtn.style.display = 'none';
+        historyDisplay.value = '';
+
+        try {
+            const response = await fetch(`${serverUrl}/api/admin/get-history`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ secret, phone })
+            });
+            const data = await response.json();
+            if (response.ok) {
+                historyDisplay.value = data.history;
+                historyDisplay.style.display = 'block';
+                downloadBtn.style.display = 'block'; // Show the download button!
+                showStatus(`✅ History loaded!`, true);
+            } else {
+                showStatus(`❌ Error: ${data.error || 'Failed to fetch'}`, false);
+            }
+        } catch (err) {
+            showStatus(`❌ Connection Error: Is your Render URL correct?`, false);
+        } finally {
+            historyBtn.disabled = false; historyBtn.innerText = "Fetch Full Chat History";
+        }
+    }
+
+    // NEW FUNCTION: Creates a downloadable .txt file instantly in the browser
+    function downloadHistory() {
+        const text = document.getElementById('historyDisplay').value;
+        const phone = document.getElementById('targetPhone').value.replace(/[^0-9]/g, ''); // Clean phone for filename
+        
+        if (!text) return;
+
+        // Create a "Blob" of text data
+        const blob = new Blob([text], { type: 'text/plain' });
+        const downloadLink = document.createElement('a');
+        
+        // Generate a temporary URL for the Blob and force download
+        downloadLink.href = URL.createObjectURL(blob);
+        downloadLink.download = `DavidAI_History_${phone}.txt`;
+        
+        // Silently click the link to trigger the download
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        document.body.removeChild(downloadLink);
     }
 </script>
 
