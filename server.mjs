@@ -236,28 +236,29 @@ async function callModel({ systemPrompt, profileContext, ragContext, memorySumma
 async function updateMemorySummary({ oldSummary, userText, assistantText, channelLabel = "UNKNOWN" }) {
   const today = new Date().toISOString().split('T')[0];
   const prompt = [
-    "You are a strict memory archiver for an AI assistant.",
-    "CRITICAL RULE: NEVER delete, condense, or alter any existing memory lines. You must preserve every single historical detail exactly as it is.",
-    "Your job is ONLY to extract NEW, highly specific facts from the 'New conversation turn' and APPEND them to the bottom of the existing list.",
-    "If the new turn contains no new specific facts, output the 'Existing memory summary' exactly as it was.",
+    "You are a memory manager for an AI assistant. Maintain a concise profile of the user.",
     "",
-    "STRICT FORMATTING RULE:",
-    "1. Every new line MUST start with this exact structure: [CHANNEL] [YYYY-MM-DD] [TAG] Fact.",
-    `2. Replace [CHANNEL] with exactly: [${channelLabel}].`,
-    `3. Replace [YYYY-MM-DD] with exactly today's date: [${today}].`,
-    "4. Replace [TAG] with ONE of these categories: [NAME], [COMPANY], [FACT], [SUBJECT], [PREFERENCE], [GOAL], [ACTION].",
-    "5. Capture SPECIFIC details only. No vague summaries.",
+    "RULES:",
+    "1. Extract NEW specific facts from the conversation turn below.",
+    "2. MERGE duplicates: If the user already has a fact recorded and a newer version exists, UPDATE the line (don't keep both).",
+    "3. DELETE fluff: Remove greetings, small talk, generic questions, and anything that isn't a reusable fact.",
+    "4. NEVER DELETE: Name, email, company, role, strong preferences, or stated goals.",
+    "5. COMPRESS, DON'T FORGET: If the memory gets too long, do not just delete old facts. Instead, GROUP related facts into single, dense summary lines (e.g., merge 3 lines about family into 1 line).",
+    "6. Keep the TOTAL output under 100 lines.",
     "",
-    "Existing memory summary:",
-    oldSummary ? oldSummary : "(empty)",
+    "FORMAT: Each line must be: [CHANNEL] [YYYY-MM-DD] [TAG] Fact",
+    `Use [${channelLabel}] and [${today}] for any new lines.`,
+    "Tags: [NAME] [EMAIL] [COMPANY] [ROLE] [FACT] [PREFERENCE] [GOAL] [ACTION]",
     "",
-    "New conversation turn:",
+    "EXISTING MEMORY:",
+    oldSummary || "(empty)",
+    "",
+    "NEW TURN:",
     "User: " + userText,
     "Assistant: " + assistantText,
     "",
-    "Return the ENTIRE memory list (existing lines + new lines appended to the bottom). DO NOT omit any old information."
+    "Return the updated memory. Be ruthlessly efficient."
   ].join("\n");
-
   const resp = await openai.chat.completions.create({ model: OPENAI_MEMORY_MODEL, messages: [{ role: "system", content: prompt }] });
   return (resp?.choices?.[0]?.message?.content || "").trim();
 }
