@@ -254,9 +254,34 @@ async function initDashboard() {
 // ==========================================
 // CONVERSATION LIST (SIDEBAR)
 // ==========================================
+
+
 // ==========================================
-// CONVERSATION LIST (SIDEBAR)
+// CREATE NEW CHAT
 // ==========================================
+async function startNewChat() {
+    try {
+        const res = await fetch('/api/web/conversations/new', {
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: globalUserId })
+        });
+        const data = await res.json();
+        if (data.success) {
+            currentConversationId = data.conversationId;
+            document.getElementById('chatMessages').innerHTML = "";
+            showEmptyState();
+            await loadConversationList(false);
+            // Highlight the new chat
+            document.querySelectorAll('.chat-item').forEach(el => {
+                el.classList.toggle('active', el.dataset.id === currentConversationId);
+            });
+        }
+    } catch (e) { 
+        console.error("Failed to create new chat:", e); 
+    }
+}
+
 async function loadConversationList(autoSelect = false) {
     try {
         const res = await fetch("/api/web/conversations?userId=" + globalUserId);

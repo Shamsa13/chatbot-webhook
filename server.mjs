@@ -1181,7 +1181,26 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
       conversation_id: conversationId, channel: "web", direction: "agent",
       text: reply, provider: "openai"
     });
-
+    // 🔥 BACKGROUND TASK: AI Auto-Naming
+    // If this is the start of a new chat (less than 3 messages total), generate a smart title!
+    if (webHistory.length <= 2) {
+      openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{ 
+          role: "system", 
+          content: "You are a summarization AI. Read the user's message and generate a very short, 3-to-4 word title for this chat. Do NOT use quotation marks. Example: Board Governance Dispute" 
+        }, { 
+          role: "user", 
+          content: message 
+        }]
+      }).then(async (titleResp) => {
+        const smartTitle = titleResp.choices[0].message.content.trim();
+        // Only update it if the user hasn't already manually renamed it (where title is still null)
+        await supabase.from("conversations").update({ title: smartTitle }).eq("id", conversationId).is("title", null);
+        console.log(`🏷️ Auto-named chat ${conversationId}: "${smartTitle}"`);
+      }).catch(e => console.error("Auto-title error:", e));
+    }
+    
     // Update memory
     updateMemorySummary({ oldSummary: user.memory_summary, userText: message, assistantText: reply, channelLabel: "WEB" })
       .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
