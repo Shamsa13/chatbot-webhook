@@ -3,171 +3,249 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>David AI - Admin Control Panel</title>
+    <title>David AI - Admin Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f4f9; padding: 40px; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-        h1 { margin-top: 0; font-size: 24px; color: #111; border-bottom: 2px solid #eee; padding-bottom: 10px; }
-        label { font-weight: bold; display: block; margin-top: 15px; margin-bottom: 5px; font-size: 14px; }
-        input[type="text"], input[type="password"], textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; font-family: inherit; }
-        textarea { resize: vertical; height: 100px; }
-        button { margin-top: 20px; width: 100%; color: white; border: none; padding: 12px; font-size: 16px; font-weight: bold; border-radius: 5px; cursor: pointer; transition: 0.2s; }
-        .btn-primary { background-color: #007bff; }
-        .btn-primary:hover { background-color: #0056b3; }
-        .btn-success { background-color: #28a745; margin-top: 10px; }
-        .btn-success:hover { background-color: #218838; }
-        .btn-dark { background-color: #343a40; margin-top: 10px; display: none; }
-        .btn-dark:hover { background-color: #23272b; }
-        button:disabled { background-color: #aaa; cursor: not-allowed; }
-        .status { margin-top: 20px; padding: 15px; border-radius: 5px; display: none; font-weight: bold; }
-        .success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-        .note { font-size: 12px; color: #666; margin-top: 5px; }
-        #historyDisplay { height: 300px; margin-top: 15px; background: #222; color: #0f0; font-family: monospace; display: none; white-space: pre-wrap;}
+        body { font-family: 'Inter', sans-serif; background: #f4f4f4; padding: 40px; color: #333; }
+        h1, h2 { font-family: 'Playfair Display', serif; color: #181d32; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); }
+        
+        .section { margin-bottom: 25px; padding-bottom: 25px; border-bottom: 1px solid #eee; }
+        .section:last-child { border-bottom: none; }
+        
+        label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #555; }
+        input[type="text"], input[type="password"], select, textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; margin-bottom: 15px; box-sizing: border-box; }
+        textarea { resize: vertical; min-height: 80px; }
+        
+        button { background: #181d32; color: white; border: none; padding: 12px 20px; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px; transition: 0.2s; }
+        button:hover { background: #252b48; }
+        button:disabled { background: #aaa; cursor: not-allowed; }
+
+        #dashboardArea { display: none; }
+        .status { padding: 15px; border-radius: 6px; font-size: 14px; margin-bottom: 15px; display: none; }
+        .success { background: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
+        .error { background: #ffebee; color: #c62828; border: 1px solid #ffcdd2; }
+        
+        pre { background: #f8f9fa; padding: 15px; border-radius: 6px; border: 1px solid #ddd; white-space: pre-wrap; font-size: 12px; max-height: 400px; overflow-y: auto; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h1>🎛️ David AI Admin Panel</h1>
-    
-    <label>Render Server URL</label>
-    <input type="text" id="serverUrl" placeholder="https://your-app-name.onrender.com" value="">
-    
-    <label>Admin Password (Supabase Secret Key)</label>
-    <input type="password" id="secretKey" placeholder="eyJh...">
-    
-    <hr style="margin: 25px 0; border: 0; border-top: 1px solid #eee;">
-    
-    <h3>User Details</h3>
-    <label>User Phone Number</label>
-    <input type="text" id="targetPhone" placeholder="+16475551234">
-    <div class="note">Required for both sending messages and fetching history.</div>
-
-    <hr style="margin: 25px 0; border: 0; border-top: 1px solid #eee;">
-    
-    <h3>1. Direct Message User</h3>
-    <label>Message to Send as David</label>
-    <textarea id="messageBody" placeholder="Hi! It's David. We had a glitch earlier..."></textarea>
-    <button id="sendBtn" class="btn-primary" onclick="sendAdminSms()">Send SMS Message</button>
-    
-    <hr style="margin: 25px 0; border: 0; border-top: 1px solid #eee;">
-
-    <h3>2. View User History</h3>
-    <button id="historyBtn" class="btn-success" onclick="fetchHistory()">Fetch Full Chat History</button>
-    <textarea id="historyDisplay" readonly></textarea>
-    
-    <button id="downloadBtn" class="btn-dark" onclick="downloadHistory()">📥 Download as File</button>
-
+    <h1>Admin Command Center</h1>
     <div id="statusBox" class="status"></div>
+
+    <div id="loginArea" class="section">
+        <label>Supabase Secret Key</label>
+        <input type="password" id="secretKey" placeholder="Enter admin secret to connect...">
+        <button onclick="loadUsers()" id="loadBtn">Connect & Load Users</button>
+    </div>
+
+    <div id="dashboardArea">
+        <div class="section">
+            <label>Select Target User</label>
+            <select id="userSelect" onchange="handleUserChange()">
+                <option value="">-- Choose a user --</option>
+            </select>
+            <button onclick="getHistory()">📥 View Full Chat History</button>
+            <div id="historyOutput" style="display:none; margin-top: 15px;">
+                <pre id="historyText"></pre>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Send Manual SMS</h2>
+            <label>Message to send from David AI</label>
+            <textarea id="smsMessage" placeholder="Type a message to send directly to their phone..."></textarea>
+            <button onclick="sendAdminSms()">📤 Send SMS</button>
+        </div>
+
+        <div class="section">
+            <h2>Send Call Transcript</h2>
+            <label>Select Saved Transcript</label>
+            <select id="transcriptSelect">
+                <option value="">-- No transcripts available for this user --</option>
+            </select>
+            <label>Send to Email (Overrides their default email if typed here)</label>
+            <input type="text" id="emailOverride" placeholder="Optional: user@example.com">
+            <button onclick="sendManualTranscript()">📧 Send Transcript via Email</button>
+        </div>
+    </div>
 </div>
 
 <script>
-    function getInputs() {
-        return {
-            serverUrl: document.getElementById('serverUrl').value.replace(/\/$/, ""),
-            secret: document.getElementById('secretKey').value,
-            phone: document.getElementById('targetPhone').value,
-            message: document.getElementById('messageBody').value
-        };
+    let globalUsers = [];
+
+    function showStatus(msg, isError = false) {
+        const box = document.getElementById('statusBox');
+        box.style.display = 'block';
+        box.className = 'status ' + (isError ? 'error' : 'success');
+        box.innerText = msg;
+        setTimeout(() => box.style.display = 'none', 5000);
     }
 
-    function showStatus(text, isSuccess) {
-        const statusBox = document.getElementById('statusBox');
-        statusBox.innerText = text;
-        statusBox.className = `status ${isSuccess ? 'success' : 'error'}`;
-        statusBox.style.display = 'block';
-    }
-
-    async function sendAdminSms() {
-        const { serverUrl, secret, phone, message } = getInputs();
-        const sendBtn = document.getElementById('sendBtn');
-
-        if (!serverUrl || !secret || !phone || !message) {
-            showStatus('Please fill in URL, Password, Phone, and Message to send an SMS.', false);
-            return;
-        }
-
-        sendBtn.disabled = true; sendBtn.innerText = "Sending..."; document.getElementById('statusBox').style.display = 'none';
+    // 1. Fetch Users and Populate Dropdown
+    async function loadUsers() {
+        const secret = document.getElementById('secretKey').value.trim();
+        if (!secret) return alert("Enter the secret key first.");
+        
+        const btn = document.getElementById('loadBtn');
+        btn.innerText = "Loading...";
 
         try {
-            const response = await fetch(`${serverUrl}/api/admin/send-sms`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ secret, phone, message })
+            const res = await fetch('/api/admin/users', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ secret })
             });
-            const data = await response.json();
-            if (response.ok) {
-                showStatus(`✅ Success: ${data.message}`, true);
-                document.getElementById('messageBody').value = ''; 
+            const data = await res.json();
+            
+            if (data.success) {
+                globalUsers = data.users;
+                const select = document.getElementById('userSelect');
+                select.innerHTML = '<option value="">-- Choose a user --</option>';
+                
+                data.users.forEach(u => {
+                    const name = (u.full_name && u.full_name !== 'null') ? u.full_name : 'Unknown User';
+                    const phone = u.phone || 'No Phone';
+                    const opt = document.createElement('option');
+                    // Store the user ID as the value, and phone as a data attribute
+                    opt.value = u.id;
+                    opt.dataset.phone = u.phone;
+                    opt.innerText = `${name} (${phone})`;
+                    select.appendChild(opt);
+                });
+
+                document.getElementById('loginArea').style.display = 'none';
+                document.getElementById('dashboardArea').style.display = 'block';
+                showStatus(`Successfully loaded ${data.users.length} users.`);
             } else {
-                showStatus(`❌ Error: ${data.error || 'Failed to send'}`, false);
+                showStatus(data.error || "Failed to load users", true);
             }
-        } catch (err) {
-            showStatus(`❌ Connection Error: Is your Render URL correct?`, false);
-        } finally {
-            sendBtn.disabled = false; sendBtn.innerText = "Send SMS Message";
+        } catch (e) {
+            showStatus("Network error connecting to server.", true);
+        }
+        btn.innerText = "Connect & Load Users";
+    }
+
+    // 2. Handle Dropdown Change (Populate Transcripts)
+    function handleUserChange() {
+        const userId = document.getElementById('userSelect').value;
+        const transcriptSelect = document.getElementById('transcriptSelect');
+        const emailOverride = document.getElementById('emailOverride');
+        
+        transcriptSelect.innerHTML = '<option value="">-- No transcripts available --</option>';
+        emailOverride.value = '';
+
+        if (!userId) return;
+
+        // Find the selected user object
+        const user = globalUsers.find(u => u.id === userId);
+        if (user && user.email && user.email !== 'null') {
+            emailOverride.placeholder = `Default: ${user.email} (Type here to override)`;
+        } else {
+            emailOverride.placeholder = "No email on file! You MUST type one here.";
+        }
+
+        // Populate their transcripts if they have any
+        if (user && user.transcript_data && user.transcript_data.length > 0) {
+            transcriptSelect.innerHTML = '<option value="">-- Select a transcript --</option>';
+            user.transcript_data.forEach(t => {
+                if(t.id) {
+                    const opt = document.createElement('option');
+                    opt.value = t.id;
+                    const date = t.timestamp ? new Date(t.timestamp).toLocaleDateString() : 'Old Call';
+                    opt.innerText = `${date} - ${t.summary ? t.summary.substring(0,40) + '...' : 'Transcript'}`;
+                    transcriptSelect.appendChild(opt);
+                }
+            });
         }
     }
 
-    async function fetchHistory() {
-        const { serverUrl, secret, phone } = getInputs();
-        const historyBtn = document.getElementById('historyBtn');
-        const historyDisplay = document.getElementById('historyDisplay');
-        const downloadBtn = document.getElementById('downloadBtn');
+    // 3. Get History
+    async function getHistory() {
+        const secret = document.getElementById('secretKey').value;
+        const select = document.getElementById('userSelect');
+        const phone = select.options[select.selectedIndex]?.dataset.phone;
 
-        if (!serverUrl || !secret || !phone) {
-            showStatus('Please fill in URL, Password, and Phone to fetch history.', false);
-            return;
-        }
-
-        historyBtn.disabled = true; historyBtn.innerText = "Fetching..."; 
-        document.getElementById('statusBox').style.display = 'none';
-        historyDisplay.style.display = 'none';
-        downloadBtn.style.display = 'none';
-        historyDisplay.value = '';
+        if (!phone) return alert("Select a valid user first.");
 
         try {
-            const response = await fetch(`${serverUrl}/api/admin/get-history`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
+            const res = await fetch('/api/admin/get-history', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ secret, phone })
             });
-            const data = await response.json();
-            if (response.ok) {
-                historyDisplay.value = data.history;
-                historyDisplay.style.display = 'block';
-                downloadBtn.style.display = 'block'; // Show the download button!
-                showStatus(`✅ History loaded!`, true);
+            const data = await res.json();
+            
+            if (data.success) {
+                document.getElementById('historyOutput').style.display = 'block';
+                document.getElementById('historyText').innerText = data.history;
             } else {
-                showStatus(`❌ Error: ${data.error || 'Failed to fetch'}`, false);
+                showStatus(data.error, true);
             }
-        } catch (err) {
-            showStatus(`❌ Connection Error: Is your Render URL correct?`, false);
-        } finally {
-            historyBtn.disabled = false; historyBtn.innerText = "Fetch Full Chat History";
+        } catch (e) {
+            showStatus("Network error.", true);
         }
     }
 
-    // NEW FUNCTION: Creates a downloadable .txt file instantly in the browser
-    function downloadHistory() {
-        const text = document.getElementById('historyDisplay').value;
-        const phone = document.getElementById('targetPhone').value.replace(/[^0-9]/g, ''); // Clean phone for filename
-        
-        if (!text) return;
+    // 4. Send SMS
+    async function sendAdminSms() {
+        const secret = document.getElementById('secretKey').value;
+        const select = document.getElementById('userSelect');
+        const phone = select.options[select.selectedIndex]?.dataset.phone;
+        const message = document.getElementById('smsMessage').value.trim();
 
-        // Create a "Blob" of text data
-        const blob = new Blob([text], { type: 'text/plain' });
-        const downloadLink = document.createElement('a');
-        
-        // Generate a temporary URL for the Blob and force download
-        downloadLink.href = URL.createObjectURL(blob);
-        downloadLink.download = `DavidAI_History_${phone}.txt`;
-        
-        // Silently click the link to trigger the download
-        document.body.appendChild(downloadLink);
-        downloadLink.click();
-        document.body.removeChild(downloadLink);
+        if (!phone) return alert("Select a valid user first.");
+        if (!message) return alert("Type a message to send.");
+
+        try {
+            const res = await fetch('/api/admin/send-sms', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ secret, phone, message })
+            });
+            const data = await res.json();
+            
+            if (data.success) {
+                showStatus(`SMS sent successfully to ${phone}!`);
+                document.getElementById('smsMessage').value = ""; // Clear box
+            } else {
+                showStatus(data.error, true);
+            }
+        } catch (e) {
+            showStatus("Network error.", true);
+        }
+    }
+
+    // 5. Send Manual Transcript
+    async function sendManualTranscript() {
+        const secret = document.getElementById('secretKey').value;
+        const userId = document.getElementById('userSelect').value;
+        const transcriptId = document.getElementById('transcriptSelect').value;
+        const emailOverride = document.getElementById('emailOverride').value.trim();
+
+        if (!userId) return alert("Select a user first.");
+        if (!transcriptId) return alert("Select a transcript from the dropdown.");
+
+        try {
+            const res = await fetch('/api/admin/send-transcript', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ secret, userId, transcriptId, emailOverride })
+            });
+            const data = await res.json();
+            
+            if (data.success) {
+                showStatus(data.message);
+                document.getElementById('emailOverride').value = "";
+            } else {
+                showStatus(data.error, true);
+            }
+        } catch (e) {
+            showStatus("Network error.", true);
+        }
     }
 </script>
-
 </body>
 </html>

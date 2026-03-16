@@ -1353,6 +1353,51 @@ app.delete("/api/documents/:id", async (req, res) => {
 // ==========================================
 // ADMIN DEV TOOLS
 // ==========================================
+
+// 1. Get all users for the dropdown
+app.post("/api/admin/users", async (req, res) => {
+  try {
+    const { secret } = req.body;
+    if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
+
+    const { data: users, error } = await supabase
+      .from("users")
+      .select("id, phone, full_name, email, transcript_data")
+      .order("last_seen", { ascending: false });
+
+    if (error) throw error;
+    res.json({ success: true, users: users || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. Manually trigger a transcript
+app.post("/api/admin/send-transcript", async (req, res) => {
+  try {
+    const { secret, userId, transcriptId, emailOverride } = req.body;
+    if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
+
+    const { data: user } = await supabase.from("users").select("full_name, email").eq("id", userId).single();
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const targetEmail = emailOverride || user.email;
+    if (!targetEmail || !targetEmail.includes('@')) return res.status(400).json({ error: "No valid email found for user." });
+
+    // Trigger your existing Google Apps Script function
+    await triggerGoogleAppsScript(
+      targetEmail, 
+      user.full_name || "User", 
+      transcriptId, 
+      "Manual Send from Admin"
+    );
+
+    res.json({ success: true, message: `Transcript sent to ${targetEmail}!` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/api/admin/send-sms", async (req, res) => {
   try {
     const { secret, phone, message } = req.body;
