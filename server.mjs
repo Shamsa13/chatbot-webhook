@@ -1186,16 +1186,19 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
     if (botErr) console.error("🚨 DB REJECTED BOT MSG:", botErr.message); 
 
     // 🔥 BACKGROUND TASK: AI Auto-Naming
-    // ONLY trigger on the very first user message to prevent overwriting
-    if (webHistory.length === 2) {
+    // Wait until the 2nd user message (when history length is 3: User, Agent, User) for better context
+    if (webHistory.length === 3) {
+      // Build a mini-transcript for the AI to read
+      const miniTranscript = webHistory.map(m => `${m.role}: ${m.content}`).join("\n");
+      
       openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [{ 
           role: "system", 
-          content: "You are a summarization AI. Read the user's message and generate a very short, 3-to-4 word title for this chat. Do NOT use quotation marks. Example: Board Governance Dispute" 
+          content: "You are a summarization AI. Read the short conversation below and generate a very short, 3-to-4 word title for this chat. Do NOT use quotation marks. Example: Board Governance Dispute" 
         }, { 
           role: "user", 
-          content: message 
+          content: miniTranscript 
         }]
       }).then(async (titleResp) => {
         const smartTitle = titleResp.choices[0].message.content.trim();
@@ -1203,7 +1206,7 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
         await supabase.from("conversations").update({ title: smartTitle }).eq("id", conversationId).is("title", null);
         console.log(`🏷️ Auto-named chat ${conversationId}: "${smartTitle}"`);
       }).catch(e => console.error("Auto-title error:", e));
-    }  
+    }
       
     // Update memory
     updateMemorySummary({ oldSummary: user.memory_summary, userText: message, assistantText: reply, channelLabel: "WEB" })
