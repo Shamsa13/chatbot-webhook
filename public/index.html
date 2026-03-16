@@ -284,7 +284,7 @@ async function startNewChat() {
 
 async function loadConversationList(autoSelect = false) {
     try {
-        const res = await fetch("/api/web/conversations?userId=" + globalUserId);
+        const res = await fetch("/api/web/conversations?userId=" + globalUserId, { cache: "no-store" });
         const data = await res.json();
         const list = document.getElementById('chatList');
 
@@ -379,7 +379,7 @@ async function switchChat(conversationId) {
     msgContainer.innerHTML = '<div style="text-align:center;padding:40px;color:#bbb;">Loading messages...</div>';
 
     try {
-        const res = await fetch("/api/web/messages?userId=" + globalUserId + "&conversationId=" + conversationId);
+        const res = await fetch(`/api/web/messages?userId=${globalUserId}&conversationId=${conversationId}`, { cache: "no-store" });
         const data = await res.json();
         
         msgContainer.innerHTML = "";
@@ -520,7 +520,7 @@ function escapeHtml(text) {
 async function loadUserDocuments() {
     if (!globalUserId) return;
     try {
-        const res = await fetch("/api/documents?userId=" + globalUserId);
+        const res = await fetch("/api/documents?userId=" + globalUserId, { cache: "no-store" });
         const data = await res.json();
         const list = document.getElementById('documentList');
 
