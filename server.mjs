@@ -1072,10 +1072,11 @@ app.post("/api/chat", async (req, res) => {
     }
 
     // Save user message
-    await supabase.from("messages").insert({
+    const { error: userErr } = await supabase.from("messages").insert({
       conversation_id: conversationId, channel: "web", direction: "user",
       text: message, provider: "web"
     });
+    if (userErr) console.error("🚨 DB REJECTED USER MSG:", userErr.message);     
 
     // Fetch THIS conversation's history
     const { data: convoMessages } = await supabase
@@ -1177,13 +1178,15 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
     const reply = completion.choices[0].message.content;
 
     // Save reply
-    await supabase.from("messages").insert({
+    const { error: botErr } = await supabase.from("messages").insert({
       conversation_id: conversationId, channel: "web", direction: "agent",
       text: reply, provider: "openai"
     });
+    if (botErr) console.error("🚨 DB REJECTED BOT MSG:", botErr.message); 
+
     // 🔥 BACKGROUND TASK: AI Auto-Naming
-    // If this is the start of a new chat (less than 3 messages total), generate a smart title!
-    if (webHistory.length <= 2) {
+    // ONLY trigger on the very first user message to prevent overwriting
+    if (webHistory.length === 2) {
       openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [{ 
@@ -1195,12 +1198,12 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
         }]
       }).then(async (titleResp) => {
         const smartTitle = titleResp.choices[0].message.content.trim();
-        // Only update it if the user hasn't already manually renamed it (where title is still null)
+        // Only update it if the user hasn't already manually renamed it
         await supabase.from("conversations").update({ title: smartTitle }).eq("id", conversationId).is("title", null);
         console.log(`🏷️ Auto-named chat ${conversationId}: "${smartTitle}"`);
       }).catch(e => console.error("Auto-title error:", e));
-    }
-    
+    }  
+      
     // Update memory
     updateMemorySummary({ oldSummary: user.memory_summary, userText: message, assistantText: reply, channelLabel: "WEB" })
       .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
