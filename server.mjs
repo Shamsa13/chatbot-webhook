@@ -110,7 +110,7 @@ function scheduleSessionSummary(userId, conversationId, channel, userText, assis
     } catch (e) {
       console.error(`❌ Session summary failed for ${key}:`, e.message);
     }
-  }, 5 * 60 * 1000); // 5 minutes
+  }, 10 * 60 * 1000); // 5 minutes
 
   sessionTimers.set(key, session);
   console.log(`🕐 Session timer reset for ${key} (${session.turns.length} turns buffered)`);
@@ -188,9 +188,17 @@ ${fullTranscript}`;
       }],
       response_format: { type: "json_object" }
     });
-    const parsed = JSON.parse(topicResp?.choices?.[0]?.message?.content || "{}");
+    
+    // Strip markdown formatting before parsing to prevent JSON crash
+    let rawContent = topicResp?.choices?.[0]?.message?.content || "{}";
+    rawContent = rawContent.replace(/```json/g, "").replace(/```/g, "").trim();
+    
+    const parsed = JSON.parse(rawContent);
     topics = parsed.topics || parsed.keywords || parsed.tags || [];
-  } catch(e) { topics = []; }
+  } catch(e) { 
+    console.error("JSON Topic Parse Error:", e.message);
+    topics = []; 
+  }
 
   // SMS and CALL = always insert a new summary (each session is its own entry)
   // WEB = upsert per conversation_id (one summary per chat window, updated as it grows)
@@ -511,7 +519,7 @@ async function processSmsIntent(userId, userText) {
     cleanTranscriptArray = cleanTranscriptArray.slice(0, 15).map((t, index) => {
       return { position: `${index + 1} calls back`, id: t.id, summary: t.summary };
     });
-
+    
     const prompt = `Analyze the user's latest text message: "${userText}"
     Current DB Data: Name=${user?.full_name || 'null'}, Email=${user?.email || 'null'}
     
@@ -523,7 +531,7 @@ async function processSmsIntent(userId, userText) {
     
     CRITICAL RULES FOR EXTRACTION:
     1. PROFILE UPDATES: If the user provides an email address or a name, you MUST extract them into "email" and "full_name".
-    2. THE TRANSCRIPT TRIGGER (STRICT): You must ONLY return a "transcript_id_to_send" if the user is EXPLICITLY requesting a transcript right now, OR if they are providing their email in direct response to the Agent offering to send a transcript right now.
+    2. THE TRANSCRIPT TRIGGER: If the user explicitly requests a transcript, OR replies affirmatively (e.g., "yes", "sure", "ok", "please") right after the Agent offered one, YOU MUST return the ID of the most recent transcript from the list.
     3. THE "FUTURE" RULE: If the user is merely updating their email address for future use (e.g., "use this email from now on", "update my email to"), extract the email but YOU MUST SET "transcript_id_to_send" to null.
 
     Respond STRICTLY in JSON:
@@ -756,12 +764,14 @@ app.post("/twilio/sms", async (req, res) => {
 
     checkAndSendVCard(userId, rawFrom).catch(e => console.error("vCard error:", e));
 
-    const [cfg, memorySummary, history, { data: userDb }, ragContext] = await Promise.all([
+    // We added getRecentConversationSummaries to the Promise array
+    const [cfg, memorySummary, history, { data: userDb }, ragContext, recentSummaries] = await Promise.all([
       getBotConfig(),
       getUserMemorySummary(userId),
       getRecentUserMessages(userId, 12),
       supabase.from("users").select("full_name, email, event_pitch_counts").eq("id", userId).single(),
-      searchKnowledgeBase(body)
+      searchKnowledgeBase(body),
+      getRecentConversationSummaries(userId, 5) // <-- ADDED HERE
     ]);
 
     smartProfileExtractor(userId, body, history, userDb?.full_name).catch(e => console.error("Extractor Error:", e));    
@@ -773,8 +783,10 @@ app.post("/twilio/sms", async (req, res) => {
       ? `CRITICAL RULE: The user already has a valid email on file (${userDb.email}). If they ask for a transcript or document, confirm the action.`
       : `CRITICAL RULE: The user DOES NOT have an email on file. If they ask for a transcript or document, YOU MUST reply: "I'd be happy to send that! What is the best email address to send it to?"`;
 
-    const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}.\n\n${smsTranscriptRule}`;
+    // We inject recentSummaries into the profileContext so David actually reads them
+    const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}.\n\nRECENT CONVERSATIONS:\n${recentSummaries}\n\n${smsTranscriptRule}`;
 
+    
     const formattedHistoryForOpenAI = history.map(h => ({ role: h.role, content: `(${h.channel}) ${h.content}` }));
     
     let privateDocContext = "";
@@ -819,7 +831,7 @@ app.post("/twilio/sms", async (req, res) => {
       if (msgErr) console.error("Message insert error:", msgErr);
     })();
 
-    const intentKeywords = /(@|\b(transcript|email|send|call|recent|yes|back|ago)\b)/i; 
+    const intentKeywords = /(@|\b(transcript|email|send|call|recent|yes|yeah|sure|ok|please|back|ago)\b)/i;
     if (intentKeywords.test(body)) {
       processSmsIntent(userId, body).then(pendingTask => {
         if (pendingTask) {
@@ -1145,11 +1157,11 @@ app.post("/api/auth/verify-code", async (req, res) => {
 
 
 
-// 🔥 NEW: Web-First Welcome SMS Logic
+// 🔥 Web-First Welcome SMS Logic (With Invalid Number Protection)
 async function triggerWebWelcomeSMS(userId, phone, name) {
   try {
     const { data: user } = await supabase.from("users").select("vcard_sent").eq("id", userId).single();
-    if (user?.vcard_sent) return; // They already texted/called previously
+    if (user?.vcard_sent) return;
 
     if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
       const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
@@ -1165,7 +1177,14 @@ async function triggerWebWelcomeSMS(userId, phone, name) {
       await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
       console.log(`✅ Sent Web-First Welcome SMS & vCard to ${outboundPhone}`);
     }
-  } catch (e) { console.error("Web Welcome SMS Error:", e); }
+  } catch (e) { 
+    console.error("Web Welcome SMS Error:", e.message);
+    // If Twilio says the number is fake/invalid (code 21211), mark it sent so we stop retrying forever
+    if (e.code === 21211) {
+      console.log(`🛑 Invalid phone number detected (${phone}). Flagging to ignore in future sweeps.`);
+      await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
+    }
+  }
 }
 
 // Sweep for 10-minute inactivity
@@ -1360,7 +1379,7 @@ app.post("/api/chat", async (req, res) => {
     }));
 
     // Fetch user profile
-    const { data: userDb } = await supabase
+          .from("users")const { data: userDb } = await supabase
       .from("users")
       .select("full_name, email, memory_summary, phone")
       .eq("id", userId)
@@ -1368,7 +1387,7 @@ app.post("/api/chat", async (req, res) => {
 
     const user = userDb;
     if (!user) throw new Error("User not found");
-
+    const recentSummaries = await getRecentConversationSummaries(userId, 5);
     // Run web profile extractor in background
     webProfileExtractor(userId, message, user.full_name, user.email).catch(e => console.error("Web extractor:", e));
 
@@ -1446,6 +1465,9 @@ PLATFORM: You are currently chatting with ${user.full_name || 'the user'} on the
 
 CROSS-PLATFORM MEMORY (from past SMS, calls, and web chats):
 ${user.memory_summary || "No past memory yet."}
+
+RECENT CONVERSATION HISTORY:
+${recentSummaries || "No recent conversations."}
 
 USER PROFILE: Name: ${user.full_name || 'Unknown'}, Email: ${user.email || 'Unknown'}
 IMPORTANT: If the user asks to update their name or email, confirm you've noted the change.
