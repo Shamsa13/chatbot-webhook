@@ -66,6 +66,55 @@ console.log("ENV CHECK", {
   memoryModel: OPENAI_MEMORY_MODEL,
   supabaseUrl: SUPABASE_URL
 });
+// ============================================
+// SESSION INACTIVITY TRACKER
+// Fires conversation summary after 5 min idle
+// ============================================
+const sessionTimers = new Map(); // key: `${userId}:${channel}` -> { timer, conversationId, turns[] }
+
+function scheduleSessionSummary(userId, conversationId, channel, userText, assistantText) {
+  const key = `${userId}:${channel}`;
+  
+  // Get or create the session entry
+  let session = sessionTimers.get(key);
+  
+  if (session) {
+    // Session exists — cancel the old timer and append the new turn
+    clearTimeout(session.timer);
+    session.turns.push({ userText, assistantText });
+    session.conversationId = conversationId; // keep updated
+  } else {
+    // Brand new session
+    session = {
+      conversationId,
+      turns: [{ userText, assistantText }],
+      timer: null
+    };
+    sessionTimers.set(key, session);
+  }
+
+  // Set a fresh 5-minute inactivity timer
+  session.timer = setTimeout(async () => {
+    sessionTimers.delete(key); // Clear from map — next message = fresh session
+    
+    console.log(`⏱️ Session idle for ${key} — generating summary from ${session.turns.length} turns...`);
+    
+    try {
+      // Build the full transcript from all turns in this session
+      const fullTranscript = session.turns.map((t, i) => 
+        `User: ${t.userText}\nAssistant: ${t.assistantText}`
+      ).join("\n\n");
+      
+      await saveConversationSummary(userId, session.conversationId, channel, fullTranscript);
+      console.log(`✅ Session summary saved for ${key}`);
+    } catch (e) {
+      console.error(`❌ Session summary failed for ${key}:`, e.message);
+    }
+  }, 5 * 60 * 1000); // 5 minutes
+
+  sessionTimers.set(key, session);
+  console.log(`🕐 Session timer reset for ${key} (${session.turns.length} turns buffered)`);
+}
 
 function normalizeFrom(fromRaw = "") {
   let normalized = String(fromRaw).replace(/^whatsapp:/, "").trim();
@@ -103,33 +152,87 @@ async function getBotConfig() {
   if (error) throw new Error("bot_config read failed: " + error.message);
   return { systemPrompt: (data?.system_prompt || "").trim() };
 }
+async function saveConversationSummary(userId, conversationId, channel, fullTranscript) {
+  const prompt = `You are summarizing a conversation session for long-term AI memory.
 
-async function saveConversationSummary(userId, conversationId, channel, userText, assistantText) {
-  const prompt = `Summarize this conversation in 3-5 sentences. 
-  Include: what the user wanted, what was discussed, any decisions made, any follow-up actions.
-  Be specific enough that someone could recall the conversation from this summary alone.
-  
-  Conversation:
-  User: ${userText}
-  Assistant: ${assistantText}`;
+Write a detailed 4-6 sentence summary of this conversation that includes:
+1. What the user wanted or asked about
+2. The key topics discussed (be specific — include names, numbers, dates if mentioned)
+3. Any decisions made or conclusions reached
+4. Any follow-up actions or next steps mentioned
+5. The emotional tone or urgency if relevant
+
+Be specific enough that someone could fully recall this conversation from your summary alone.
+Do NOT be vague. Do NOT say "they discussed various topics."
+
+Channel: ${channel.toUpperCase()}
+Conversation:
+${fullTranscript}`;
 
   const resp = await openai.chat.completions.create({
     model: OPENAI_MEMORY_MODEL,
     messages: [{ role: "system", content: prompt }]
   });
 
-  const summary = resp.choices[0].message.content;
+  const summary = (resp?.choices?.[0]?.message?.content || "").trim();
+  if (!summary) return;
 
-  await supabase.from("conversation_summaries").insert({
-    user_id: userId,
-    conversation_id: conversationId,
-    channel: channel,
-    summary: summary,
-    created_at: new Date().toISOString()
-  });
-  
-  console.log(`💾 Saved conversation summary for ${channel}: ${summary.substring(0, 80)}...`);
-}
+  // Extract topic keywords
+  let topics = [];
+  try {
+    const topicResp = await openai.chat.completions.create({
+      model: OPENAI_MEMORY_MODEL,
+      messages: [{ 
+        role: "system", 
+        content: `Extract 3-6 short topic keywords from this summary. Return as JSON like: {"topics": ["board governance", "voting rights"]}\n\nSummary: ${summary}` 
+      }],
+      response_format: { type: "json_object" }
+    });
+    const parsed = JSON.parse(topicResp?.choices?.[0]?.message?.content || "{}");
+    topics = parsed.topics || parsed.keywords || parsed.tags || [];
+  } catch(e) { topics = []; }
+
+  // SMS and CALL = always insert a new summary (each session is its own entry)
+  // WEB = upsert per conversation_id (one summary per chat window, updated as it grows)
+  if (channel === "web") {
+    const { data: existing } = await supabase
+      .from("conversation_summaries")
+      .select("id")
+      .eq("conversation_id", conversationId)
+      .single();
+
+    if (existing) {
+      await supabase
+        .from("conversation_summaries")
+        .update({ summary, topics })
+        .eq("conversation_id", conversationId);
+      console.log(`📝 Updated WEB conversation summary: ${summary.substring(0, 80)}...`);
+    } else {
+      await supabase.from("conversation_summaries").insert({
+        user_id: userId,
+        conversation_id: conversationId,
+        channel,
+        summary,
+        topics,
+        created_at: new Date().toISOString()
+      });
+      console.log(`💾 Saved new WEB conversation summary: ${summary.substring(0, 80)}...`);
+    }
+  } else {
+    // SMS and CALL — always a fresh insert
+    await supabase.from("conversation_summaries").insert({
+      user_id: userId,
+      conversation_id: conversationId,
+      channel,
+      summary,
+      topics,
+      created_at: new Date().toISOString()
+    });
+    console.log(`💾 Saved new ${channel.toUpperCase()} session summary: ${summary.substring(0, 80)}...`);
+  }
+}  
+
+
 async function getRecentConversationSummaries(userId, limit = 5) {
   const { data, error } = await supabase
     .from("conversation_summaries")
@@ -729,11 +832,7 @@ app.post("/twilio/sms", async (req, res) => {
 updateMemorySummary({ oldSummary: memorySummary, userText: body, assistantText: cleanReplyText, channelLabel: "SMS" })
   .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
   .catch(e => console.error("Memory error:", e));
-
-// Save/update conversation summary for this SMS session
-const smsTranscript = `User: ${body}\nAssistant: ${cleanReplyText}`;
-saveConversationSummary(userId, conversationId, "sms", smsTranscript)
-  .catch(e => console.error("SMS summary error:", e));    
+  scheduleSessionSummary(userId, conversationId, "sms", body, cleanReplyText);
 
   } catch (err) {
     console.error("ERROR sms", err.message);
@@ -1403,15 +1502,7 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
 updateMemorySummary({ oldSummary: user.memory_summary, userText: message, assistantText: reply, channelLabel: "WEB" })
   .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
   .catch(e => console.error("Memory update failed:", e));
-
-// Save/update conversation summary for this specific web chat window
-// This runs after every message so the summary stays current
-// It uses upsert logic so each web conversation gets ONE summary that grows
-const webTranscript = webHistory.map(m => 
-  `${m.role === 'assistant' ? 'Assistant' : 'User'}: ${m.content}`
-).join("\n");
-saveConversationSummary(userId, conversationId, "web", webTranscript)
-  .catch(e => console.error("Web summary error:", e));
+  scheduleSessionSummary(userId, conversationId, "web", message, reply);
     res.json({ success: true, reply, conversationId });
 
   } catch (err) {
