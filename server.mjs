@@ -927,12 +927,71 @@ app.post("/api/auth/verify-code", async (req, res) => {
       return res.status(400).json({ error: "Code expired. Please request a new one." });
     }
     
-    await supabase.from("users").update({ otp_code: null, otp_expires_at: null }).eq("id", user.id);
+    await supabase.from("users").update({ otp_code: null, otp_expires_at: null, last_seen: new Date().toISOString() }).eq("id", user.id);
     res.json({ success: true, userId: user.id, name: user.full_name });
   } catch (err) {
     console.error("OTP Verify Error:", err.message);
     res.status(500).json({ error: "Verification failed." });
   }
+});
+
+
+
+// 🔥 NEW: Web-First Welcome SMS Logic
+async function triggerWebWelcomeSMS(userId, phone, name) {
+  try {
+    const { data: user } = await supabase.from("users").select("vcard_sent").eq("id", userId).single();
+    if (user?.vcard_sent) return; // They already texted/called previously
+
+    if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
+      const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+      const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
+      const firstName = (name && name !== 'null') ? name.split(' ')[0] : "there";
+      
+      const msg1 = `Hi ${firstName}, it's David AI! I saw you were just using the web portal. Did you know you can also text or call this exact number anytime? My memory is shared across all platforms, so we can always pick up right where we left off.`;
+      const msg2 = `Tap the link below to save my contact card to your phone:\n\nhttps://dtxebwectbvnksuxpclc.supabase.co/storage/v1/object/public/assets/Board%20Governance%20AI.vcf`;
+      
+      await twilioClient.messages.create({ body: msg1, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
+      await twilioClient.messages.create({ body: msg2, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
+      
+      await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
+      console.log(`✅ Sent Web-First Welcome SMS & vCard to ${outboundPhone}`);
+    }
+  } catch (e) { console.error("Web Welcome SMS Error:", e); }
+}
+
+// Sweep for 10-minute inactivity
+setInterval(async () => {
+  try {
+    const tenMinsAgo = new Date(Date.now() - 10 * 60000).toISOString();
+    const { data: inactiveUsers } = await supabase
+      .from("users")
+      .select("id, phone, full_name")
+      .eq("vcard_sent", false)
+      .not("phone", "is", null)
+      .not("last_seen", "is", null)
+      .lt("last_seen", tenMinsAgo);
+      
+    if (inactiveUsers && inactiveUsers.length > 0) {
+      for (const u of inactiveUsers) {
+        await triggerWebWelcomeSMS(u.id, u.phone, u.full_name);
+      }
+    }
+  } catch(e) { console.error("Inactivity sweep error:", e); }
+}, 5 * 60000); // Checks every 5 minutes
+
+// Instant Web Logout Trigger
+app.post("/api/web/logout", async (req, res) => {
+   try {
+     const { userId } = req.body;
+     if (userId) {
+       const { data: user } = await supabase.from("users").select("phone, full_name, vcard_sent").eq("id", userId).single();
+       if (user && !user.vcard_sent && user.phone) {
+         await triggerWebWelcomeSMS(userId, user.phone, user.full_name);
+       }
+     }
+     res.json({ success: true });
+   } catch(e) { res.json({ success: true }); }
 });
 
 // ==========================================

@@ -82,8 +82,8 @@
         .toggle-label { font-weight: 600; font-size: 13px; color: #444; cursor: pointer; }
 
         .tooltip-container { position: relative; display: inline-block; cursor: help; color: #888; border-bottom: 1px dotted #888; font-size: 12px; }
-        .tooltip-text { visibility: hidden; width: 260px; background-color: #181d32; color: #fff; text-align: center; border-radius: 8px; padding: 12px; position: absolute; z-index: 10; bottom: 130%; left: 50%; margin-left: -130px; opacity: 0; transition: opacity 0.3s; font-size: 12px; line-height: 1.5; font-weight: 400; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
-        .tooltip-text::after { content: ""; position: absolute; top: 100%; left: 50%; margin-left: -5px; border-width: 5px; border-style: solid; border-color: #181d32 transparent transparent transparent; }
+        .tooltip-text { visibility: hidden; width: 260px; background-color: #181d32; color: #fff; text-align: center; border-radius: 8px; padding: 12px; position: absolute; z-index: 10; bottom: 140%; right: 0; opacity: 0; transition: opacity 0.3s; font-size: 12px; line-height: 1.5; font-weight: 400; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
+        .tooltip-text::after { content: ""; position: absolute; top: 100%; right: 20px; border-width: 5px; border-style: solid; border-color: #181d32 transparent transparent transparent; }
         .tooltip-container:hover .tooltip-text { visibility: visible; opacity: 1; }
 
         .chat-input-area { padding: 15px 30px 25px 30px; background: white; display: flex; gap: 12px; align-items: center; flex-shrink: 0; }
@@ -191,7 +191,7 @@
                 <input type="checkbox" id="deepDiveToggle">
                 <span class="slider"></span>
             </label>
-            <label for="deepDiveToggle" class="toggle-label">Deep Dive Mode</label>
+            <label for="deepDiveToggle" class="toggle-label">Deep Dive</label>
             <div class="tooltip-container">
                 ⓘ What is this?
                 <span class="tooltip-text"><b>Deep Dive</b> enhances reasoning and accuracy for long documents by performing a comprehensive analysis of the selected files.<br><br><i>Note: Slower processing time.</i></span>
@@ -303,6 +303,15 @@ async function verifyCode() {
 }
 
 function logoutUser() {
+    // Notify backend of logout to instantly trigger the welcome SMS (if applicable)
+    if (globalUserId) {
+        fetch('/api/web/logout', { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: globalUserId }) 
+        }).catch(e => console.error("Logout ping failed", e));
+    }
+
     globalUserId = "";
     userPhone = "";
     currentConversationId = null;
@@ -635,6 +644,10 @@ async function loadUserDocuments() {
 
         if (data.success && data.documents && data.documents.length > 0) {
             list.innerHTML = "";
+            
+            // 💾 Pull saved selections from memory
+            const savedSelections = JSON.parse(localStorage.getItem('david_saved_docs_' + globalUserId) || "[]");
+
             data.documents.forEach(doc => {
                 let dateStr = "";
                 if (doc.uploaded_at) {
@@ -644,11 +657,14 @@ async function loadUserDocuments() {
                 
                 const safeName = escapeHtml(doc.document_name);
                 const escapedForFunc = safeName.replace(/'/g, "\\'").replace(/"/g, "&quot;");
+                
+                // 💾 See if this doc was previously checked
+                const isChecked = savedSelections.includes(doc.id) ? "checked" : "";
 
                 list.innerHTML += `
                     <div class="doc-row">
                         <label class="doc-label" title="${safeName}">
-                            <input type="checkbox" class="doc-checkbox" value="${doc.id}" style="margin-top:2px;" />
+                            <input type="checkbox" class="doc-checkbox" value="${doc.id}" style="margin-top:2px;" onchange="handleDocSelection(this)" ${isChecked} />
                             ${getFileIcon(doc.document_name)}
                             <div class="doc-info">
                                 <span class="doc-name">${safeName}</span>
@@ -674,6 +690,23 @@ async function loadUserDocuments() {
         console.error("Failed to load docs:", e); 
     }
 }
+
+// 💾 Save selections and enforce 2-file limit
+function handleDocSelection(checkbox) {
+    const checkedBoxes = document.querySelectorAll('.doc-checkbox:checked');
+    
+    // Enforce the 3 file limit
+    if (checkedBoxes.length > 2) {
+        alert("To ensure optimal AI performance, you can only select up to 3 documents at a time.");
+        checkbox.checked = false; // Uncheck the box they just clicked
+        return;
+    }
+
+    // Save the current selections to LocalStorage
+    const selectedDocIds = Array.from(document.querySelectorAll('.doc-checkbox:checked')).map(cb => cb.value);
+    localStorage.setItem('david_saved_docs_' + globalUserId, JSON.stringify(selectedDocIds));
+}
+
 
 async function uploadDocument() {
     const fileInput = document.getElementById('fileInput');
