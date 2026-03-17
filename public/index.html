@@ -20,7 +20,8 @@
         .iti { width: 100%; text-align: left; margin: 15px 0; }
         .iti__input { width: 100% !important; padding: 12px !important; padding-left: 50px !important; border: 1px solid #ddd; border-radius: 6px; font-size: 16px; box-sizing: border-box; }
 
-        #dashboardContainer { display: none; width: 95%; max-width: 1200px; height: 90vh; background: white; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.08); overflow: hidden; flex-direction: row; }
+        /* WIDENED DASHBOARD */
+        #dashboardContainer { display: none; width: 95%; max-width: 1400px; height: 90vh; background: white; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.08); overflow: hidden; flex-direction: row; }
 
         .sidebar { width: 280px; min-width: 280px; background: #181d32; color: white; display: flex; flex-direction: column; overflow: hidden; }
         .sidebar-header { padding: 20px; }
@@ -39,8 +40,6 @@
         .chat-item.active { background: rgba(184,147,116,0.2); color: #fff; border-left: 3px solid #b89374; }
         .chat-item-text { flex: 1; min-width: 0; }
         .chat-item-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
-        .chat-item-date { font-size: 10px; color: #555; display: block; margin-top: 2px; }
-       .chat-item-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
         .chat-item-date { font-size: 10px; color: #555; display: block; margin-top: 2px; }
         
         .chat-action-btn { opacity: 0; background: none; border: none; color: #aaa; cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; transition: 0.15s; flex-shrink: 0; }
@@ -86,7 +85,17 @@
         .empty-state h3 { font-family: 'Playfair Display', serif; color: #999; font-size: 20px; margin-bottom: 8px; }
         .empty-state p { font-size: 14px; max-width: 400px; line-height: 1.6; }
 
-        .chat-input-area { padding: 18px 30px; background: white; border-top: 1px solid #eaeaea; display: flex; gap: 12px; align-items: center; flex-shrink: 0; }
+        /* DEEP DIVE TOGGLE CSS */
+        .deep-dive-bar { padding: 12px 30px; background: white; border-top: 1px solid #eaeaea; display: flex; align-items: center; justify-content: flex-end; flex-shrink: 0; }
+        .switch { position: relative; display: inline-block; width: 40px; height: 22px; margin: 0; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
+        .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: #181d32; }
+        input:checked + .slider:before { transform: translateX(18px); }
+        .toggle-label { margin-left: 10px; font-weight: 600; font-size: 13px; color: #444; cursor: pointer; }
+
+        .chat-input-area { padding: 15px 30px 25px 30px; background: white; display: flex; gap: 12px; align-items: center; flex-shrink: 0; }
         .chat-input-area input { flex-grow: 1; padding: 14px 20px; border: 1px solid #ddd; border-radius: 30px; outline: none; font-size: 15px; background: #fafafa; }
         .chat-input-area input:focus { border-color: #181d32; background: white; }
         .chat-input-area button { background: #181d32; color: white; border: none; padding: 14px 28px; border-radius: 30px; cursor: pointer; font-weight: 600; font-size: 14px; white-space: nowrap; }
@@ -143,6 +152,15 @@
                 <p>Ask David about board governance, corporate strategy, or upload documents for analysis.</p>
             </div>
         </div>
+
+        <div class="deep-dive-bar">
+            <label class="switch" title="When enabled, David will read the ENTIRE selected document.">
+                <input type="checkbox" id="deepDiveToggle">
+                <span class="slider"></span>
+            </label>
+            <label for="deepDiveToggle" class="toggle-label" title="When enabled, David will read the ENTIRE selected document.">🤿 Deep Dive Mode</label>
+        </div>
+
         <div class="chat-input-area">
             <input type="text" id="chatInput" placeholder="Ask David a question..." onkeypress="if(event.key==='Enter')sendMessage()" />
             <button id="sendBtn" onclick="sendMessage()">Send</button>
@@ -252,11 +270,6 @@ async function initDashboard() {
 }
 
 // ==========================================
-// CONVERSATION LIST (SIDEBAR)
-// ==========================================
-
-
-// ==========================================
 // CREATE NEW CHAT
 // ==========================================
 async function startNewChat() {
@@ -306,7 +319,6 @@ async function loadConversationList(autoSelect = false) {
             item.className = 'chat-item' + (isActive ? ' active' : '');
             item.dataset.id = c.id;
             
-            // Clean the text so quotes don't break the HTML buttons
             const previewText = c.preview || "New conversation";
             const safePreview = escapeHtml(previewText);
             const escapedForFunc = safePreview.replace(/'/g, "\\'").replace(/"/g, "&quot;");
@@ -324,7 +336,6 @@ async function loadConversationList(autoSelect = false) {
             list.appendChild(item);
         });
 
-        // Auto-select most recent on login
         if (autoSelect && !currentConversationId && data.conversations.length > 0) {
             await switchChat(data.conversations[0].id);
         }
@@ -333,11 +344,12 @@ async function loadConversationList(autoSelect = false) {
     }
 }
 
+// ==========================================
 // RENAME CHAT
 // ==========================================
 async function renameChat(conversationId, currentTitle) {
     const newTitle = prompt("Enter a new name for this chat (leave blank to auto-generate):", currentTitle === 'New conversation' ? '' : currentTitle);
-    if (newTitle === null) return; // User clicked Cancel
+    if (newTitle === null) return;
 
     try {
         const res = await fetch(`/api/web/conversations/${conversationId}/title`, {
@@ -347,7 +359,7 @@ async function renameChat(conversationId, currentTitle) {
         });
         const data = await res.json();
         if (data.success) {
-            await loadConversationList(false); // Refresh sidebar to show new name
+            await loadConversationList(false); 
         } else {
             alert("Failed to rename chat.");
         }
@@ -357,11 +369,7 @@ async function renameChat(conversationId, currentTitle) {
 }
 
 // ==========================================
-// SWITCH BETWEEN CONVERSATIONS
-// ==========================================
-
-// ==========================================
-// SWITCH BETWEEN CONVERSATIONS
+// SWITCH CHAT
 // ==========================================
 async function switchChat(conversationId) {
     if (isLoadingChat) return;
@@ -370,7 +378,6 @@ async function switchChat(conversationId) {
     isLoadingChat = true;
     currentConversationId = conversationId;
 
-    // Highlight in sidebar
     document.querySelectorAll('.chat-item').forEach(el => {
         el.classList.toggle('active', el.dataset.id === conversationId);
     });
@@ -398,6 +405,7 @@ async function switchChat(conversationId) {
         isLoadingChat = false;
     }
 }
+
 // ==========================================
 // DELETE CHAT
 // ==========================================
@@ -435,20 +443,21 @@ async function sendMessage() {
         return;
     }
 
-    // Remove empty state
     const es = document.getElementById('emptyState');
     if (es) es.remove();
 
     addMessageToUI(message, 'user');
     inputField.value = "";
 
-    // Disable send while processing
     const sendBtn = document.getElementById('sendBtn');
     sendBtn.disabled = true;
     sendBtn.innerText = "...";
 
     const checkedBoxes = document.querySelectorAll('.doc-checkbox:checked');
     const selectedDocIds = Array.from(checkedBoxes).map(cb => cb.value);
+    
+    // 🤿 GRAB THE DEEP DIVE TOGGLE STATE
+    const isDeepDive = document.getElementById('deepDiveToggle').checked;
 
     try {
         const res = await fetch('/api/chat', {
@@ -458,7 +467,8 @@ async function sendMessage() {
                 userId: globalUserId,
                 message,
                 conversationId: currentConversationId,
-                selectedDocIds
+                selectedDocIds,
+                deepDive: isDeepDive // Sending to the backend!
             })
         });
         const data = await res.json();
@@ -466,7 +476,6 @@ async function sendMessage() {
         if (data.success) {
             addMessageToUI(data.reply, 'bot');
             if (data.conversationId) currentConversationId = data.conversationId;
-            // Refresh sidebar to update preview text
             loadConversationList(false);
         } else {
             console.error("Chat error response:", data);

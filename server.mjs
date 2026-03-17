@@ -15,8 +15,8 @@ const upload = multer({ storage: multer.memoryStorage() });
 const app = express();
 app.use(cors());
 app.use(express.static('public'));
-app.use(express.urlencoded({ extended: false }));
-app.use(express.json({ limit: "5mb" })); 
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
@@ -1059,7 +1059,7 @@ app.delete("/api/web/conversations/:id", async (req, res) => {
 // ==========================================
 app.post("/api/chat", async (req, res) => {
   try {
-    const { userId, message, selectedDocIds } = req.body;
+    const { userId, message, selectedDocIds, deepDive } = req.body; // 🤿 Catching Deep Dive
     let { conversationId } = req.body;
     if (!userId || !message) return res.status(400).json({ error: "Missing userId or message." });
 
@@ -1108,45 +1108,67 @@ app.post("/api/chat", async (req, res) => {
     // Knowledge base search
     const davidContext = await searchKnowledgeBase(message);
 
-    // User document vector search
+    // User document vector search OR Deep Dive
     let privateDocContext = "";
     const docIds = selectedDocIds || [];
+    let currentChatModel = OPENAI_MODEL; // Default to gpt-4o
+
     try {
-      let searchQuery = message;
-      const pastUserMsgs = webHistory.filter(h => h.role === 'user');
-      if (pastUserMsgs.length > 1) {
-        const lastQ = pastUserMsgs[pastUserMsgs.length - 2].content;
-        searchQuery = `${lastQ}. ${message}`;
-      }
+      if (deepDive && docIds.length > 0) {
+        // 🤿 DEEP DIVE MODE ACTIVATED
+        console.log("🤿 DEEP DIVE ACTIVATED! Fetching full documents...");
+        currentChatModel = "gpt-4o-mini"; // Swap to high-context model
 
-      const userEmb = await openai.embeddings.create({ model: "text-embedding-3-small", input: searchQuery });
-      let userChunks = [];
+        const { data: fullDocs, error: docErr } = await supabase
+          .from("user_documents")
+          .select("document_name, full_text")
+          .in("id", docIds)
+          .eq("user_id", userId);
 
-      if (docIds.length > 0) {
-        const { data } = await supabase.rpc('match_selected_user_chunks', {
-          query_embedding: userEmb.data[0].embedding,
-          match_threshold: -1, match_count: 6,
-          p_user_id: userId, p_document_ids: docIds
-        });
-        userChunks = data;
-        privateDocContext = "CRITICAL: The user selected specific documents. Base your answer primarily on these:\n";
+        if (fullDocs && fullDocs.length > 0) {
+          privateDocContext = "CRITICAL: DEEP DIVE MODE ACTIVATED. The user has provided the ENTIRE full text of the following documents. Read them carefully to answer the prompt:\n\n";
+          fullDocs.forEach(doc => {
+             privateDocContext += `=== START OF DOCUMENT: ${doc.document_name} ===\n${doc.full_text || "(No text found)"}\n=== END OF DOCUMENT ===\n\n`;
+          });
+        }
       } else {
-        const { data } = await supabase.rpc('match_user_chunks', {
-          query_embedding: userEmb.data[0].embedding,
-          match_threshold: 0.1, match_count: 4, p_user_id: userId
-        });
-        userChunks = data;
+        // 🔍 NORMAL RAG MODE
+        let searchQuery = message;
+        const pastUserMsgs = webHistory.filter(h => h.role === 'user');
+        if (pastUserMsgs.length > 1) {
+          const lastQ = pastUserMsgs[pastUserMsgs.length - 2].content;
+          searchQuery = `${lastQ}. ${message}`;
+        }
+
+        const userEmb = await openai.embeddings.create({ model: "text-embedding-3-small", input: searchQuery });
+        let userChunks = [];
+
+        if (docIds.length > 0) {
+          const { data } = await supabase.rpc('match_selected_user_chunks', {
+            query_embedding: userEmb.data[0].embedding,
+            match_threshold: -1, match_count: 6,
+            p_user_id: userId, p_document_ids: docIds
+          });
+          userChunks = data;
+          privateDocContext = "CRITICAL: The user selected specific documents. Base your answer primarily on these:\n";
+        } else {
+          const { data } = await supabase.rpc('match_user_chunks', {
+            query_embedding: userEmb.data[0].embedding,
+            match_threshold: 0.1, match_count: 4, p_user_id: userId
+          });
+          userChunks = data;
+          if (userChunks?.length > 0) {
+            privateDocContext = "Relevant excerpts from the user's uploaded documents:\n";
+          }
+        }
+
         if (userChunks?.length > 0) {
-          privateDocContext = "Relevant excerpts from the user's uploaded documents:\n";
+          userChunks.forEach(c => { privateDocContext += `\n[From: ${c.document_name}]\n${c.content}\n`; });
+        } else if (docIds.length > 0) {
+          privateDocContext += "\n(The selected document appears to have no readable text.)\n";
         }
       }
-
-      if (userChunks?.length > 0) {
-        userChunks.forEach(c => { privateDocContext += `\n[From: ${c.document_name}]\n${c.content}\n`; });
-      } else if (docIds.length > 0) {
-        privateDocContext += "\n(The selected document appears to have no readable text.)\n";
-      }
-    } catch (e) { console.error("Chunk search failed:", e); }
+    } catch (e) { console.error("Doc processing failed:", e); }
 
     // Build system prompt
     const cfg = await getBotConfig();
@@ -1168,7 +1190,7 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
 
     // Call OpenAI
     const completion = await openai.chat.completions.create({
-      model: OPENAI_MODEL,
+      model: currentChatModel, // 🤿 Uses standard or gpt-4o-mini depending on toggle
       messages: [
         { role: "system", content: systemPrompt },
         ...webHistory.slice(0, -1),
@@ -1208,7 +1230,7 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
       }).catch(e => console.error("Auto-title error:", e));
     }
       
-    // Update memory
+    // Update memory (Protected from Deep Dive flood!)
     updateMemorySummary({ oldSummary: user.memory_summary, userText: message, assistantText: reply, channelLabel: "WEB" })
       .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
       .catch(e => console.error("Memory update failed:", e));
@@ -1263,7 +1285,7 @@ app.post("/api/upload", upload.single("document"), async (req, res) => {
       .insert([{ 
         user_id: userId, 
         document_name: file.originalname, 
-        full_text: extractedText.substring(0, 30000)
+        full_text: extractedText
       }])
       .select()
       .single();
