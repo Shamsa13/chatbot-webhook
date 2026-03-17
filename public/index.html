@@ -188,7 +188,7 @@
 
         <div class="deep-dive-bar">
             <label class="switch">
-                <input type="checkbox" id="deepDiveToggle">
+                <input type="checkbox" id="deepDiveToggle" onchange="handleToggleChange(this)">
                 <span class="slider"></span>
             </label>
             <label for="deepDiveToggle" class="toggle-label">Deep Dive</label>
@@ -691,18 +691,30 @@ async function loadUserDocuments() {
     }
 }
 
-// 💾 Save selections and enforce 2-file limit
-function handleDocSelection(checkbox) {
+// Guard the Deep Dive Toggle
+function handleToggleChange(toggle) {
     const checkedBoxes = document.querySelectorAll('.doc-checkbox:checked');
     
-    // Enforce the 3 file limit
-    if (checkedBoxes.length > 2) {
-        alert("To ensure optimal AI performance, you can only select up to 3 documents at a time.");
+    // If they try to turn Deep Dive ON while > 2 docs are selected
+    if (toggle.checked && checkedBoxes.length > 2) {
+        alert("Deep Dive mode can only process up to 2 documents at a time. Please uncheck some documents first.");
+        toggle.checked = false; // Instantly flip the toggle back off
+    }
+}
+
+// Save selections and enforce dynamic limits
+function handleDocSelection(checkbox) {
+    const checkedBoxes = document.querySelectorAll('.doc-checkbox:checked');
+    const isDeepDive = document.getElementById('deepDiveToggle').checked;
+    
+    // Enforce the 2-file limit ONLY if Deep Dive is currently ON
+    if (isDeepDive && checkedBoxes.length > 2) {
+        alert("Deep Dive mode can only process a maximum of 2 documents at a time.");
         checkbox.checked = false; // Uncheck the box they just clicked
         return;
     }
 
-    // Save the current selections to LocalStorage
+    // Save the current selections to LocalStorage (works for unlimited docs if Deep Dive is OFF)
     const selectedDocIds = Array.from(document.querySelectorAll('.doc-checkbox:checked')).map(cb => cb.value);
     localStorage.setItem('david_saved_docs_' + globalUserId, JSON.stringify(selectedDocIds));
 }
