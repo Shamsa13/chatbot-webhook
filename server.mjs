@@ -236,31 +236,77 @@ async function callModel({ systemPrompt, profileContext, ragContext, memorySumma
 async function updateMemorySummary({ oldSummary, userText, assistantText, channelLabel = "UNKNOWN" }) {
   const today = new Date().toISOString().split('T')[0];
   const prompt = [
-    "You are a memory manager for an AI assistant. Maintain a concise profile of the user.",
+    "You are a memory manager for an AI assistant. You maintain a persistent, append-only fact profile about the user.",
     "",
-    "RULES:",
-    "1. Extract NEW specific facts from the conversation turn below.",
-    "2. MERGE duplicates: If the user already has a fact recorded and a newer version exists, UPDATE the line (don't keep both).",
-    "3. DELETE fluff: Remove greetings, small talk, generic questions, and anything that isn't a reusable fact.",
-    "4. NEVER DELETE: Name, email, company, role, strong preferences, or stated goals.",
-    "5. COMPRESS, DON'T FORGET: If the memory gets too long, do not just delete old facts. Instead, GROUP related facts into single, dense summary lines (e.g., merge 3 lines about family into 1 line).",
-    "6. Keep the TOTAL output under 100 lines.",
+    "=== ABSOLUTE RULES ===",
     "",
-    "FORMAT: Each line must be: [CHANNEL] [YYYY-MM-DD] [TAG] Fact",
-    `Use [${channelLabel}] and [${today}] for any new lines.`,
-    "Tags: [NAME] [EMAIL] [COMPANY] [ROLE] [FACT] [PREFERENCE] [GOAL] [ACTION]",
+    "RULE 1 — NEVER DELETE OLD FACTS.",
+    "Your #1 job is to PRESERVE every single line from EXISTING MEMORY below. Start by copying ALL existing lines into your output FIRST, then evaluate the new turn.",
     "",
-    "EXISTING MEMORY:",
-    oldSummary || "(empty)",
+    "RULE 2 — ONLY ADD genuinely useful, reusable personal facts.",
+    "Good facts: name, email, job title, company, family details, preferences, goals, opinions, project details, decisions, important dates.",
+    "BAD (skip these entirely): greetings, small talk, 'how are you', requests for transcripts, asking the bot to do something generic, 'thanks', 'bye', conversation logistics.",
     "",
-    "NEW TURN:",
+    "RULE 3 — NO DUPLICATES. Before adding a new line, scan the existing memory.",
+    "- If the fact already exists with the same value, DO NOT add it again.",
+    "- If a fact CHANGED (e.g., favorite color changed from red to blue), UPDATE the existing line to reflect the new value AND append a note like '(previously: red)'. Do NOT delete the line and re-add it — modify it in place.",
+    "",
+    "RULE 4 — TRACK CHANGES, DON'T ERASE HISTORY.",
+    "When a fact changes, keep the history inline. Example:",
+    "  BEFORE: [SMS] [2025-01-10] [PREFERENCE] Favorite color: red",
+    "  AFTER:  [SMS] [2025-06-15] [PREFERENCE] Favorite color: blue (previously: red, as of 2025-01-10)",
+    "",
+    "RULE 5 — COMPRESSION (only when over 100 lines).",
+    "If the total output exceeds 100 lines, merge RELATED facts into denser summary lines. Never discard facts — compress them.",
+    "Example: Three lines about family → one line: 'Has wife named Sarah, two kids (ages 5 and 8), lives in Toronto'",
+    "",
+    "RULE 6 — FORMAT.",
+    "Each line: [CHANNEL] [YYYY-MM-DD] [TAG] Fact text",
+    `For any NEW lines, use [${channelLabel}] and [${today}].`,
+    "Tags: [NAME] [EMAIL] [COMPANY] [ROLE] [FACT] [PREFERENCE] [GOAL] [ACTION] [FAMILY] [LOCATION] [PROJECT]",
+    "",
+    "=== EXISTING MEMORY (PRESERVE ALL OF THIS) ===",
+    oldSummary || "(empty — this is a brand new user)",
+    "",
+    "=== NEW CONVERSATION TURN ===",
     "User: " + userText,
     "Assistant: " + assistantText,
     "",
-    "Return the updated memory. Be ruthlessly efficient."
+    "=== YOUR TASK ===",
+    "1. Copy ALL existing memory lines to your output.",
+    "2. Check the new turn for useful facts (per Rule 2).",
+    "3. If a new fact matches an existing line, update it in place (per Rule 3 & 4).",
+    "4. If a new fact is genuinely new, append it at the bottom.",
+    "5. If nothing useful is in the new turn, return the existing memory UNCHANGED.",
+    "6. Return ONLY the memory lines. No commentary, no headers, no explanations."
   ].join("\n");
-  const resp = await openai.chat.completions.create({ model: OPENAI_MEMORY_MODEL, messages: [{ role: "system", content: prompt }] });
-  return (resp?.choices?.[0]?.message?.content || "").trim();
+
+  const resp = await openai.chat.completions.create({
+    model: OPENAI_MEMORY_MODEL,
+    messages: [{ role: "system", content: prompt }]
+  });
+  
+  const newMemory = (resp?.choices?.[0]?.message?.content || "").trim();
+  
+  // Safety check: if the model returned something drastically shorter than what we had,
+  // it probably dropped facts. Keep the old memory and append any new lines.
+  if (oldSummary && oldSummary.length > 100 && newMemory.length < oldSummary.length * 0.5) {
+    console.warn("⚠️ MEMORY SAFETY: New summary is suspiciously shorter than old. Keeping old memory intact.");
+    
+    // Try to extract just the NEW lines the model added
+    const oldLines = new Set(oldSummary.split('\n').map(l => l.trim().toLowerCase()).filter(Boolean));
+    const newLines = newMemory.split('\n').filter(l => {
+      const trimmed = l.trim().toLowerCase();
+      return trimmed && !oldLines.has(trimmed);
+    });
+    
+    if (newLines.length > 0) {
+      return oldSummary + "\n" + newLines.join("\n");
+    }
+    return oldSummary; // Nothing new, keep as-is
+  }
+  
+  return newMemory;
 }
 
 function extractElevenTranscript(body) {
