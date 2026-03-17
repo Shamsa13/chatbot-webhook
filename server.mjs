@@ -1378,8 +1378,8 @@ app.post("/api/chat", async (req, res) => {
       content: m.text || ""
     }));
 
-    // Fetch user profile
-          .from("users")const { data: userDb } = await supabase
+    // Fetch user profile AND recent summaries
+    const { data: userDb } = await supabase
       .from("users")
       .select("full_name, email, memory_summary, phone")
       .eq("id", userId)
@@ -1387,7 +1387,9 @@ app.post("/api/chat", async (req, res) => {
 
     const user = userDb;
     if (!user) throw new Error("User not found");
-    const recentSummaries = await getRecentConversationSummaries(userId, 5);
+
+    const recentSummaries = await getRecentConversationSummaries(userId, 5);  
+
     // Run web profile extractor in background
     webProfileExtractor(userId, message, user.full_name, user.email).catch(e => console.error("Web extractor:", e));
 
