@@ -20,10 +20,11 @@
         .iti { width: 100%; text-align: left; margin: 15px 0; }
         .iti__input { width: 100% !important; padding: 12px !important; padding-left: 50px !important; border: 1px solid #ddd; border-radius: 6px; font-size: 16px; box-sizing: border-box; }
 
-        /* WIDENED DASHBOARD */
-        #dashboardContainer { display: none; width: 95%; max-width: 1400px; height: 90vh; background: white; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.08); overflow: hidden; flex-direction: row; }
+        /* WIDENED 3-COLUMN DASHBOARD */
+        #dashboardContainer { display: none; width: 98%; max-width: 1600px; height: 92vh; background: white; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.08); overflow: hidden; flex-direction: row; }
 
-        .sidebar { width: 280px; min-width: 280px; background: #181d32; color: white; display: flex; flex-direction: column; overflow: hidden; }
+        /* LEFT SIDEBAR (Chats) */
+        .sidebar { width: 260px; min-width: 260px; background: #181d32; color: white; display: flex; flex-direction: column; overflow: hidden; }
         .sidebar-header { padding: 20px; }
         .sidebar-brand { font-family: 'Playfair Display', serif; font-size: 20px; color: #fff; margin-bottom: 15px; }
         .new-chat-btn { background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.15); padding: 11px 16px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500; width: 100%; text-align: left; display: flex; align-items: center; gap: 8px; transition: 0.2s; }
@@ -48,23 +49,7 @@
         .chat-delete-btn:hover { background: rgba(255,0,0,0.15); color: #ff4c4c; }
         .chat-actions-container { display: flex; gap: 2px; flex-shrink: 0; }
 
-        .sidebar-divider { border: none; border-top: 1px solid #252b48; margin: 4px 0; }
-
-        .docs-section { padding: 4px 12px 8px 12px; overflow-y: auto; max-height: 220px; }
-        .docs-section::-webkit-scrollbar { width: 5px; }
-        .docs-section::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
-        .doc-row { display: flex; justify-content: space-between; align-items: flex-start; padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
-        .doc-label { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: #ccc; cursor: pointer; flex-grow: 1; }
-        .doc-name { color: white; font-weight: 500; font-size: 12px; }
-        .doc-date { font-size: 10px; color: #666; display: block; }
-        .doc-del { background: transparent; border: none; color: #ff4c4c; cursor: pointer; font-size: 14px; padding: 0 4px; }
-
-        .upload-box { padding: 12px 20px 16px 20px; border-top: 1px solid #252b48; margin-top: auto; }
-        .upload-box input[type="file"] { margin-bottom: 8px; width: 100%; font-size: 11px; color: #ccc; }
-        .upload-btn { background: #fff; color: #181d32; border: none; padding: 10px; border-radius: 6px; cursor: pointer; width: 100%; font-weight: 600; font-size: 13px; }
-        .upload-btn:hover { background: #e0e0e0; }
-        #uploadStatus { font-size: 11px; margin-top: 6px; color: #aaa; text-align: center; }
-
+        /* CENTER CHAT AREA */
         .chat-area { flex: 1; display: flex; flex-direction: column; background: #fff; min-width: 0; }
         .chat-header { padding: 16px 30px; background: white; border-bottom: 1px solid #eaeaea; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
         .header-title { font-family: 'Playfair Display', serif; font-weight: 600; font-size: 22px; color: #181d32; }
@@ -85,15 +70,20 @@
         .empty-state h3 { font-family: 'Playfair Display', serif; color: #999; font-size: 20px; margin-bottom: 8px; }
         .empty-state p { font-size: 14px; max-width: 400px; line-height: 1.6; }
 
-        /* DEEP DIVE TOGGLE CSS */
-        .deep-dive-bar { padding: 12px 30px; background: white; border-top: 1px solid #eaeaea; display: flex; align-items: center; justify-content: flex-end; flex-shrink: 0; }
+        /* DEEP DIVE TOGGLE CSS WITH TOOLTIP */
+        .deep-dive-bar { padding: 12px 30px; background: white; border-top: 1px solid #eaeaea; display: flex; align-items: center; justify-content: flex-end; flex-shrink: 0; gap: 10px; }
         .switch { position: relative; display: inline-block; width: 40px; height: 22px; margin: 0; }
         .switch input { opacity: 0; width: 0; height: 0; }
         .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
         .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
         input:checked + .slider { background-color: #181d32; }
         input:checked + .slider:before { transform: translateX(18px); }
-        .toggle-label { margin-left: 10px; font-weight: 600; font-size: 13px; color: #444; cursor: pointer; }
+        .toggle-label { font-weight: 600; font-size: 13px; color: #444; cursor: pointer; }
+
+        .tooltip-container { position: relative; display: inline-block; cursor: help; color: #888; border-bottom: 1px dotted #888; font-size: 12px; }
+        .tooltip-text { visibility: hidden; width: 260px; background-color: #181d32; color: #fff; text-align: center; border-radius: 6px; padding: 10px; position: absolute; z-index: 10; bottom: 130%; left: 50%; margin-left: -130px; opacity: 0; transition: opacity 0.3s; font-size: 12px; line-height: 1.5; font-weight: 400; box-shadow: 0 4px 10px rgba(0,0,0,0.15); }
+        .tooltip-text::after { content: ""; position: absolute; top: 100%; left: 50%; margin-left: -5px; border-width: 5px; border-style: solid; border-color: #181d32 transparent transparent transparent; }
+        .tooltip-container:hover .tooltip-text { visibility: visible; opacity: 1; }
 
         .chat-input-area { padding: 15px 30px 25px 30px; background: white; display: flex; gap: 12px; align-items: center; flex-shrink: 0; }
         .chat-input-area input { flex-grow: 1; padding: 14px 20px; border: 1px solid #ddd; border-radius: 30px; outline: none; font-size: 15px; background: #fafafa; }
@@ -101,9 +91,59 @@
         .chat-input-area button { background: #181d32; color: white; border: none; padding: 14px 28px; border-radius: 30px; cursor: pointer; font-weight: 600; font-size: 14px; white-space: nowrap; }
         .chat-input-area button:hover { background: #252b48; }
         .chat-input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* RIGHT SIDEBAR (Memory Bank) */
+        .right-sidebar { width: 320px; min-width: 320px; background: #111424; color: white; display: flex; flex-direction: column; border-left: 1px solid #252b48; }
+        .right-header { padding: 20px; font-family: 'Playfair Display', serif; font-size: 18px; color: #fff; display: flex; align-items: center; justify-content: space-between; }
+        
+        .search-container { padding: 0 16px 12px 16px; position: relative; }
+        .search-container input { width: 100%; padding: 10px 14px 10px 32px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color: white; font-size: 13px; outline: none; transition: 0.2s; }
+        .search-container input:focus { border-color: rgba(255,255,255,0.3); background: rgba(255,255,255,0.08); }
+        .search-container input::placeholder { color: #888; }
+        .search-icon { position: absolute; left: 26px; top: 11px; color: #888; font-size: 12px; }
+
+        .docs-section { flex: 1; overflow-y: auto; padding: 0 8px; }
+        .docs-section::-webkit-scrollbar { width: 5px; }
+        .docs-section::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+        
+        .doc-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-radius: 6px; position: relative; margin-bottom: 2px; }
+        .doc-row:hover { background: rgba(255,255,255,0.06); }
+        
+        .doc-label { display: flex; align-items: center; gap: 10px; cursor: pointer; flex-grow: 1; overflow: hidden; }
+        
+        /* FILE ICONS */
+        .doc-icon { width: 24px; height: 28px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: bold; flex-shrink: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+        .icon-pdf { background: linear-gradient(135deg, #e53935, #b71c1c); color: white; }
+        .icon-doc { background: linear-gradient(135deg, #1e88e5, #0d47a1); color: white; }
+        .icon-txt { background: linear-gradient(135deg, #757575, #424242); color: white; }
+        
+        .doc-info { display: flex; flex-direction: column; overflow: hidden; }
+        .doc-name { color: #eaeaea; font-weight: 500; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .doc-date { font-size: 10px; color: #777; margin-top: 2px; }
+
+        /* 3 DOTS MENU */
+        .doc-menu-wrapper { position: relative; }
+        .doc-menu-btn { background: transparent; border: none; color: #888; cursor: pointer; font-size: 16px; padding: 4px 8px; border-radius: 4px; opacity: 0; transition: 0.2s; line-height: 1; }
+        .doc-row:hover .doc-menu-btn { opacity: 1; }
+        .doc-menu-btn:hover { background: rgba(255,255,255,0.1); color: white; }
+        
+        .doc-dropdown { position: absolute; right: 0; top: 25px; background: #252b48; border: 1px solid #3d4363; border-radius: 6px; box-shadow: 0 6px 16px rgba(0,0,0,0.3); display: none; flex-direction: column; z-index: 100; min-width: 120px; overflow: hidden; }
+        .doc-dropdown.show { display: flex; }
+        .doc-dropdown button { background: transparent; border: none; color: #ddd; padding: 10px 14px; text-align: left; font-size: 13px; cursor: pointer; transition: 0.2s; }
+        .doc-dropdown button:hover { background: rgba(255,255,255,0.08); color: white; }
+        .doc-dropdown button.delete-btn { color: #ff6b6b; border-top: 1px solid rgba(255,255,255,0.05); }
+        .doc-dropdown button.delete-btn:hover { background: rgba(255,0,0,0.15); color: #ff4c4c; }
+
+        .upload-box { padding: 16px 20px; border-top: 1px solid #252b48; background: #15182a; }
+        .upload-box input[type="file"] { margin-bottom: 10px; width: 100%; font-size: 11px; color: #aaa; }
+        .upload-box input[type="file"]::file-selector-button { background: rgba(255,255,255,0.1); color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-right: 10px; transition: 0.2s; }
+        .upload-box input[type="file"]::file-selector-button:hover { background: rgba(255,255,255,0.2); }
+        .upload-btn { background: white; color: #111424; border: none; padding: 12px; border-radius: 6px; cursor: pointer; width: 100%; font-weight: 600; font-size: 13px; transition: 0.2s; }
+        .upload-btn:hover { background: #e0e0e0; }
+        #uploadStatus { font-size: 11px; margin-top: 8px; color: #aaa; text-align: center; }
     </style>
 </head>
-<body>
+<body onclick="closeAllDropdowns()">
 
 <div id="loginContainer">
     <h2 style="color: #181d32; margin-bottom: 5px;">David Beatty AI</h2>
@@ -128,14 +168,6 @@
         <hr class="sidebar-divider"/>
         <div class="sidebar-label">Chat History</div>
         <div class="chat-list" id="chatList"></div>
-        <hr class="sidebar-divider"/>
-        <div class="sidebar-label">Memory Bank</div>
-        <div class="docs-section" id="documentList"><div style="padding:8px 8px;color:#555;font-size:12px;">No documents yet.</div></div>
-        <div class="upload-box">
-            <input type="file" id="fileInput" accept=".pdf,.docx,.txt" />
-            <button class="upload-btn" onclick="uploadDocument()" id="uploadBtn">Upload Document</button>
-            <div id="uploadStatus"></div>
-        </div>
     </div>
 
     <div class="chat-area">
@@ -154,16 +186,41 @@
         </div>
 
         <div class="deep-dive-bar">
-            <label class="switch" title="When enabled, David will read the ENTIRE selected document.">
+            <label class="switch">
                 <input type="checkbox" id="deepDiveToggle">
                 <span class="slider"></span>
             </label>
-            <label for="deepDiveToggle" class="toggle-label" title="When enabled, David will read the ENTIRE selected document.">🤿 Deep Dive Mode</label>
+            <label for="deepDiveToggle" class="toggle-label">Deep Dive Mode</label>
+            <div class="tooltip-container">
+                ⓘ What is this?
+                <span class="tooltip-text"><b>Deep Dive</b> forces the AI to read the ENTIRE text of selected documents from start to finish, bypassing search chunks. Best for summaries of long PDFs. <br><br><i>Note: Slower processing time.</i></span>
+            </div>
         </div>
 
         <div class="chat-input-area">
             <input type="text" id="chatInput" placeholder="Ask David a question..." onkeypress="if(event.key==='Enter')sendMessage()" />
             <button id="sendBtn" onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+
+    <div class="right-sidebar">
+        <div class="right-header">
+            Memory Bank
+        </div>
+        
+        <div class="search-container">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="docSearch" placeholder="Search documents..." onkeyup="filterDocs()" />
+        </div>
+
+        <div class="docs-section" id="documentList">
+            <div style="padding:15px;color:#666;font-size:13px;text-align:center;">No documents yet.</div>
+        </div>
+
+        <div class="upload-box">
+            <input type="file" id="fileInput" accept=".pdf,.docx,.txt" />
+            <button class="upload-btn" onclick="uploadDocument()" id="uploadBtn">Upload Document</button>
+            <div id="uploadStatus"></div>
         </div>
     </div>
 </div>
@@ -285,7 +342,6 @@ async function startNewChat() {
             document.getElementById('chatMessages').innerHTML = "";
             showEmptyState();
             await loadConversationList(false);
-            // Highlight the new chat
             document.querySelectorAll('.chat-item').forEach(el => {
                 el.classList.toggle('active', el.dataset.id === currentConversationId);
             });
@@ -345,12 +401,11 @@ async function loadConversationList(autoSelect = false) {
 }
 
 // ==========================================
-// RENAME CHAT
+// RENAME & SWITCH CHAT
 // ==========================================
 async function renameChat(conversationId, currentTitle) {
     const newTitle = prompt("Enter a new name for this chat (leave blank to auto-generate):", currentTitle === 'New conversation' ? '' : currentTitle);
     if (newTitle === null) return;
-
     try {
         const res = await fetch(`/api/web/conversations/${conversationId}/title`, {
             method: 'PUT',
@@ -360,17 +415,10 @@ async function renameChat(conversationId, currentTitle) {
         const data = await res.json();
         if (data.success) {
             await loadConversationList(false); 
-        } else {
-            alert("Failed to rename chat.");
-        }
-    } catch (e) {
-        console.error("Rename error:", e);
-    }
+        } else alert("Failed to rename chat.");
+    } catch (e) { console.error("Rename error:", e); }
 }
 
-// ==========================================
-// SWITCH CHAT
-// ==========================================
 async function switchChat(conversationId) {
     if (isLoadingChat) return;
     if (conversationId === currentConversationId && document.getElementById('chatMessages').children.length > 0) return;
@@ -406,9 +454,6 @@ async function switchChat(conversationId) {
     }
 }
 
-// ==========================================
-// DELETE CHAT
-// ==========================================
 async function deleteChat(conversationId) {
     if (!confirm("Delete this conversation permanently?")) return;
     try {
@@ -426,9 +471,7 @@ async function deleteChat(conversationId) {
             }
             await loadConversationList(currentConversationId === null);
         }
-    } catch (e) { 
-        console.error("Delete chat error:", e); 
-    }
+    } catch (e) { console.error("Delete chat error:", e); }
 }
 
 // ==========================================
@@ -455,8 +498,6 @@ async function sendMessage() {
 
     const checkedBoxes = document.querySelectorAll('.doc-checkbox:checked');
     const selectedDocIds = Array.from(checkedBoxes).map(cb => cb.value);
-    
-    // 🤿 GRAB THE DEEP DIVE TOGGLE STATE
     const isDeepDive = document.getElementById('deepDiveToggle').checked;
 
     try {
@@ -468,7 +509,7 @@ async function sendMessage() {
                 message,
                 conversationId: currentConversationId,
                 selectedDocIds,
-                deepDive: isDeepDive // Sending to the backend!
+                deepDive: isDeepDive
             })
         });
         const data = await res.json();
@@ -489,9 +530,6 @@ async function sendMessage() {
     sendBtn.innerText = "Send";
 }
 
-// ==========================================
-// UI HELPERS
-// ==========================================
 function addMessageToUI(text, sender) {
     const msgContainer = document.getElementById('chatMessages');
     const es = document.getElementById('emptyState');
@@ -524,8 +562,69 @@ function escapeHtml(text) {
 }
 
 // ==========================================
-// DOCUMENT MANAGEMENT
+// DOCUMENT MANAGEMENT (RIGHT SIDEBAR)
 // ==========================================
+function getFileIcon(filename) {
+    const ext = filename.split('.').pop().toLowerCase();
+    if(ext === 'pdf') return `<div class="doc-icon icon-pdf">PDF</div>`;
+    if(ext === 'docx' || ext === 'doc') return `<div class="doc-icon icon-doc">DOC</div>`;
+    return `<div class="doc-icon icon-txt">TXT</div>`;
+}
+
+function filterDocs() {
+    const query = document.getElementById('docSearch').value.toLowerCase();
+    const rows = document.querySelectorAll('.doc-row');
+    rows.forEach(row => {
+        const text = row.querySelector('.doc-name').innerText.toLowerCase();
+        row.style.display = text.includes(query) ? "flex" : "none";
+    });
+}
+
+function toggleDocMenu(event, docId) {
+    event.stopPropagation();
+    event.preventDefault();
+    // Close others
+    document.querySelectorAll('.doc-dropdown').forEach(d => {
+        if (d.id !== 'menu-' + docId) d.classList.remove('show');
+    });
+    // Toggle current
+    document.getElementById('menu-' + docId).classList.toggle('show');
+}
+
+function closeAllDropdowns() {
+    document.querySelectorAll('.doc-dropdown').forEach(d => d.classList.remove('show'));
+}
+
+async function renameDocument(docId, oldName) {
+    const newName = prompt("Enter a new name for this document:", oldName);
+    if (!newName || newName.trim() === oldName) return;
+    
+    try {
+        const res = await fetch(`/api/documents/${docId}/name`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: globalUserId, newName: newName.trim() })
+        });
+        const data = await res.json();
+        if (data.success) {
+            loadUserDocuments();
+        } else alert("Failed to rename document.");
+    } catch (e) { console.error("Rename doc error:", e); }
+}
+
+async function deleteDocument(docId) {
+    if (!confirm("Are you sure? This will delete the document and all of its memory chunks permanently.")) return;
+    try {
+        const res = await fetch("/api/documents/" + docId, {
+            method: 'DELETE', 
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: globalUserId })
+        });
+        const data = await res.json();
+        if (data.success) loadUserDocuments();
+    } catch (e) { console.error("Delete doc error:", e); }
+}
+
 async function loadUserDocuments() {
     if (!globalUserId) return;
     try {
@@ -536,45 +635,42 @@ async function loadUserDocuments() {
         if (data.success && data.documents && data.documents.length > 0) {
             list.innerHTML = "";
             data.documents.forEach(doc => {
-                const shortName = doc.document_name.length > 20 ? doc.document_name.substring(0, 18) + '...' : doc.document_name;
                 let dateStr = "";
                 if (doc.uploaded_at) {
                     const d = new Date(doc.uploaded_at);
                     dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
                 }
+                
+                const safeName = escapeHtml(doc.document_name);
+                const escapedForFunc = safeName.replace(/'/g, "\\'").replace(/"/g, "&quot;");
+
                 list.innerHTML += `
                     <div class="doc-row">
-                        <label class="doc-label">
+                        <label class="doc-label" title="${safeName}">
                             <input type="checkbox" class="doc-checkbox" value="${doc.id}" style="margin-top:2px;" />
-                            <div>
-                                <span class="doc-name" title="${escapeHtml(doc.document_name)}">${escapeHtml(shortName)}</span>
+                            ${getFileIcon(doc.document_name)}
+                            <div class="doc-info">
+                                <span class="doc-name">${safeName}</span>
                                 <span class="doc-date">${dateStr}</span>
                             </div>
                         </label>
-                        <button class="doc-del" onclick="deleteDocument('${doc.id}')" title="Delete">×</button>
+                        
+                        <div class="doc-menu-wrapper">
+                            <button class="doc-menu-btn" onclick="toggleDocMenu(event, '${doc.id}')">⋮</button>
+                            <div class="doc-dropdown" id="menu-${doc.id}">
+                                <button onclick="renameDocument('${doc.id}', '${escapedForFunc}')">Rename File</button>
+                                <button class="delete-btn" onclick="deleteDocument('${doc.id}')">Delete Source</button>
+                            </div>
+                        </div>
                     </div>
                 `;
             });
+            filterDocs(); // Re-apply search filter if actively typing
         } else {
-            list.innerHTML = '<div style="padding:8px;color:#555;font-size:12px;">No documents yet.</div>';
+            list.innerHTML = '<div style="padding:20px;color:#666;font-size:13px;text-align:center;">No documents yet.</div>';
         }
     } catch (e) { 
         console.error("Failed to load docs:", e); 
-    }
-}
-
-async function deleteDocument(docId) {
-    if (!confirm("Delete this document permanently?")) return;
-    try {
-        const res = await fetch("/api/documents/" + docId, {
-            method: 'DELETE', 
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: globalUserId })
-        });
-        const data = await res.json();
-        if (data.success) loadUserDocuments();
-    } catch (e) { 
-        console.error("Delete doc error:", e); 
     }
 }
 
@@ -591,8 +687,8 @@ async function uploadDocument() {
     formData.append("userId", globalUserId);
     formData.append("document", fileInput.files[0]);
 
-    status.innerText = "Analyzing...";
-    status.style.color = "#ccc";
+    status.innerText = "Analyzing and building memory chunks...";
+    status.style.color = "#888";
     btn.disabled = true;
     btn.innerText = "Uploading...";
 
@@ -600,10 +696,11 @@ async function uploadDocument() {
         const res = await fetch('/api/upload', { method: 'POST', body: formData });
         const data = await res.json();
         if (data.success) {
-            status.innerText = "✅ Saved";
+            status.innerText = "✅ Saved and Memorized";
             status.style.color = "#4CAF50";
             fileInput.value = "";
             loadUserDocuments();
+            setTimeout(() => { status.innerText = ""; }, 3000);
         } else { 
             status.innerText = "❌ " + data.error; 
             status.style.color = "#ff4c4c"; 

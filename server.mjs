@@ -25,7 +25,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const GOOGLE_SCRIPT_WEBHOOK_URL = process.env.GOOGLE_SCRIPT_WEBHOOK_URL || "";
-const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o";
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.4";
 const OPENAI_MEMORY_MODEL = process.env.OPENAI_MEMORY_MODEL || "gpt-4o-mini";
 
 if (!SUPABASE_URL || !SUPABASE_SECRET_KEY) console.error("Missing SUPABASE_URL or SUPABASE_SECRET_KEY");
@@ -1358,6 +1358,10 @@ app.delete("/api/documents/:id", async (req, res) => {
 
     if (!docId || !userId) return res.status(400).json({ error: "Missing docId or userId" });
 
+    // 1. Delete all RAG chunks from the vector database first
+    await supabase.from("user_document_chunks").delete().eq("document_id", docId);
+
+    // 2. Delete the main document record
     const { error } = await supabase
       .from("user_documents")
       .delete()
@@ -1365,10 +1369,32 @@ app.delete("/api/documents/:id", async (req, res) => {
       .eq("user_id", userId);
 
     if (error) throw error;
-    res.json({ success: true, message: "Document completely deleted." });
+    res.json({ success: true, message: "Document and all memory chunks completely deleted." });
   } catch (err) {
     console.error("Delete Doc Error:", err);
     res.status(500).json({ error: "Failed to delete document." });
+  }
+});
+
+// Rename a document
+app.put("/api/documents/:id/name", async (req, res) => {
+  try {
+    const docId = req.params.id;
+    const { userId, newName } = req.body;
+    
+    if (!docId || !userId || !newName) return res.status(400).json({ error: "Missing parameters" });
+
+    const { error } = await supabase
+      .from("user_documents")
+      .update({ document_name: newName.trim() })
+      .eq("id", docId)
+      .eq("user_id", userId);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Rename Doc Error:", err);
+    res.status(500).json({ error: "Failed to rename document." });
   }
 });
 
