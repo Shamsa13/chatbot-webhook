@@ -104,6 +104,50 @@ async function getBotConfig() {
   return { systemPrompt: (data?.system_prompt || "").trim() };
 }
 
+async function saveConversationSummary(userId, conversationId, channel, userText, assistantText) {
+  const prompt = `Summarize this conversation in 3-5 sentences. 
+  Include: what the user wanted, what was discussed, any decisions made, any follow-up actions.
+  Be specific enough that someone could recall the conversation from this summary alone.
+  
+  Conversation:
+  User: ${userText}
+  Assistant: ${assistantText}`;
+
+  const resp = await openai.chat.completions.create({
+    model: OPENAI_MEMORY_MODEL,
+    messages: [{ role: "system", content: prompt }]
+  });
+
+  const summary = resp.choices[0].message.content;
+
+  await supabase.from("conversation_summaries").insert({
+    user_id: userId,
+    conversation_id: conversationId,
+    channel: channel,
+    summary: summary,
+    created_at: new Date().toISOString()
+  });
+  
+  console.log(`💾 Saved conversation summary for ${channel}: ${summary.substring(0, 80)}...`);
+}
+async function getRecentConversationSummaries(userId, limit = 5) {
+  const { data, error } = await supabase
+    .from("conversation_summaries")
+    .select("channel, summary, created_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error || !data || data.length === 0) return "";
+
+  return "Recent conversation history:\n" + data.map((s, i) => {
+    const date = new Date(s.created_at).toLocaleDateString('en-US', { 
+      weekday: 'long', month: 'short', day: 'numeric' 
+    });
+    const platform = s.channel.toUpperCase();
+    return `${i + 1}. [${platform} - ${date}]: ${s.summary}`;
+  }).join("\n\n");
+}
 async function searchKnowledgeBase(userText) {
   console.log("  -> [KB Tracer] 1. Requesting embeddings from OpenAI...");
   try {
@@ -290,7 +334,7 @@ async function updateMemorySummary({ oldSummary, userText, assistantText, channe
   
   // Safety check: if the model returned something drastically shorter than what we had,
   // it probably dropped facts. Keep the old memory and append any new lines.
-  if (oldSummary && oldSummary.length > 100 && newMemory.length < oldSummary.length * 0.5) {
+  if (oldSummary && oldSummary.length > 100 && newMemory.length < oldSummary.length * 0.9) {
     console.warn("⚠️ MEMORY SAFETY: New summary is suspiciously shorter than old. Keeping old memory intact.");
     
     // Try to extract just the NEW lines the model added
@@ -681,9 +725,15 @@ app.post("/twilio/sms", async (req, res) => {
       }).catch(e => console.error("Intent error:", e));
     }
 
-    updateMemorySummary({ oldSummary: memorySummary, userText: body, assistantText: cleanReplyText, channelLabel: "SMS" })
-      .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
-      .catch(e => console.error("Memory error:", e));
+    // Update compressed memory facts
+updateMemorySummary({ oldSummary: memorySummary, userText: body, assistantText: cleanReplyText, channelLabel: "SMS" })
+  .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
+  .catch(e => console.error("Memory error:", e));
+
+// Save/update conversation summary for this SMS session
+const smsTranscript = `User: ${body}\nAssistant: ${cleanReplyText}`;
+saveConversationSummary(userId, conversationId, "sms", smsTranscript)
+  .catch(e => console.error("SMS summary error:", e));    
 
   } catch (err) {
     console.error("ERROR sms", err.message);
@@ -736,7 +786,13 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
     }
 
     const userDocs = await getUserDocumentsContext(userId);
-    const fullVoiceMemory = memorySummary ? (memorySummary + "\n\n" + userDocs) : userDocs || "No previous memory.";
+const conversationSummaries = await getRecentConversationSummaries(userId, 8);
+
+const fullVoiceMemory = [
+  memorySummary || "",
+  userDocs || "",
+  conversationSummaries || ""
+].filter(Boolean).join("\n\n") || "No previous memory.";    
 
     const hasValidEmail = userRecord?.email && userRecord.email.toLowerCase() !== 'null' && userRecord.email.trim() !== '';
     const transcriptInstruction = hasValidEmail
@@ -746,6 +802,7 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
     return res.status(200).json({ 
       dynamic_variables: { 
         memory_summary: fullVoiceMemory, 
+        conversation_history: conversationSummaries || "No previous conversations.",
         caller_phone: phone, 
         channel: "call", 
         recent_history: formatRecentHistoryForCall(history) || "No recent history.", 
@@ -825,14 +882,20 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
     checkAndSendVCard(userId, phone).catch(e => console.error("vCard error", e));
 
     const oldSummary = await getUserMemorySummary(userId);
-    updateMemorySummary({ 
-      oldSummary, 
-      userText: `(VOICE CALL INITIATED)`, 
-      assistantText: `(VOICE CALL TRANSCRIPT SUMMARY)\n${transcriptText}`, 
-      channelLabel: "VOICE" 
-    }).then(async (newSummary) => { 
-      if (newSummary) await setUserMemorySummary(userId, newSummary); 
-    }).catch(e => console.error("Memory err", e));
+    // Update compressed memory facts
+updateMemorySummary({ 
+  oldSummary, 
+  userText: `(VOICE CALL INITIATED)`, 
+  assistantText: `(VOICE CALL TRANSCRIPT SUMMARY)\n${transcriptText}`, 
+  channelLabel: "VOICE" 
+}).then(async (newSummary) => { 
+  if (newSummary) await setUserMemorySummary(userId, newSummary); 
+}).catch(e => console.error("Memory err", e));
+
+// Save rich conversation summary for this call
+const callConversationId = await getOrCreateConversation(userId, "call");
+saveConversationSummary(userId, callConversationId, "call", transcriptText)
+  .catch(e => console.error("Call summary error:", e));
 
     const transcriptId = data?.conversation_id || body?.conversation_id;
     console.log("🆔 Transcript/Conversation ID:", transcriptId || "NONE");
@@ -1336,10 +1399,19 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
     }
       
     // Update memory (Protected from Deep Dive flood!)
-    updateMemorySummary({ oldSummary: user.memory_summary, userText: message, assistantText: reply, channelLabel: "WEB" })
-      .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
-      .catch(e => console.error("Memory update failed:", e));
+    // Update compressed memory facts
+updateMemorySummary({ oldSummary: user.memory_summary, userText: message, assistantText: reply, channelLabel: "WEB" })
+  .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
+  .catch(e => console.error("Memory update failed:", e));
 
+// Save/update conversation summary for this specific web chat window
+// This runs after every message so the summary stays current
+// It uses upsert logic so each web conversation gets ONE summary that grows
+const webTranscript = webHistory.map(m => 
+  `${m.role === 'assistant' ? 'Assistant' : 'User'}: ${m.content}`
+).join("\n");
+saveConversationSummary(userId, conversationId, "web", webTranscript)
+  .catch(e => console.error("Web summary error:", e));
     res.json({ success: true, reply, conversationId });
 
   } catch (err) {
