@@ -375,8 +375,7 @@ async function loadConversationList(autoSelect = false) {
             return;
         }
 
-        list.innerHTML = "";
-        data.conversations.forEach(c => {
+       data.conversations.forEach(c => {
             const d = new Date(c.lastActive);
             const dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
             const isActive = c.id === currentConversationId;
@@ -388,10 +387,13 @@ async function loadConversationList(autoSelect = false) {
             const previewText = c.preview || "New conversation";
             const safePreview = escapeHtml(previewText);
             const escapedForFunc = safePreview.replace(/'/g, "\\'").replace(/"/g, "&quot;");
+            
+            // 📞 Add the phone icon if it was a voice call!
+            const displayTitle = c.channel === 'call' ? '📞 ' + safePreview : safePreview;
 
             item.innerHTML = `
                 <div class="chat-item-text" onclick="switchChat('${c.id}')">
-                    <div class="chat-item-title">${safePreview}</div>
+                    <div class="chat-item-title">${displayTitle}</div>
                     <span class="chat-item-date">${dateStr}</span>
                 </div>
                 <div class="chat-actions-container">

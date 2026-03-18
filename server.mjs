@@ -1004,9 +1004,46 @@ updateMemorySummary({
 }).catch(e => console.error("Memory err", e));
 
 // Save rich conversation summary for this call
-const callConversationId = await getOrCreateConversation(userId, "call");
-saveConversationSummary(userId, callConversationId, "call", transcriptText)
-  .catch(e => console.error("Call summary error:", e));
+// 📞 NEW: Create a dedicated, distinct conversation for this specific call
+    const { data: newCallConvo } = await supabase.from("conversations").insert({
+        user_id: userId,
+        started_at: new Date().toISOString(),
+        last_active_at: new Date().toISOString(),
+        channel_scope: "call"
+    }).select("id").single();
+    
+    const callConversationId = newCallConvo.id;
+
+    // Save the high-level summary
+    saveConversationSummary(userId, callConversationId, "call", transcriptText).catch(e => console.error(e));
+
+    // 💬 NEW: Parse the back-and-forth transcript into individual chat bubbles!
+    const turns = data?.transcript || data?.messages || data?.turns || [];
+    if (Array.isArray(turns)) {
+        const messageInserts = turns.map(t => {
+            const role = (t.role || t.speaker || "user").toLowerCase();
+            return {
+                conversation_id: callConversationId,
+                channel: "call",
+                direction: role === "agent" || role === "assistant" ? "agent" : "user",
+                text: t.message || t.text || t.content || "",
+                provider: "elevenlabs"
+            };
+        }).filter(m => m.text);
+        
+        if (messageInserts.length > 0) {
+            await supabase.from("messages").insert(messageInserts);
+        }
+    }
+
+    // 🏷️ NEW: Auto-generate a title for this call so it looks good in the web sidebar
+    openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{ role: "system", content: "Generate a short 3-to-4 word title for this phone call transcript. No quotes." }, { role: "user", content: transcriptText }]
+    }).then(async (titleResp) => {
+        const smartTitle = titleResp.choices[0].message.content.trim();
+        await supabase.from("conversations").update({ title: smartTitle }).eq("id", callConversationId);
+    }).catch(e => console.log("Call title error", e));
 
     const transcriptId = data?.conversation_id || body?.conversation_id;
     console.log("🆔 Transcript/Conversation ID:", transcriptId || "NONE");
@@ -1062,7 +1099,7 @@ saveConversationSummary(userId, callConversationId, "call", transcriptText)
             const hasEmail = isValidData(latestUser?.email) && latestUser?.email.includes('@');
             const firstName = hasName ? latestUser.full_name.split(' ')[0] : "";
 
-            let textMessage;
+           let textMessage;
             if (hasName && hasEmail) {
               textMessage = `Hi ${firstName}! It's David AI. Would you like me to email you the transcript from our recent call? Just reply 'Yes'.`;
             } else if (hasName && !hasEmail) {
@@ -1073,8 +1110,10 @@ saveConversationSummary(userId, callConversationId, "call", transcriptText)
               textMessage = `Hi! It's David AI. Thanks for the chat. If you'd like me to email you a copy of our call transcript, just reply with your name and email address!`;
             }
 
+            // Add the portal upsell to whatever message was chosen
+            textMessage += " You can also view this full transcript and continue our conversation as a chat in your personal web portal!";
+
             await twilioClient.messages.create({ body: textMessage, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
-            
             const smsConversationId = await getOrCreateConversation(userId, "sms");
             await supabase.from("messages").insert({ conversation_id: smsConversationId, channel: "sms", direction: "agent", text: textMessage, provider: "twilio" });
             
@@ -1226,6 +1265,7 @@ app.post("/api/web/logout", async (req, res) => {
 // ==========================================
 
 // List all web conversations for sidebar
+// List all web conversations for sidebar
 app.get("/api/web/conversations", async (req, res) => {
   try {
     const userId = req.query.userId;
@@ -1233,9 +1273,9 @@ app.get("/api/web/conversations", async (req, res) => {
 
     const { data: convos, error } = await supabase
       .from("conversations")
-      .select("id, started_at, last_active_at, closed_at, title") // <-- ADDED title here
+      .select("id, started_at, last_active_at, closed_at, title, channel_scope") // <-- ADDED channel_scope
       .eq("user_id", userId)
-      .eq("channel_scope", "web")
+      .in("channel_scope", ["web", "call"]) // <-- FETCH BOTH WEB AND CALLS
       .order("last_active_at", { ascending: false })
       .limit(30);
 
@@ -1259,7 +1299,8 @@ app.get("/api/web/conversations", async (req, res) => {
       results.push({
         id: c.id,
         preview: c.title || autoPreview, // <-- Uses custom title if it exists, otherwise uses auto-preview
-        lastActive: c.last_active_at
+        lastActive: c.last_active_at,
+        channel: c.channel_scope
       });
     }
 
@@ -1497,6 +1538,18 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
       text: reply, provider: "openai"
     });
     if (botErr) console.error("🚨 DB REJECTED BOT MSG:", botErr.message); 
+
+    // 🔥 BACKGROUND TASK: Transcript Intent Extractor (Web)
+    const intentKeywords = /(@|\b(transcript|email|send|call|recent|yes|yeah|sure|ok|please|back|ago)\b)/i; 
+    if (intentKeywords.test(message)) {
+      // Re-use the exact same intent extractor from the SMS route!
+      processSmsIntent(userId, message).then(pendingTask => {
+        if (pendingTask) {
+          triggerGoogleAppsScript(pendingTask.email, pendingTask.name, pendingTask.id, pendingTask.desc);
+          console.log(`📧 WEB CHAT TRIGGERED EMAIL: Transcript sent to ${pendingTask.email}`);
+        }
+      }).catch(e => console.error("Web Intent error:", e));
+    }
 
     // 🔥 BACKGROUND TASK: AI Auto-Naming
     // Wait until the 2nd user message (when history length is 3: User, Agent, User) for better context
