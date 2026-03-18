@@ -94,9 +94,18 @@ function scheduleSessionSummary(userId, conversationId, channel, userText, assis
   }
 
   // Set a fresh 5-minute inactivity timer
+// Set a fresh 10-minute inactivity timer
   session.timer = setTimeout(async () => {
     sessionTimers.delete(key); // Clear from map — next message = fresh session
     
+    // 🔥 NEW: Threshold Check (6 turns = 12 messages total)
+    // If the conversation is too short, we skip summarization because 
+    // David already reads the last 12 raw messages directly from the DB!
+    if (session.turns.length < 6) {
+      console.log(`⏱️ Session idle for ${key}, but only ${session.turns.length} turns. Skipping summary to save tokens.`);
+      return;
+    }
+
     console.log(`⏱️ Session idle for ${key} — generating summary from ${session.turns.length} turns...`);
     
     try {
@@ -1359,8 +1368,13 @@ app.delete("/api/web/conversations/:id", async (req, res) => {
     const { userId } = req.body;
     if (!conversationId || !userId) return res.status(400).json({ error: "Missing params" });
 
+// 1. Delete all raw messages
     await supabase.from("messages").delete().eq("conversation_id", conversationId);
     
+    // 2. 🔥 NEW: Delete the linked summary to satisfy the foreign key constraint!
+    await supabase.from("conversation_summaries").delete().eq("conversation_id", conversationId);
+    
+    // 3. Delete the parent conversation
     const { error } = await supabase
       .from("conversations")
       .delete()
