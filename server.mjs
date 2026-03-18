@@ -1012,22 +1012,27 @@ updateMemorySummary({
   if (newSummary) await setUserMemorySummary(userId, newSummary); 
 }).catch(e => console.error("Memory err", e));
 
-// 📞 Retrieve the conversation that was opened when the phone started ringing
+// 📞 1. Get the active call conversation
     const callConversationId = await getOrCreateConversation(userId, "call");
-    
-    // 🔒 Close this conversation so the next phone call gets a fresh chat window!
-    await supabase.from("conversations").update({ closed_at: new Date().toISOString() }).eq("id", callConversationId);
 
-    // Save the high-level summary
+    // 🔒 2. AGGRESSIVE ISOLATION: Instantly force-close ALL open call chats for this user
+    // This mathematically guarantees your next phone call will generate a brand new chat ID.
+    await supabase.from("conversations")
+        .update({ closed_at: new Date().toISOString() })
+        .eq("user_id", userId)
+        .eq("channel_scope", "call")
+        .is("closed_at", null);
+
+    // 📝 3. Save the high-level summary
     saveConversationSummary(userId, callConversationId, "call", transcriptText).catch(e => console.error(e));
 
-    // 💬 NEW: Parse the back-and-forth transcript into individual chat bubbles!
+    // 💬 4. Parse the back-and-forth transcript into individual chat bubbles
     const turns = data?.transcript || data?.messages || data?.turns || [];
     if (Array.isArray(turns)) {
         const messageInserts = turns.map(t => {
             const role = (t.role || t.speaker || "user").toLowerCase();
             return {
-                conversation_id: callConversationId,
+                conversation_id: callConversationId, // Bound securely to the closed chat
                 channel: "call",
                 direction: role === "agent" || role === "assistant" ? "agent" : "user",
                 text: t.message || t.text || t.content || "",
@@ -1040,7 +1045,7 @@ updateMemorySummary({
         }
     }
 
-    // 🏷️ NEW: Auto-generate a title for this call so it looks good in the web sidebar
+    // 🏷️ 5. Auto-generate a title for this specific call
     openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [{ role: "system", content: "Generate a short 3-to-4 word title for this phone call transcript. No quotes." }, { role: "user", content: transcriptText }]
@@ -1421,7 +1426,7 @@ app.post("/api/chat", async (req, res) => {
       .select("direction, text, created_at")
       .eq("conversation_id", conversationId)
       .order("created_at", { ascending: false })
-      .limit(20);
+      .limit(100);
 
     const webHistory = (convoMessages || []).reverse().map(m => ({
       role: m.direction === "agent" ? "assistant" : "user",
