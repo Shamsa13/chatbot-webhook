@@ -1003,16 +1003,11 @@ updateMemorySummary({
   if (newSummary) await setUserMemorySummary(userId, newSummary); 
 }).catch(e => console.error("Memory err", e));
 
-// Save rich conversation summary for this call
-// 📞 NEW: Create a dedicated, distinct conversation for this specific call
-    const { data: newCallConvo } = await supabase.from("conversations").insert({
-        user_id: userId,
-        started_at: new Date().toISOString(),
-        last_active_at: new Date().toISOString(),
-        channel_scope: "call"
-    }).select("id").single();
+// 📞 Retrieve the conversation that was opened when the phone started ringing
+    const callConversationId = await getOrCreateConversation(userId, "call");
     
-    const callConversationId = newCallConvo.id;
+    // 🔒 Close this conversation so the next phone call gets a fresh chat window!
+    await supabase.from("conversations").update({ closed_at: new Date().toISOString() }).eq("id", callConversationId);
 
     // Save the high-level summary
     saveConversationSummary(userId, callConversationId, "call", transcriptText).catch(e => console.error(e));
