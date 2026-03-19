@@ -1782,16 +1782,33 @@ app.post("/api/admin/users", async (req, res) => {
 // 3. Get Usage Analytics (Message split by channel)
 app.post("/api/admin/usage", async (req, res) => {
   try {
-    const { secret } = req.body;
+    const { secret, userId } = req.body; // 🔥 NEW: Accept userId from the frontend
     if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
+
+    let convoIds = [];
+    // If a specific user is selected, fetch all their conversation IDs first
+    if (userId && userId !== "all") {
+      convoIds = await getUserConversationIds(userId);
+      // If they have no conversations, return 0 across the board immediately
+      if (convoIds.length === 0) {
+        return res.json({ success: true, usage: { web: 0, sms: 0, call: 0, total: 0 } });
+      }
+    }
 
     // Helper function to count USER messages incredibly fast without downloading them
     const getCount = async (channelName) => {
-      const { count, error } = await supabase
+      let query = supabase
         .from("messages")
         .select("*", { count: "exact", head: true })
         .eq("channel", channelName)
-        .eq("direction", "user"); // 🔥 NEW: Only count messages sent by the human!
+        .eq("direction", "user");
+
+      // 🔥 NEW: If we are filtering by a specific user, only count within their conversations!
+      if (userId && userId !== "all") {
+        query = query.in("conversation_id", convoIds);
+      }
+
+      const { count, error } = await query;
       if (error) throw error;
       return count || 0;
     };
@@ -1806,12 +1823,7 @@ app.post("/api/admin/usage", async (req, res) => {
 
     res.json({ 
       success: true, 
-      usage: { 
-        web: webCount, 
-        sms: smsCount, 
-        call: callCount, 
-        total: total 
-      } 
+      usage: { web: webCount, sms: smsCount, call: callCount, total: total } 
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

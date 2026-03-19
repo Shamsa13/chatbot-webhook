@@ -92,6 +92,11 @@
                 <h2>Omnichannel Usage Split</h2>
                 <p style="font-size: 13px; color: #666; margin-bottom: 20px;">This tracks the total number of individual messages sent by users across all platforms (AI replies are excluded).</p>
                 
+                <label>Filter by User:</label>
+                <select id="analyticsUserSelect" onchange="fetchAnalytics()" style="width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; margin-bottom: 20px;">
+                    <option value="all">Global Total (All Users)</option>
+                </select>
+
                 <div id="analyticsContent" style="background: #f8f9fa; padding: 20px; border-radius: 8px; border: 1px solid #ddd;">
                     Click the button below to load real-time analytics.
                 </div>
@@ -136,6 +141,7 @@
     // --- ANALYTICS LOGIC ---
     async function fetchAnalytics() {
         const secret = document.getElementById('secretKey').value.trim();
+        const userId = document.getElementById('analyticsUserSelect').value; // 🔥 NEW: Grab selected user
         const container = document.getElementById('analyticsContent');
         container.innerHTML = "Fetching real-time usage data...";
 
@@ -143,7 +149,7 @@
             const res = await fetch('/api/admin/usage', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ secret })
+                body: JSON.stringify({ secret, userId }) // 🔥 NEW: Send userId to backend
             });
             const data = await res.json();
             
@@ -215,14 +221,25 @@
                 const select = document.getElementById('userSelect');
                 select.innerHTML = '<option value="">-- Choose a user --</option>';
                 
+                const analyticsSelect = document.getElementById('analyticsUserSelect');
+                analyticsSelect.innerHTML = '<option value="all">Global Total (All Users)</option>';
+
                 data.users.forEach(u => {
                     const name = (u.full_name && u.full_name !== 'null') ? u.full_name : 'Unknown User';
                     const phone = u.phone || 'No Phone';
+                    
+                    // 1. Populate the main user dropdown
                     const opt = document.createElement('option');
                     opt.value = u.id;
                     opt.dataset.phone = u.phone;
                     opt.innerText = `${name} (${phone})`;
                     select.appendChild(opt);
+
+                    // 2. 🔥 NEW: Populate the Analytics dropdown
+                    const optAnalytics = document.createElement('option');
+                    optAnalytics.value = u.id;
+                    optAnalytics.innerText = `${name} (${phone})`;
+                    analyticsSelect.appendChild(optAnalytics);
                 });
 
                 document.getElementById('loginArea').style.display = 'none';
