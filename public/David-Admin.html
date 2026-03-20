@@ -87,10 +87,16 @@
             </div>
         </div>
 
-        <div id="tabAnalytics" class="tab-content">
+       <div id="tabAnalytics" class="tab-content">
             <div class="section">
                 <h2>Omnichannel Usage Split</h2>
-                <p style="font-size: 13px; color: #666; margin-bottom: 20px;">This tracks the total number of individual messages sent by users across all platforms (AI replies are excluded).</p>
+                
+                <div style="background: #e8ebf2; padding: 15px; border-radius: 8px; border-left: 4px solid #181d32; margin-bottom: 25px;">
+                    <strong style="color: #181d32; font-size: 14px;">What is this tracking?</strong>
+                    <p style="font-size: 13px; color: #555; margin: 5px 0 0 0; line-height: 1.5;">
+                        This graph shows the exact split of <strong>user-sent messages</strong> across Voice Calls, Web Chat, and SMS text messages. It explicitly ignores AI replies to give you a pure measure of human engagement on your platform.
+                    </p>
+                </div>
                 
                 <label>Filter by User:</label>
                 <select id="analyticsUserSelect" onchange="fetchAnalytics()" style="width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; margin-bottom: 20px;">
@@ -149,19 +155,21 @@
             const res = await fetch('/api/admin/usage', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ secret, userId }) // 🔥 NEW: Send userId to backend
+                body: JSON.stringify({ secret, userId })
             });
             const data = await res.json();
             
             if (data.success) {
                 const u = data.usage;
+                const m = data.metrics; // 🔥 NEW: Grab the extra metrics
+                
                 const webPct = Math.round((u.web / u.total) * 100) || 0;
                 const smsPct = Math.round((u.sms / u.total) * 100) || 0;
                 const callPct = Math.round((u.call / u.total) * 100) || 0;
 
                 container.innerHTML = `
                     <div style="font-size: 18px; font-weight: 600; margin-bottom: 25px; border-bottom: 1px solid #ddd; padding-bottom: 10px;">
-                        Total Interactions: <span style="color: #181d32;">${u.total} messages</span>
+                        Total Interactions: <span style="color: #181d32;">${u.total === 1 && u.web === 0 && u.sms === 0 && u.call === 0 ? 0 : u.total} messages</span>
                     </div>
                     
                     <div style="margin-bottom: 20px;">
@@ -188,6 +196,29 @@
                         </div>
                         <div style="width: 100%; background: #e0e0e0; border-radius: 6px; height: 12px; overflow: hidden;">
                             <div style="width: ${callPct}%; background: #ff9800; height: 100%;"></div>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 35px; border-top: 1px solid #ddd; padding-top: 25px;">
+                        <h3 style="font-size: 16px; margin-top: 0; margin-bottom: 15px;">Account Metrics</h3>
+                        <div style="display: flex; gap: 15px;">
+                            
+                            <div style="flex: 1; background: white; padding: 15px; border-radius: 8px; border: 1px solid #eee; box-shadow: 0 2px 5px rgba(0,0,0,0.02);">
+                                <div style="font-size: 12px; color: #666; font-weight: 600; margin-bottom: 5px;">ACTIVE CONVERSATIONS</div>
+                                <div style="font-size: 28px; font-weight: 700; color: #181d32; margin-bottom: 5px;">${m.totalOpen}</div>
+                                <div style="font-size: 12px; color: #888;">
+                                    <span style="color: #4caf50;">${m.openWeb} Web</span> • <span style="color: #ff9800;">${m.openCall} Voice</span>
+                                </div>
+                            </div>
+
+                            <div style="flex: 1; background: white; padding: 15px; border-radius: 8px; border: 1px solid #eee; box-shadow: 0 2px 5px rgba(0,0,0,0.02);">
+                                <div style="font-size: 12px; color: #666; font-weight: 600; margin-bottom: 5px;">FILES IN KNOWLEDGE BASE</div>
+                                <div style="font-size: 28px; font-weight: 700; color: #181d32; margin-bottom: 5px;">${m.docs}</div>
+                                <div style="font-size: 12px; color: #888;">
+                                    Total PDFs, Docs, and Text files
+                                </div>
+                            </div>
+
                         </div>
                     </div>
                 `;

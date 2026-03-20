@@ -21,6 +21,7 @@ app.set("trust proxy", true);
 
 const PORT = process.env.PORT || 3000;
 
+const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL || "";
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
@@ -140,17 +141,33 @@ function twimlReply(text) {
   return twiml.toString();
 }
 
+// 🔥 NEW: Function to push messages directly to your Slack channel
+async function sendToSlack(message) {
+  if (!SLACK_WEBHOOK_URL) return; // Skips if you haven't added the URL to Render yet
+  try {
+    await fetch(SLACK_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: `🚨 *David AI Error Alert* 🚨\n${message}` })
+    });
+  } catch (e) {
+    console.error("Slack webhook failed:", e.message);
+  }
+}
+
+// 🛠️ UPGRADED: Now saves to Supabase AND pings Slack immediately
 async function logError({ phone, userId, conversationId, channel, stage, message, details }) {
   try {
     await supabase.from("error_logs").insert({
-      phone: phone || null,
-      user_id: userId || null,
-      conversation_id: conversationId || null,
-      channel: channel || "unknown",
-      stage: stage || "unknown",
-      message: message || "unknown",
-      details: details ? JSON.stringify(details) : null 
+      phone: phone || null, user_id: userId || null, conversation_id: conversationId || null,
+      channel: channel || "unknown", stage: stage || "unknown",
+      message: message || "unknown", details: details ? JSON.stringify(details) : null 
     });
+
+    // Format the alert for Slack
+    const slackMessage = `*Channel:* ${channel.toUpperCase()}\n*Stage:* ${stage}\n*Error:* ${message}\n*Details:* ${details ? JSON.stringify(details) : 'None'}`;
+    await sendToSlack(slackMessage);
+
   } catch (e) {
     console.error("CRITICAL: error_logs insert failed", e?.message || e);
   }
@@ -857,6 +874,7 @@ updateMemorySummary({ oldSummary: memorySummary, userText: body, assistantText: 
 
   } catch (err) {
     console.error("ERROR sms", err.message);
+    logError({ phone: cleanPhone, channel: "sms", stage: "Twilio Processing", message: err.message }); // 🚨 SLACK ALERT
     if (!res.headersSent) {
       res.status(200).type("text/xml").send(twimlReply("Just a moment..."));
     }
@@ -1136,6 +1154,7 @@ updateMemorySummary({
 
   } catch (err) {
     console.error("❌ POST-CALL PROCESSING ERROR:", err?.message || err);
+    logError({ channel: "call", stage: "ElevenLabs Transcript Processing", message: err?.message || String(err) }); // 🚨 SLACK ALERT
   }
 });
 
@@ -1598,6 +1617,7 @@ updateMemorySummary({ oldSummary: user.memory_summary, userText: message, assist
 
   } catch (err) {
     console.error("❌ Chat Error:", err.message);
+    logError({ channel: "web", stage: "OpenAI Generation", message: err.message });
     res.status(500).json({ error: "Failed to generate reply: " + err.message });
   }
 });
@@ -1779,51 +1799,58 @@ app.post("/api/admin/users", async (req, res) => {
   }
 });
 
-// 3. Get Usage Analytics (Message split by channel)
+// 3. Get Usage Analytics & User Metrics
 app.post("/api/admin/usage", async (req, res) => {
   try {
-    const { secret, userId } = req.body; // 🔥 NEW: Accept userId from the frontend
+    const { secret, userId } = req.body;
     if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
 
     let convoIds = [];
-    // If a specific user is selected, fetch all their conversation IDs first
     if (userId && userId !== "all") {
       convoIds = await getUserConversationIds(userId);
-      // If they have no conversations, return 0 across the board immediately
       if (convoIds.length === 0) {
-        return res.json({ success: true, usage: { web: 0, sms: 0, call: 0, total: 0 } });
+        // If they have no convos, everything is zero
+        return res.json({ success: true, usage: { web: 0, sms: 0, call: 0, total: 0 }, metrics: { openWeb: 0, openCall: 0, totalOpen: 0, docs: 0 } });
       }
     }
 
-    // Helper function to count USER messages incredibly fast without downloading them
-    const getCount = async (channelName) => {
-      let query = supabase
-        .from("messages")
-        .select("*", { count: "exact", head: true })
-        .eq("channel", channelName)
-        .eq("direction", "user");
-
-      // 🔥 NEW: If we are filtering by a specific user, only count within their conversations!
-      if (userId && userId !== "all") {
-        query = query.in("conversation_id", convoIds);
-      }
-
+    // 1. COUNT USER MESSAGES
+    const getMessageCount = async (channelName) => {
+      let query = supabase.from("messages").select("*", { count: "exact", head: true }).eq("channel", channelName).eq("direction", "user");
+      if (userId && userId !== "all") query = query.in("conversation_id", convoIds);
       const { count, error } = await query;
       if (error) throw error;
       return count || 0;
     };
 
-    const [webCount, smsCount, callCount] = await Promise.all([
-      getCount("web"),
-      getCount("sms"),
-      getCount("call")
+    // 2. COUNT OPEN CHATS (closed_at is null)
+    const getOpenChatCount = async (channelScope) => {
+      let query = supabase.from("conversations").select("*", { count: "exact", head: true }).eq("channel_scope", channelScope).is("closed_at", null);
+      if (userId && userId !== "all") query = query.eq("user_id", userId);
+      const { count } = await query;
+      return count || 0;
+    };
+
+    // 3. COUNT UPLOADED DOCUMENTS
+    const getDocsCount = async () => {
+      let query = supabase.from("user_documents").select("*", { count: "exact", head: true });
+      if (userId && userId !== "all") query = query.eq("user_id", userId);
+      const { count } = await query;
+      return count || 0;
+    };
+
+    // Run all counts in parallel for maximum speed
+    const [webCount, smsCount, callCount, openWeb, openCall, docsCount] = await Promise.all([
+      getMessageCount("web"), getMessageCount("sms"), getMessageCount("call"),
+      getOpenChatCount("web"), getOpenChatCount("call"), getDocsCount()
     ]);
 
-    const total = webCount + smsCount + callCount || 1; // Prevent divide-by-zero
+    const totalMessages = webCount + smsCount + callCount || 1; // Prevent divide by zero
 
     res.json({ 
       success: true, 
-      usage: { web: webCount, sms: smsCount, call: callCount, total: total } 
+      usage: { web: webCount, sms: smsCount, call: callCount, total: totalMessages },
+      metrics: { openWeb, openCall, totalOpen: openWeb + openCall, docs: docsCount }
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
