@@ -1823,9 +1823,9 @@ app.post("/api/admin/usage", async (req, res) => {
       return count || 0;
     };
 
-    // 2. COUNT OPEN CHATS (closed_at is null)
+    // 2. COUNT ALL CHATS (Removed the closed_at filter so it counts history!)
     const getOpenChatCount = async (channelScope) => {
-      let query = supabase.from("conversations").select("*", { count: "exact", head: true }).eq("channel_scope", channelScope).is("closed_at", null);
+      let query = supabase.from("conversations").select("*", { count: "exact", head: true }).eq("channel_scope", channelScope);
       if (userId && userId !== "all") query = query.eq("user_id", userId);
       const { count } = await query;
       return count || 0;
