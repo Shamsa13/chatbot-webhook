@@ -370,6 +370,19 @@ async function getOrCreateConversation(userId, channelScope) {
   const nowIso = new Date().toISOString();
   const { data: inserted, error: insErr } = await supabase.from("conversations").insert({ user_id: userId, started_at: nowIso, last_active_at: nowIso, channel_scope: channelScope }).select("id").single();
   if (insErr) throw new Error("conversations insert failed: " + insErr.message);
+
+  // 🔥 NEW: Increment the Ghost Counter ONLY for Web and Call
+  if (channelScope === "web" || channelScope === "call") {
+      const colName = `all_time_${channelScope}`;
+      try {
+          const { data: u } = await supabase.from("users").select(colName).eq("id", userId).single();
+          const newVal = (u[colName] || 0) + 1;
+          await supabase.from("users").update({ [colName]: newVal }).eq("id", userId);
+      } catch (e) {
+          console.error("Ghost counter error:", e.message);
+      }
+  }
+
   return inserted.id;
 }
 
@@ -1846,28 +1859,22 @@ app.post("/api/admin/usage", async (req, res) => {
     if (userFilter) convoQuery = convoQuery.eq("user_id", userFilter);
     const { data: allConvos } = await convoQuery;
 
-    let chatStats = { activeWeb: 0, activeCall: 0, legacyCall: 0, activeSms: 0, legacySms: 0, activeWa: 0, legacyWa: 0, total: (allConvos||[]).length };
+    let chatStats = { activeWeb: 0, activeCall: 0 };
     let times = { web: [], sms: [], wa: [], call: [], total: [] };
 
     (allConvos || []).forEach(c => {
         const ch = c.channel_scope || "web";
-        const isClosed = c.closed_at !== null;
-
+        // 🔥 Now, if it exists in this array, it is ACTIVE. No legacy needed!
         if (ch === "web") {
-            chatStats.activeWeb++; // Web chats are NEVER closed unless deleted
+            chatStats.activeWeb++; 
         } else if (ch === "call") {
-            isClosed ? chatStats.legacyCall++ : chatStats.activeCall++;
-            // 📞 Exact Call Math (Hangup Time - Hello Time)
+            chatStats.activeCall++;
             if (c.started_at && c.closed_at) {
                 let callSecs = (new Date(c.closed_at) - new Date(c.started_at)) / 1000;
                 callSecs = Math.max(1, callSecs);
                 times.call.push(callSecs);
                 times.total.push(callSecs);
             }
-        } else if (ch === "sms") {
-            isClosed ? chatStats.legacySms++ : chatStats.activeSms++;
-        } else if (ch === "wa") {
-            isClosed ? chatStats.legacyWa++ : chatStats.activeWa++;
         }
     });
 
@@ -1932,24 +1939,28 @@ app.post("/api/admin/usage", async (req, res) => {
     };
 
     // 4. USERS, TRANSCRIPTS, & ALL-TIME UPLOADS
-    let usersQuery = supabase.from("users").select("id, transcript_data, last_seen, all_time_uploads"); // 🔥 Added column
+    let usersQuery = supabase.from("users").select("id, transcript_data, last_seen, all_time_uploads, all_time_web, all_time_call"); 
     if (userFilter) usersQuery = usersQuery.eq("id", userFilter);
     const { data: usersData } = await usersQuery;
 
     let totalTranscripts = 0;
     let activeUsers = 0;
-    let allTimeDocs = 0; // 🔥 NEW COUNTER
+    let allTimeDocs = 0;
+    let allTimeChats = { web: 0, call: 0, total: 0 }; // 🔥 ONLY Web and Call
     let thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
     (usersData || []).forEach(u => {
         if (u.transcript_data && Array.isArray(u.transcript_data)) {
             totalTranscripts += u.transcript_data.length;
         }
-        if (u.last_seen && u.last_seen >= thirtyDaysAgo) {
-            activeUsers++;
-        }
-        allTimeDocs += (u.all_time_uploads || 0); // 🔥 Add their all-time total to the global sum
+        if (u.last_seen && u.last_seen >= thirtyDaysAgo) activeUsers++;
+        allTimeDocs += (u.all_time_uploads || 0);
+        
+        allTimeChats.web += (u.all_time_web || 0);
+        allTimeChats.call += (u.all_time_call || 0);
     });
+    
+    allTimeChats.total = allTimeChats.web + allTimeChats.call;
 
     let totalUsers = (usersData || []).length;
 
@@ -1964,7 +1975,7 @@ app.post("/api/admin/usage", async (req, res) => {
       success: true, 
       usage: { web: webCount, sms: smsCount, wa: waCount, call: callCount, total: totalMessages },
       // 🔥 NEW: Added allTimeDocs to the payload!
-      metrics: { activeUsers, totalUsers, totalTranscripts, avgTime, chats: chatStats, docs: docsCount, allTimeDocs } 
+      metrics: { activeUsers, totalUsers, totalTranscripts, avgTime, chats: chatStats, docs: docsCount, allTimeDocs, allTimeChats } 
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
