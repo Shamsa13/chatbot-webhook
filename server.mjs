@@ -1841,28 +1841,41 @@ app.post("/api/admin/usage", async (req, res) => {
       return count || 0;
     };
 
-    // 2. CONVERSATIONS (Active vs Legacy Counts)
-    let convoQuery = supabase.from("conversations").select("id, channel_scope, closed_at");
+    // 2. CONVERSATIONS & CALL DURATION
+    let convoQuery = supabase.from("conversations").select("id, channel_scope, started_at, closed_at");
     if (userFilter) convoQuery = convoQuery.eq("user_id", userFilter);
     const { data: allConvos } = await convoQuery;
 
-    let chatStats = { activeWeb: 0, activeCall: 0, legacyWeb: 0, legacyCall: 0, total: (allConvos||[]).length };
+    let chatStats = { activeWeb: 0, activeCall: 0, legacyCall: 0, activeSms: 0, legacySms: 0, activeWa: 0, legacyWa: 0, total: (allConvos||[]).length };
+    let times = { web: [], sms: [], wa: [], call: [], total: [] };
 
     (allConvos || []).forEach(c => {
+        const ch = c.channel_scope || "web";
         const isClosed = c.closed_at !== null;
-        if (c.channel_scope === "web") {
-            isClosed ? chatStats.legacyWeb++ : chatStats.activeWeb++;
-        } else if (c.channel_scope === "call") {
+
+        if (ch === "web") {
+            chatStats.activeWeb++; // Web chats are NEVER closed unless deleted
+        } else if (ch === "call") {
             isClosed ? chatStats.legacyCall++ : chatStats.activeCall++;
+            // 📞 Exact Call Math (Hangup Time - Hello Time)
+            if (c.started_at && c.closed_at) {
+                let callSecs = (new Date(c.closed_at) - new Date(c.started_at)) / 1000;
+                callSecs = Math.max(1, callSecs);
+                times.call.push(callSecs);
+                times.total.push(callSecs);
+            }
+        } else if (ch === "sms") {
+            isClosed ? chatStats.legacySms++ : chatStats.activeSms++;
+        } else if (ch === "wa") {
+            isClosed ? chatStats.legacyWa++ : chatStats.activeWa++;
         }
     });
 
-    // 2.5 EXACT ENGAGEMENT TIME (Message Burst Math)
-    let msgQuery = supabase.from("messages").select("conversation_id, channel, created_at").eq("direction", "user").order("created_at", { ascending: true });
+    // 2.5 EXACT ENGAGEMENT TIME (Message Burst Math in SECONDS for Text-Based Chats)
+    let msgQuery = supabase.from("messages").select("conversation_id, channel, created_at").eq("direction", "user").in("channel", ["web", "sms", "wa"]).order("created_at", { ascending: true });
     if (userFilter) msgQuery = msgQuery.in("conversation_id", convoIds);
     const { data: allUserMsgs } = await msgQuery;
 
-    let times = { web: [], sms: [], wa: [], call: [], total: [] };
     let currentSession = {};
 
     (allUserMsgs || []).forEach(m => {
@@ -1875,37 +1888,39 @@ app.post("/api/admin/usage", async (req, res) => {
         } else {
             let diffMins = (time - currentSession[cId].last) / 60000;
             if (diffMins > 10) {
-                // 🔥 Session is over! Calculate exact active minutes (ignoring the 10 min idle time)
-                let activeMins = (currentSession[cId].last - currentSession[cId].start) / 60000;
-                activeMins = Math.max(1, Math.round(activeMins)); // Minimum 1 minute
-                
-                if (times[ch]) times[ch].push(activeMins);
-                times.total.push(activeMins);
-
-                // Start brand new session
+                let activeSecs = (currentSession[cId].last - currentSession[cId].start) / 1000;
+                activeSecs = Math.max(1, activeSecs);
+                if (times[ch]) times[ch].push(activeSecs);
+                times.total.push(activeSecs);
                 currentSession[cId] = { start: time, last: time, channel: ch };
             } else {
-                // Still chatting, update the last message time
                 currentSession[cId].last = time;
             }
         }
     });
 
-    // Close out the final pending sessions
     Object.values(currentSession).forEach(sess => {
-        let activeMins = (sess.last - sess.start) / 60000;
-        activeMins = Math.max(1, Math.round(activeMins));
-        if (times[sess.channel]) times[sess.channel].push(activeMins);
-        times.total.push(activeMins);
+        let activeSecs = (sess.last - sess.start) / 1000;
+        activeSecs = Math.max(1, activeSecs);
+        if (times[sess.channel]) times[sess.channel].push(activeSecs);
+        times.total.push(activeSecs);
     });
 
-    const calcAvg = (arr) => arr.length ? Math.round(arr.reduce((a,b) => a + b, 0) / arr.length) : 0;
+    // Beautiful "Xm Ys" formatter
+    const formatTime = (secsArray) => {
+        if (!secsArray.length) return "0s";
+        let avgSecs = Math.round(secsArray.reduce((a, b) => a + b, 0) / secsArray.length);
+        let m = Math.floor(avgSecs / 60);
+        let s = avgSecs % 60;
+        return m > 0 ? `${m}m ${s}s` : `${s}s`;
+    };
+
     const avgTime = {
-        web: calcAvg(times.web),
-        sms: calcAvg(times.sms),
-        wa: calcAvg(times.wa),
-        call: calcAvg(times.call),
-        total: calcAvg(times.total)
+        web: formatTime(times.web),
+        sms: formatTime(times.sms),
+        wa: formatTime(times.wa),
+        call: formatTime(times.call),
+        total: formatTime(times.total)
     };
 
     // 3. DOCUMENTS
