@@ -117,6 +117,12 @@ function scheduleSessionSummary(userId, conversationId, channel, userText, assis
       
       await saveConversationSummary(userId, session.conversationId, channel, fullTranscript);
       console.log(`✅ Session summary saved for ${key}`);
+      
+      // 🔥 NEW: Only auto-close phone-based chats! Web chats stay open so the user can use their sidebar history.
+      if (channel !== "web") {
+          await supabase.from("conversations").update({ closed_at: new Date().toISOString() }).eq("id", session.conversationId);
+      }
+      
     } catch (e) {
       console.error(`❌ Session summary failed for ${key}:`, e.message);
     }
@@ -1835,30 +1841,62 @@ app.post("/api/admin/usage", async (req, res) => {
       return count || 0;
     };
 
-    // 2. CONVERSATIONS (Active vs Legacy) & ENGAGEMENT TIME
-    let convoQuery = supabase.from("conversations").select("channel_scope, started_at, last_active_at, closed_at");
+    // 2. CONVERSATIONS (Active vs Legacy Counts)
+    let convoQuery = supabase.from("conversations").select("id, channel_scope, closed_at");
     if (userFilter) convoQuery = convoQuery.eq("user_id", userFilter);
     const { data: allConvos } = await convoQuery;
 
     let chatStats = { activeWeb: 0, activeCall: 0, legacyWeb: 0, legacyCall: 0, total: (allConvos||[]).length };
-    let times = { web: [], sms: [], wa: [], call: [], total: [] };
 
     (allConvos || []).forEach(c => {
-        // Tally Active vs Legacy
         const isClosed = c.closed_at !== null;
         if (c.channel_scope === "web") {
             isClosed ? chatStats.legacyWeb++ : chatStats.activeWeb++;
         } else if (c.channel_scope === "call") {
             isClosed ? chatStats.legacyCall++ : chatStats.activeCall++;
         }
+    });
 
-        // Calculate Engagement Time (in minutes)
-        if (c.started_at && c.last_active_at) {
-            let durationMins = (new Date(c.last_active_at) - new Date(c.started_at)) / 60000;
-            let ch = c.channel_scope || "web";
-            if (times[ch]) times[ch].push(durationMins);
-            times.total.push(durationMins);
+    // 2.5 EXACT ENGAGEMENT TIME (Message Burst Math)
+    let msgQuery = supabase.from("messages").select("conversation_id, channel, created_at").eq("direction", "user").order("created_at", { ascending: true });
+    if (userFilter) msgQuery = msgQuery.in("conversation_id", convoIds);
+    const { data: allUserMsgs } = await msgQuery;
+
+    let times = { web: [], sms: [], wa: [], call: [], total: [] };
+    let currentSession = {};
+
+    (allUserMsgs || []).forEach(m => {
+        let time = new Date(m.created_at);
+        let cId = m.conversation_id;
+        let ch = (m.channel || "web").toLowerCase();
+
+        if (!currentSession[cId]) {
+            currentSession[cId] = { start: time, last: time, channel: ch };
+        } else {
+            let diffMins = (time - currentSession[cId].last) / 60000;
+            if (diffMins > 10) {
+                // 🔥 Session is over! Calculate exact active minutes (ignoring the 10 min idle time)
+                let activeMins = (currentSession[cId].last - currentSession[cId].start) / 60000;
+                activeMins = Math.max(1, Math.round(activeMins)); // Minimum 1 minute
+                
+                if (times[ch]) times[ch].push(activeMins);
+                times.total.push(activeMins);
+
+                // Start brand new session
+                currentSession[cId] = { start: time, last: time, channel: ch };
+            } else {
+                // Still chatting, update the last message time
+                currentSession[cId].last = time;
+            }
         }
+    });
+
+    // Close out the final pending sessions
+    Object.values(currentSession).forEach(sess => {
+        let activeMins = (sess.last - sess.start) / 60000;
+        activeMins = Math.max(1, Math.round(activeMins));
+        if (times[sess.channel]) times[sess.channel].push(activeMins);
+        times.total.push(activeMins);
     });
 
     const calcAvg = (arr) => arr.length ? Math.round(arr.reduce((a,b) => a + b, 0) / arr.length) : 0;
@@ -1910,7 +1948,8 @@ app.post("/api/admin/usage", async (req, res) => {
     res.json({ 
       success: true, 
       usage: { web: webCount, sms: smsCount, wa: waCount, call: callCount, total: totalMessages },
-      metrics: { activeUsers, totalUsers, totalTranscripts, avgTime, chats: chatStats, docs: docsCount }
+      // 🔥 NEW: Added allTimeDocs to the payload!
+      metrics: { activeUsers, totalUsers, totalTranscripts, avgTime, chats: chatStats, docs: docsCount, allTimeDocs } 
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
