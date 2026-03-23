@@ -385,7 +385,7 @@ async function getRecentUserMessages(userId, limit = 12) {
   return sorted.map((m) => {
     const role = m.direction === "agent" ? "assistant" : "user";
     const ch = (m.channel || "sms").toUpperCase();
-    const channelLabel = ch === "CALL" ? "CALL" : ch === "WEB" ? "WEB" : "SMS";
+    const channelLabel = ch === "CALL" ? "CALL" : ch === "WEB" ? "WEB" : ch === "WA" ? "WA" : "SMS";
     return { role, content: (m.text || "").trim(), channel: channelLabel };
   });
 }
@@ -751,11 +751,14 @@ app.get("/health", (req, res) => res.status(200).send("ok"));
 // ==========================================
 app.post("/twilio/sms", async (req, res) => {
   const rawFrom = req.body.From || ""; 
+  const isWA = rawFrom.startsWith("whatsapp:"); // 🔥 NEW: Detect WhatsApp
+  const currentChannel = isWA ? "wa" : "sms";   // 🔥 NEW: Dynamic channel routing
+  
   const cleanPhone = normalizeFrom(rawFrom); 
   const body = String(req.body.Body || "").trim();
   const twilioMessageSid = req.body.MessageSid || null;
 
-  console.log("START sms", { cleanPhone, body });
+  console.log(`START ${currentChannel.toUpperCase()}`, { cleanPhone, body });
 
   if (!cleanPhone || !body) return res.status(200).type("text/xml").send(twimlReply("ok"));
 
@@ -769,11 +772,11 @@ app.post("/twilio/sms", async (req, res) => {
 
   try {
     const userId = await getOrCreateUser(cleanPhone);
-    const conversationId = await getOrCreateConversation(userId, "sms");
+    const conversationId = await getOrCreateConversation(userId, currentChannel);
 
     const { error: inErr } = await supabase.from("messages").insert({
       conversation_id: conversationId, 
-      channel: "sms", 
+      channel: currentChannel,
       direction: "user",
       text: body, 
       provider: "twilio", 
@@ -788,7 +791,7 @@ app.post("/twilio/sms", async (req, res) => {
       throw new Error("messages insert failed: " + inErr.message);
     }
 
-    checkAndSendVCard(userId, rawFrom).catch(e => console.error("vCard error:", e));
+    if (!isWA) checkAndSendVCard(userId, rawFrom).catch(e => console.error("vCard error:", e));
 
     // We added getRecentConversationSummaries to the Promise array
     const [cfg, memorySummary, history, { data: userDb }, ragContext, recentSummaries] = await Promise.all([
@@ -851,7 +854,7 @@ app.post("/twilio/sms", async (req, res) => {
 
     (async () => {
       const { error: msgErr } = await supabase.from("messages").insert({
-        conversation_id: conversationId, channel: "sms", direction: "agent",
+        conversation_id: conversationId, channel: currentChannel, direction: "agent",
         text: cleanReplyText, provider: "openai", twilio_message_sid: null
       });
       if (msgErr) console.error("Message insert error:", msgErr);
@@ -867,10 +870,10 @@ app.post("/twilio/sms", async (req, res) => {
     }
 
     // Update compressed memory facts
-updateMemorySummary({ oldSummary: memorySummary, userText: body, assistantText: cleanReplyText, channelLabel: "SMS" })
+updateMemorySummary({ oldSummary: memorySummary, userText: body, assistantText: cleanReplyText, channelLabel: currentChannel.toUpperCase() })
   .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
   .catch(e => console.error("Memory error:", e));
-  scheduleSessionSummary(userId, conversationId, "sms", body, cleanReplyText);
+  scheduleSessionSummary(userId, conversationId, currentChannel, body, cleanReplyText);
 
   } catch (err) {
     console.error("ERROR sms", err.message);
@@ -1703,6 +1706,10 @@ app.post("/api/upload", upload.single("document"), async (req, res) => {
     const summary = summaryResponse.choices[0].message.content;
     await supabase.from("user_documents").update({ summary: summary }).eq("id", docRecord.id);
 
+    const { data: currentUser } = await supabase.from("users").select("all_time_uploads").eq("id", userId).single();
+    const newUploadTotal = (currentUser?.all_time_uploads || 0) + 1;
+    await supabase.from("users").update({ all_time_uploads: newUploadTotal }).eq("id", userId);
+
     res.json({ success: true, message: "Document chunked and fully memorized!" });
 
   } catch (err) {
@@ -1800,57 +1807,110 @@ app.post("/api/admin/users", async (req, res) => {
 });
 
 // 3. Get Usage Analytics & User Metrics
+// 3. Get Usage Analytics & Deep User Metrics
 app.post("/api/admin/usage", async (req, res) => {
   try {
     const { secret, userId } = req.body;
     if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
 
     let convoIds = [];
-    if (userId && userId !== "all") {
-      convoIds = await getUserConversationIds(userId);
+    let userFilter = userId && userId !== "all" ? userId : null;
+
+    if (userFilter) {
+      convoIds = await getUserConversationIds(userFilter);
       if (convoIds.length === 0) {
-        // If they have no convos, everything is zero
-        return res.json({ success: true, usage: { web: 0, sms: 0, call: 0, total: 0 }, metrics: { openWeb: 0, openCall: 0, totalOpen: 0, docs: 0 } });
+        return res.json({ 
+            success: true, 
+            usage: { web: 0, sms: 0, wa: 0, call: 0, total: 0 }, 
+            metrics: { activeUsers: 0, totalUsers: 0, totalTranscripts: 0, avgTime: { web:0, sms:0, wa:0, call:0, total:0 }, chats: { activeWeb:0, activeCall:0, legacyWeb:0, legacyCall:0, total:0 }, docs: 0 } 
+        });
       }
     }
 
     // 1. COUNT USER MESSAGES
     const getMessageCount = async (channelName) => {
       let query = supabase.from("messages").select("*", { count: "exact", head: true }).eq("channel", channelName).eq("direction", "user");
-      if (userId && userId !== "all") query = query.in("conversation_id", convoIds);
-      const { count, error } = await query;
-      if (error) throw error;
-      return count || 0;
-    };
-
-    // 2. COUNT ALL CHATS (Removed the closed_at filter so it counts history!)
-    const getOpenChatCount = async (channelScope) => {
-      let query = supabase.from("conversations").select("*", { count: "exact", head: true }).eq("channel_scope", channelScope);
-      if (userId && userId !== "all") query = query.eq("user_id", userId);
+      if (userFilter) query = query.in("conversation_id", convoIds);
       const { count } = await query;
       return count || 0;
     };
 
-    // 3. COUNT UPLOADED DOCUMENTS
+    // 2. CONVERSATIONS (Active vs Legacy) & ENGAGEMENT TIME
+    let convoQuery = supabase.from("conversations").select("channel_scope, started_at, last_active_at, closed_at");
+    if (userFilter) convoQuery = convoQuery.eq("user_id", userFilter);
+    const { data: allConvos } = await convoQuery;
+
+    let chatStats = { activeWeb: 0, activeCall: 0, legacyWeb: 0, legacyCall: 0, total: (allConvos||[]).length };
+    let times = { web: [], sms: [], wa: [], call: [], total: [] };
+
+    (allConvos || []).forEach(c => {
+        // Tally Active vs Legacy
+        const isClosed = c.closed_at !== null;
+        if (c.channel_scope === "web") {
+            isClosed ? chatStats.legacyWeb++ : chatStats.activeWeb++;
+        } else if (c.channel_scope === "call") {
+            isClosed ? chatStats.legacyCall++ : chatStats.activeCall++;
+        }
+
+        // Calculate Engagement Time (in minutes)
+        if (c.started_at && c.last_active_at) {
+            let durationMins = (new Date(c.last_active_at) - new Date(c.started_at)) / 60000;
+            let ch = c.channel_scope || "web";
+            if (times[ch]) times[ch].push(durationMins);
+            times.total.push(durationMins);
+        }
+    });
+
+    const calcAvg = (arr) => arr.length ? Math.round(arr.reduce((a,b) => a + b, 0) / arr.length) : 0;
+    const avgTime = {
+        web: calcAvg(times.web),
+        sms: calcAvg(times.sms),
+        wa: calcAvg(times.wa),
+        call: calcAvg(times.call),
+        total: calcAvg(times.total)
+    };
+
+    // 3. DOCUMENTS
     const getDocsCount = async () => {
       let query = supabase.from("user_documents").select("*", { count: "exact", head: true });
-      if (userId && userId !== "all") query = query.eq("user_id", userId);
+      if (userFilter) query = query.eq("user_id", userFilter);
       const { count } = await query;
       return count || 0;
     };
 
-    // Run all counts in parallel for maximum speed
-    const [webCount, smsCount, callCount, openWeb, openCall, docsCount] = await Promise.all([
-      getMessageCount("web"), getMessageCount("sms"), getMessageCount("call"),
-      getOpenChatCount("web"), getOpenChatCount("call"), getDocsCount()
+    // 4. USERS, TRANSCRIPTS, & ALL-TIME UPLOADS
+    let usersQuery = supabase.from("users").select("id, transcript_data, last_seen, all_time_uploads"); // 🔥 Added column
+    if (userFilter) usersQuery = usersQuery.eq("id", userFilter);
+    const { data: usersData } = await usersQuery;
+
+    let totalTranscripts = 0;
+    let activeUsers = 0;
+    let allTimeDocs = 0; // 🔥 NEW COUNTER
+    let thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    (usersData || []).forEach(u => {
+        if (u.transcript_data && Array.isArray(u.transcript_data)) {
+            totalTranscripts += u.transcript_data.length;
+        }
+        if (u.last_seen && u.last_seen >= thirtyDaysAgo) {
+            activeUsers++;
+        }
+        allTimeDocs += (u.all_time_uploads || 0); // 🔥 Add their all-time total to the global sum
+    });
+
+    let totalUsers = (usersData || []).length;
+
+    // Execute heavy queries in parallel
+    const [webCount, smsCount, waCount, callCount, docsCount] = await Promise.all([
+      getMessageCount("web"), getMessageCount("sms"), getMessageCount("wa"), getMessageCount("call"), getDocsCount()
     ]);
 
-    const totalMessages = webCount + smsCount + callCount || 1; // Prevent divide by zero
+    const totalMessages = webCount + smsCount + waCount + callCount || 1;
 
     res.json({ 
       success: true, 
-      usage: { web: webCount, sms: smsCount, call: callCount, total: totalMessages },
-      metrics: { openWeb, openCall, totalOpen: openWeb + openCall, docs: docsCount }
+      usage: { web: webCount, sms: smsCount, wa: waCount, call: callCount, total: totalMessages },
+      metrics: { activeUsers, totalUsers, totalTranscripts, avgTime, chats: chatStats, docs: docsCount }
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
