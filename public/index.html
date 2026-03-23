@@ -550,6 +550,9 @@ async function deleteChat(conversationId) {
 // ==========================================
 // SEND MESSAGE
 // ==========================================
+// ==========================================
+// SEND MESSAGE
+// ==========================================
 async function sendMessage() {
     const inputField = document.getElementById('chatInput');
     const message = inputField.value.trim();
@@ -562,16 +565,18 @@ async function sendMessage() {
     const es = document.getElementById('emptyState');
     if (es) es.remove();
 
-    addMessageToUI(message, 'user');
+    // 🔥 NEW: Check for files and Deep Dive BEFORE we draw the chat bubble
+    const checkedBoxes = document.querySelectorAll('.doc-checkbox:checked');
+    const selectedDocIds = Array.from(checkedBoxes).map(cb => cb.value);
+    const isDeepDive = document.getElementById('deepDiveToggle').checked;
+
+    // Pass the file count and deep dive status to the UI drawing function
+    addMessageToUI(message, 'user', selectedDocIds.length, isDeepDive);
     inputField.value = "";
 
     const sendBtn = document.getElementById('sendBtn');
     sendBtn.disabled = true;
     sendBtn.innerText = "...";
-
-    const checkedBoxes = document.querySelectorAll('.doc-checkbox:checked');
-    const selectedDocIds = Array.from(checkedBoxes).map(cb => cb.value);
-    const isDeepDive = document.getElementById('deepDiveToggle').checked;
 
     try {
         const res = await fetch('/api/chat', {
@@ -603,7 +608,7 @@ async function sendMessage() {
     sendBtn.innerText = "Send";
 }
 
-function addMessageToUI(text, sender) {
+function addMessageToUI(text, sender, fileCount = 0, isDeepDive = false) {
     const msgContainer = document.getElementById('chatMessages');
     const es = document.getElementById('emptyState');
     if (es) es.remove();
@@ -615,8 +620,29 @@ function addMessageToUI(text, sender) {
     if (sender === 'bot') {
         wrapper.innerHTML = '<img src="' + botAvatar + '" class="avatar" alt="AI" /><div class="message msg-bot">' + formatted + '</div>';
     } else {
-        wrapper.innerHTML = '<div class="message msg-user">' + formatted + '</div>';
+        // 🔥 NEW: Build the user bubble with dynamic badges!
+        let userHtml = `<div style="display: flex; flex-direction: column; align-items: flex-end;">`;
+        userHtml += `<div class="message msg-user">${formatted}</div>`;
+        
+        // Only inject badges if files are selected OR Deep Dive is active
+        if (fileCount > 0 || isDeepDive) {
+            userHtml += `<div style="font-size: 11px; margin-top: 6px; display: flex; gap: 6px;">`;
+            
+            if (fileCount > 0) {
+                userHtml += `<span style="background: #e0f2fe; color: #0284c7; padding: 3px 8px; border-radius: 12px; font-weight: 500;">📎 ${fileCount} File(s)</span>`;
+            }
+            
+            if (isDeepDive) {
+                userHtml += `<span style="background: #fce7f3; color: #db2777; padding: 3px 8px; border-radius: 12px; font-weight: 500;">🤿 Deep Dive Active</span>`;
+            }
+            
+            userHtml += `</div>`;
+        }
+        userHtml += `</div>`;
+        
+        wrapper.innerHTML = userHtml;
     }
+    
     msgContainer.appendChild(wrapper);
     msgContainer.scrollTop = msgContainer.scrollHeight;
 }

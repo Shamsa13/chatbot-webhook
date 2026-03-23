@@ -1870,7 +1870,8 @@ app.post("/api/admin/usage", async (req, res) => {
         } else if (ch === "call") {
             chatStats.activeCall++;
             if (c.started_at && c.closed_at) {
-                let callSecs = (new Date(c.closed_at) - new Date(c.started_at)) / 1000;
+                // Subtract 11 seconds to account for ElevenLabs post-call transcript processing delay
+                let callSecs = ((new Date(c.closed_at) - new Date(c.started_at)) / 1000) - 11;
                 callSecs = Math.max(1, callSecs);
                 times.call.push(callSecs);
                 times.total.push(callSecs);
