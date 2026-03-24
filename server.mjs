@@ -1825,7 +1825,26 @@ app.post("/api/admin/users", async (req, res) => {
   }
 });
 
-// 3. Get Usage Analytics & User Metrics
+// 1.5 Get a Single User's Full Profile & Memory
+app.post("/api/admin/user-details", async (req, res) => {
+  try {
+    const { secret, userId } = req.body;
+    if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
+
+    const { data: user, error: uErr } = await supabase
+      .from("users")
+      .select("*")
+      .eq("id", userId)
+      .single();
+    
+    if (uErr) throw uErr;
+
+    res.json({ success: true, user });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 3. Get Usage Analytics & Deep User Metrics
 app.post("/api/admin/usage", async (req, res) => {
   try {

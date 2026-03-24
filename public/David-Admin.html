@@ -36,6 +36,14 @@
         
         .tab-content { display: none; }
         .tab-content.active { display: block; }
+        /* USER DEEP DIVE MODAL */
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: none; justify-content: center; align-items: center; z-index: 1000; }
+        .user-card-detailed { background: #fff; width: 90%; max-width: 900px; height: 85vh; border-radius: 16px; overflow: hidden; display: flex; flex-direction: column; }
+        .card-header { padding: 25px; background: #181d32; color: white; display: flex; justify-content: space-between; align-items: center; }
+        .card-body { flex: 1; overflow-y: auto; padding: 30px; display: grid; grid-template-columns: 1fr 1fr; gap: 25px; background: #f9fafb; }
+        .info-box { background: white; padding: 20px; border-radius: 12px; border: 1px solid #eee; box-shadow: 0 2px 8px rgba(0,0,0,0.03); }
+        .memory-area { grid-column: span 2; white-space: pre-wrap; font-family: 'Inter', sans-serif; line-height: 1.6; color: #444; }
+        .stat-pill { display: inline-block; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; margin-right: 5px; margin-bottom: 5px; }
     </style>
 </head>
 <body>
@@ -59,9 +67,12 @@
         <div id="tabUsers" class="tab-content active">
             <div class="section">
                 <label>Select Target User</label>
-                <select id="userSelect" onchange="handleUserChange()">
-                    <option value="">-- Choose a user --</option>
-                </select>
+                <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                    <select id="userSelect" onchange="handleUserChange()" style="margin-bottom: 0;">
+                        <option value="">-- Choose a user --</option>
+                    </select>
+                    <button onclick="openSelectedUserProfile()" style="white-space: nowrap; background: #4caf50;">👤 View Profile</button>
+                </div>
                 <button onclick="getHistory()">📥 View Full Chat History</button>
                 <div id="historyOutput" style="display:none; margin-top: 15px;">
                     <pre id="historyText"></pre>
@@ -380,6 +391,66 @@
             }
         } catch (e) {
             showStatus("Network error.", true);
+        }
+    }
+    function openSelectedUserProfile() {
+        const userId = document.getElementById('userSelect').value;
+        if (!userId) return alert("Please select a user from the dropdown first.");
+        showUserDeepDive(userId);
+    }
+
+    async function showUserDeepDive(userId) {
+        const secret = document.getElementById('secretKey').value;
+        try {
+            const res = await fetch('/api/admin/user-details', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ secret, userId })
+            });
+            const data = await res.json();
+            if (!data.success) return alert("Error loading user details.");
+
+            const u = data.user;
+            const modal = document.createElement('div');
+            modal.className = 'modal-overlay';
+            modal.style.display = 'flex';
+            
+            modal.innerHTML = `
+                <div class="user-card-detailed">
+                    <div class="card-header">
+                        <div>
+                            <h2 style="margin:0; font-family:'Playfair Display'; color: white;">${u.full_name && u.full_name !== 'null' ? u.full_name : 'Anonymous User'}</h2>
+                            <div style="font-size:13px; opacity:0.8; margin-top: 5px;">${u.phone} • Member since ${new Date(u.created_at).toLocaleDateString()}</div>
+                        </div>
+                        <button onclick="this.closest('.modal-overlay').remove()" style="background:rgba(255,255,255,0.1); border:none; color:white; font-size:20px; cursor:pointer; padding:5px 15px; border-radius:8px;">&times;</button>
+                    </div>
+                    <div class="card-body">
+                        <div class="info-box">
+                            <h3 style="font-size:14px; color:#888; margin-bottom:15px; text-transform:uppercase;">Contact & Profile</h3>
+                            <p style="margin-bottom: 10px; font-size: 14px;"><strong>Email:</strong> ${u.email && u.email !== 'null' ? u.email : 'None on file'}</p>
+                            <p style="margin-bottom: 10px; font-size: 14px;"><strong>Last Seen:</strong> ${u.last_seen ? new Date(u.last_seen).toLocaleString() : 'Unknown'}</p>
+                            <p style="margin-bottom: 10px; font-size: 14px;"><strong>VCard Sent:</strong> ${u.vcard_sent ? '✅ Yes' : '❌ No'}</p>
+                        </div>
+                        <div class="info-box">
+                            <h3 style="font-size:14px; color:#888; margin-bottom:15px; text-transform:uppercase;">Engagement Stats</h3>
+                            <div style="display:flex; flex-wrap:wrap; gap:5px;">
+                                <div class="stat-pill" style="background:#e0f2fe; color:#0369a1;">🌐 Web Chats: ${u.all_time_web || 0}</div>
+                                <div class="stat-pill" style="background:#fef3c7; color:#92400e;">📞 Voice Calls: ${u.all_time_call || 0}</div>
+                                <div class="stat-pill" style="background:#dcfce7; color:#166534;">📂 KB Uploads: ${u.all_time_uploads || 0}</div>
+                            </div>
+                        </div>
+                        <div class="info-box memory-area">
+                            <h3 style="font-size:14px; color:#888; margin-bottom:15px; text-transform:uppercase;">David's Memory Profile</h3>
+                            <div style="background:#f4f4f4; padding:15px; border-radius:8px; border:1px solid #ddd; max-height:300px; overflow-y:auto; font-size: 13px;">
+                                ${u.memory_summary || "No permanent memory facts recorded yet."}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        } catch (e) {
+            alert("Network error loading profile.");
         }
     }
 
