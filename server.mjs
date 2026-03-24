@@ -877,7 +877,11 @@ app.post("/twilio/sms", async (req, res) => {
       userText: `(SMS) ${body}`
     });
 
-    const cleanReplyText = replyText.replace(/^[\(\[].*?[\)\]]\s*/, '').trim();
+    const cleanReplyText = replyText
+        .replace(/^[\(\[].*?[\)\]]\s*/, '') // Removes the internal platform tags
+        .replace(/\*\*/g, '')               // Strips all bold asterisks
+        .replace(/\*/g, '')                 // Strips all italic asterisks
+        .trim();
 
     res.status(200).type("text/xml").send(twimlReply(cleanReplyText));
     console.log("✅ SMS Reply sent to Twilio!");

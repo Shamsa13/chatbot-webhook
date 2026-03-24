@@ -351,7 +351,16 @@ function addMessageToUI(text, sender, fileCount = 0, isDeepDive = false) {
 
     const wrapper = document.createElement('div');
     wrapper.classList.add('message-wrapper', sender === 'bot' ? 'wrapper-bot' : 'wrapper-user');
-    const formatted = escapeHtml(text).replace(/\n/g, '<br>');
+    let formatted = escapeHtml(text);
+    
+    // Convert Markdown **bold** to HTML <strong>bold</strong>
+    formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    
+    // Convert Markdown *italics* to HTML <em>italics</em>
+    formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
+    
+    // Convert newlines to HTML breaks
+    formatted = formatted.replace(/\n/g, '<br>');
 
     if (sender === 'bot') {
         wrapper.innerHTML = '<img src="' + botAvatar + '" class="avatar" alt="AI" /><div class="message msg-bot">' + formatted + '</div>';
