@@ -1489,7 +1489,7 @@ app.post("/api/chat", async (req, res) => {
     // Fetch user profile AND recent summaries
     const { data: userDb } = await supabase
       .from("users")
-      .select("full_name, email, memory_summary, phone")
+      .select("full_name, email, memory_summary, phone, deep_dive_count, deep_dive_reset_date")
       .eq("id", userId)
       .single();
 
@@ -1586,30 +1586,49 @@ ${privateDocContext}
 
 Respond helpfully. Use uploaded documents to answer questions if relevant.`;
 
-   // Call OpenAI
+// Call OpenAI
     let reply = "";
     
-    if (deepDive && docIds.length > 0) {
-      console.log("🧠 Triggering GPT-5.4 Responses API (Medium Reasoning)...");
-      
-      // The new Responses API takes a compiled input string
-      const fullInput = `SYSTEM INSTRUCTIONS:\n${systemPrompt}\n\n` +
-                        `CHAT HISTORY:\n${webHistory.slice(0, -1).map(h => `${h.role.toUpperCase()}: ${h.content}`).join("\n")}\n\n` +
-                        `CURRENT USER MESSAGE:\n${message}`;
+    const fullInput = `SYSTEM INSTRUCTIONS:\n${systemPrompt}\n\n` +
+                      `CHAT HISTORY:\n${webHistory.slice(0, -1).map(h => `${h.role.toUpperCase()}: ${h.content}`).join("\n")}\n\n` +
+                      `CURRENT USER MESSAGE:\n${message}`;
 
+    if (deepDive && docIds.length > 0) {
+      // 1. QUOTA CHECK
+      const todayDate = new Date().toISOString().split('T')[0];
+      let currentCount = user.deep_dive_count || 0;
+      
+      // Reset the counter if it is a new day
+      if (user.deep_dive_reset_date !== todayDate) {
+          currentCount = 0; 
+      }
+
+      // Block if they hit the cap
+      if (currentCount >= 10) {
+          return res.json({ 
+              success: true, 
+              reply: "You have reached your daily limit of 10 Deep Dive queries. Please toggle Deep Dive off to continue chatting, or try again tomorrow.", 
+              conversationId 
+          });
+      }
+
+      // 2. RUN HIGH REASONING
+      console.log("🧠 Triggering GPT-5.4 Responses API (High Reasoning)...");
       const response = await openai.responses.create({
         model: "gpt-5.4",
-        reasoning: { effort: "medium" },
+        reasoning: { effort: "high" },
         input: fullInput
       });
       reply = response.output_text;
+
+      // 3. INCREMENT QUOTA
+      await supabase.from("users").update({
+          deep_dive_count: currentCount + 1,
+          deep_dive_reset_date: todayDate
+      }).eq("id", userId);
+
     } else {
       console.log("⚡ Triggering GPT-5.4 Responses API (None Reasoning)...");
-      
-      const fullInput = `SYSTEM INSTRUCTIONS:\n${systemPrompt}\n\n` +
-                        `CHAT HISTORY:\n${webHistory.slice(0, -1).map(h => `${h.role.toUpperCase()}: ${h.content}`).join("\n")}\n\n` +
-                        `CURRENT USER MESSAGE:\n${message}`;
-
       const response = await openai.responses.create({
         model: "gpt-5.4",
         reasoning: { effort: "none" },
