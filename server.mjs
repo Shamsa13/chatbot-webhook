@@ -1316,6 +1316,7 @@ app.post("/api/web/logout", async (req, res) => {
 
 // List all web conversations for sidebar
 // List all web conversations for sidebar
+// List all web conversations for sidebar
 app.get("/api/web/conversations", async (req, res) => {
   try {
     const userId = req.query.userId;
@@ -1323,13 +1324,15 @@ app.get("/api/web/conversations", async (req, res) => {
 
     const { data: convos, error } = await supabase
       .from("conversations")
-      .select("id, started_at, last_active_at, closed_at, title, channel_scope") // <-- ADDED channel_scope
+      .select("id, started_at, last_active_at, closed_at, title, channel_scope")
       .eq("user_id", userId)
-      .in("channel_scope", ["web", "call"]) // <-- FETCH BOTH WEB AND CALLS
+      .in("channel_scope", ["web", "call"])
+      .eq("is_deleted", false) // 🔥 HIDES DELETED CHATS FROM THE USER
       .order("last_active_at", { ascending: false })
       .limit(30);
 
     if (error) throw error;
+
 
     const results = [];
     for (const c of (convos || [])) {
@@ -1360,6 +1363,7 @@ app.get("/api/web/conversations", async (req, res) => {
     res.status(500).json({ error: "Failed to load conversations." });
   }
 });
+
 
 // Get messages for a specific conversation
 app.get("/api/web/messages", async (req, res) => {
@@ -1408,27 +1412,22 @@ app.post("/api/web/conversations/new", async (req, res) => {
 });
 
 // Delete a web conversation and its messages
+// Delete a web conversation (SOFT DELETE)
 app.delete("/api/web/conversations/:id", async (req, res) => {
   try {
     const conversationId = req.params.id;
     const { userId } = req.body;
     if (!conversationId || !userId) return res.status(400).json({ error: "Missing params" });
 
-// 1. Delete all raw messages
-    await supabase.from("messages").delete().eq("conversation_id", conversationId);
-    
-    // 2. 🔥 NEW: Delete the linked summary to satisfy the foreign key constraint!
-    await supabase.from("conversation_summaries").delete().eq("conversation_id", conversationId);
-    
-    // 3. Delete the parent conversation
+    // 🔥 NEW: Just flip the is_deleted switch! Do not delete the messages.
     const { error } = await supabase
       .from("conversations")
-      .delete()
+      .update({ is_deleted: true })
       .eq("id", conversationId)
       .eq("user_id", userId);
 
     if (error) throw error;
-    console.log("🗑️ Deleted web conversation:", conversationId);
+    console.log("🗑️ Soft Deleted conversation:", conversationId);
     res.json({ success: true });
   } catch (err) {
     console.error("Delete conversation error:", err);
@@ -1826,6 +1825,7 @@ app.post("/api/admin/users", async (req, res) => {
 });
 
 // 1.5 Get a Single User's Full Profile & Memory
+// 1.5 Get a Single User's Full Profile & Memory
 app.post("/api/admin/user-details", async (req, res) => {
   try {
     const { secret, userId } = req.body;
@@ -1839,7 +1839,69 @@ app.post("/api/admin/user-details", async (req, res) => {
     
     if (uErr) throw uErr;
 
-    res.json({ success: true, user });
+    // 🔥 NEW: Run the exact same Burst Math & Call Math for this specific user
+    const { data: convos } = await supabase.from("conversations").select("id, channel_scope, started_at, closed_at").eq("user_id", userId);
+    
+    let times = { web: [], call: [], total: [] };
+    let convoIds = (convos || []).map(c => c.id);
+
+    (convos || []).forEach(c => {
+        if (c.channel_scope === "call" && c.started_at && c.closed_at) {
+            let callSecs = ((new Date(c.closed_at) - new Date(c.started_at)) / 1000) - 11;
+            callSecs = Math.max(1, callSecs);
+            times.call.push(callSecs);
+            times.total.push(callSecs);
+        }
+    });
+
+    if (convoIds.length > 0) {
+        const { data: msgs } = await supabase.from("messages").select("conversation_id, channel, created_at").eq("direction", "user").in("channel", ["web", "sms", "wa"]).in("conversation_id", convoIds).order("created_at", { ascending: true });
+        
+        let currentSession = {};
+        (msgs || []).forEach(m => {
+            let time = new Date(m.created_at);
+            let cId = m.conversation_id;
+            let ch = (m.channel || "web").toLowerCase();
+
+            if (!currentSession[cId]) {
+                currentSession[cId] = { start: time, last: time, channel: ch };
+            } else {
+                let diffMins = (time - currentSession[cId].last) / 60000;
+                if (diffMins > 10) {
+                    let activeSecs = (currentSession[cId].last - currentSession[cId].start) / 1000;
+                    activeSecs = Math.max(1, activeSecs);
+                    if (times[ch]) times[ch].push(activeSecs);
+                    times.total.push(activeSecs);
+                    currentSession[cId] = { start: time, last: time, channel: ch };
+                } else {
+                    currentSession[cId].last = time;
+                }
+            }
+        });
+
+        Object.values(currentSession).forEach(sess => {
+            let activeSecs = (sess.last - sess.start) / 1000;
+            activeSecs = Math.max(1, activeSecs);
+            if (times[sess.channel]) times[sess.channel].push(activeSecs);
+            times.total.push(activeSecs);
+        });
+    }
+
+    const formatTime = (secsArray) => {
+        if (!secsArray.length) return "0s";
+        let avgSecs = Math.round(secsArray.reduce((a, b) => a + b, 0) / secsArray.length);
+        let m = Math.floor(avgSecs / 60);
+        let s = avgSecs % 60;
+        return m > 0 ? `${m}m ${s}s` : `${s}s`;
+    };
+
+    const avgTime = {
+        web: formatTime(times.web),
+        call: formatTime(times.call),
+        total: formatTime(times.total)
+    };
+
+    res.json({ success: true, user, avgTime });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1874,7 +1936,8 @@ app.post("/api/admin/usage", async (req, res) => {
     };
 
     // 2. CONVERSATIONS & CALL DURATION
-    let convoQuery = supabase.from("conversations").select("id, channel_scope, started_at, closed_at");
+    // 🔥 NEW: Pull the is_deleted column so the admin dashboard knows what is active
+    let convoQuery = supabase.from("conversations").select("id, channel_scope, started_at, closed_at, is_deleted");
     if (userFilter) convoQuery = convoQuery.eq("user_id", userFilter);
     const { data: allConvos } = await convoQuery;
 
@@ -1883,13 +1946,13 @@ app.post("/api/admin/usage", async (req, res) => {
 
     (allConvos || []).forEach(c => {
         const ch = c.channel_scope || "web";
-        // 🔥 Now, if it exists in this array, it is ACTIVE. No legacy needed!
+        
         if (ch === "web") {
-            chatStats.activeWeb++; 
+            if (!c.is_deleted) chatStats.activeWeb++; 
         } else if (ch === "call") {
-            chatStats.activeCall++;
+            if (!c.is_deleted) chatStats.activeCall++;
+            // Math runs even if deleted!
             if (c.started_at && c.closed_at) {
-                // Subtract 11 seconds to account for ElevenLabs post-call transcript processing delay
                 let callSecs = ((new Date(c.closed_at) - new Date(c.started_at)) / 1000) - 11;
                 callSecs = Math.max(1, callSecs);
                 times.call.push(callSecs);

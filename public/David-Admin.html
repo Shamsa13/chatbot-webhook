@@ -399,7 +399,7 @@
         showUserDeepDive(userId);
     }
 
-    async function showUserDeepDive(userId) {
+async function showUserDeepDive(userId) {
         const secret = document.getElementById('secretKey').value;
         try {
             const res = await fetch('/api/admin/user-details', {
@@ -411,6 +411,7 @@
             if (!data.success) return alert("Error loading user details.");
 
             const u = data.user;
+            const avg = data.avgTime; // 🔥 NEW: Grab the time data
             const modal = document.createElement('div');
             modal.className = 'modal-overlay';
             modal.style.display = 'flex';
@@ -433,10 +434,15 @@
                         </div>
                         <div class="info-box">
                             <h3 style="font-size:14px; color:#888; margin-bottom:15px; text-transform:uppercase;">Engagement Stats</h3>
-                            <div style="display:flex; flex-wrap:wrap; gap:5px;">
+                            <div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom: 10px;">
                                 <div class="stat-pill" style="background:#e0f2fe; color:#0369a1;">🌐 Web Chats: ${u.all_time_web || 0}</div>
                                 <div class="stat-pill" style="background:#fef3c7; color:#92400e;">📞 Voice Calls: ${u.all_time_call || 0}</div>
                                 <div class="stat-pill" style="background:#dcfce7; color:#166534;">📂 KB Uploads: ${u.all_time_uploads || 0}</div>
+                            </div>
+                            <div style="display:flex; flex-wrap:wrap; gap:5px;">
+                                <div class="stat-pill" style="background:#f3f4f6; color:#4b5563;">⏱️ Avg Total: ${avg.total}</div>
+                                <div class="stat-pill" style="background:#f3f4f6; color:#4b5563;">⏱️ Avg Web: ${avg.web}</div>
+                                <div class="stat-pill" style="background:#f3f4f6; color:#4b5563;">⏱️ Avg Call: ${avg.call}</div>
                             </div>
                         </div>
                         <div class="info-box memory-area">

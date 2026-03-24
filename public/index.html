@@ -103,10 +103,10 @@
         .sidebar-filter { width: 100%; padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color: #ccc; font-size: 12px; outline: none; cursor: pointer; }
         .sidebar-filter option { background: #181d32; color: white; }
 
-       /* KNOWLEDGE BASE TOOLTIP */
+      /* KNOWLEDGE BASE TOOLTIP */
         .kb-tooltip-container { position: relative; display: inline-block; cursor: help; margin-left: 8px; font-size: 14px; color: #888; vertical-align: middle; }
-        .kb-tooltip-text { visibility: hidden; width: 230px; background-color: #252b48; color: #fff; text-align: left; border-radius: 8px; padding: 12px; position: absolute; z-index: 100; top: 130%; right: -10px; left: auto; opacity: 0; transition: opacity 0.3s; font-size: 12px; line-height: 1.5; font-weight: 400; box-shadow: 0 4px 15px rgba(0,0,0,0.5); font-family: 'Inter', sans-serif; }
-        .kb-tooltip-text::after { content: ""; position: absolute; bottom: 100%; right: 16px; left: auto; border-width: 5px; border-style: solid; border-color: transparent transparent #252b48 transparent; }
+        .kb-tooltip-text { visibility: hidden; width: 230px; background-color: #252b48; color: #fff; text-align: left; border-radius: 8px; padding: 12px; position: absolute; z-index: 100; top: 130%; left: 0; opacity: 0; transition: opacity 0.3s; font-size: 12px; line-height: 1.5; font-weight: 400; box-shadow: 0 4px 15px rgba(0,0,0,0.5); font-family: 'Inter', sans-serif; }
+        .kb-tooltip-text::after { content: ""; position: absolute; bottom: 100%; left: 10px; border-width: 5px; border-style: solid; border-color: transparent transparent #252b48 transparent; }
         .kb-tooltip-container:hover .kb-tooltip-text { visibility: visible; opacity: 1; }
         /* RIGHT SIDEBAR (Memory Bank) */
         .right-sidebar { width: 320px; min-width: 320px; background: #111424; color: white; display: flex; flex-direction: column; border-radius: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); overflow: hidden; }
