@@ -1456,7 +1456,9 @@ app.post("/api/chat", async (req, res) => {
     // Save user message
     const { error: userErr } = await supabase.from("messages").insert({
       conversation_id: conversationId, channel: "web", direction: "user",
-      text: message, provider: "web"
+      text: message, provider: "web",
+      has_files: selectedDocIds && selectedDocIds.length > 0,
+      is_deep_dive: deepDive === true
     });
     if (userErr) console.error("🚨 DB REJECTED USER MSG:", userErr.message);     
 
@@ -2050,8 +2052,18 @@ app.post("/api/admin/usage", async (req, res) => {
     
     let totalUsers = (usersData || []).length;
 
-    const [webCount, smsCount, waCount, callCount, docsCount] = await Promise.all([
-      getMessageCount("web"), getMessageCount("sms"), getMessageCount("wa"), getMessageCount("call"), getDocsCount()
+    // 🔥 NEW: Function to count specific feature usage
+    const getFeatureCount = async (col) => {
+        let query = supabase.from("messages").select("*", { count: "exact", head: true }).eq(col, true).eq("direction", "user");
+        if (userFilter) query = query.in("conversation_id", convoIds);
+        const { count } = await query;
+        return count || 0;
+    };
+
+    // Execute heavy queries in parallel
+    const [webCount, smsCount, waCount, callCount, docsCount, deepDiveCount, fileChatCount] = await Promise.all([
+      getMessageCount("web"), getMessageCount("sms"), getMessageCount("wa"), getMessageCount("call"), getDocsCount(),
+      getFeatureCount("is_deep_dive"), getFeatureCount("has_files")
     ]);
 
     const totalMessages = webCount + smsCount + waCount + callCount || 1;
@@ -2059,7 +2071,7 @@ app.post("/api/admin/usage", async (req, res) => {
     res.json({ 
       success: true, 
       usage: { web: webCount, sms: smsCount, wa: waCount, call: callCount, total: totalMessages },
-      metrics: { activeUsers, totalUsers, totalTranscripts, avgTime, chats: chatStats, docs: docsCount, allTimeDocs, allTimeChats } 
+      metrics: { activeUsers, totalUsers, totalTranscripts, avgTime, chats: chatStats, docs: docsCount, allTimeDocs, allTimeChats, deepDiveCount, fileChatCount } 
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
