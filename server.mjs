@@ -1825,7 +1825,6 @@ app.post("/api/admin/users", async (req, res) => {
 });
 
 // 1.5 Get a Single User's Full Profile & Memory
-// 1.5 Get a Single User's Full Profile & Memory
 app.post("/api/admin/user-details", async (req, res) => {
   try {
     const { secret, userId } = req.body;
@@ -1839,18 +1838,24 @@ app.post("/api/admin/user-details", async (req, res) => {
     
     if (uErr) throw uErr;
 
-    // 🔥 NEW: Run the exact same Burst Math & Call Math for this specific user
-    const { data: convos } = await supabase.from("conversations").select("id, channel_scope, started_at, closed_at").eq("user_id", userId);
+    const { data: convos } = await supabase.from("conversations").select("id, channel_scope, started_at, closed_at, is_deleted").eq("user_id", userId);
     
     let times = { web: [], call: [], total: [] };
     let convoIds = (convos || []).map(c => c.id);
+    
+    // 🔥 NEW: Dynamically count total opened here!
+    let totalOpened = { web: 0, call: 0 };
 
     (convos || []).forEach(c => {
-        if (c.channel_scope === "call" && c.started_at && c.closed_at) {
-            let callSecs = ((new Date(c.closed_at) - new Date(c.started_at)) / 1000) - 11;
-            callSecs = Math.max(1, callSecs);
-            times.call.push(callSecs);
-            times.total.push(callSecs);
+        if (c.channel_scope === "web") totalOpened.web++;
+        if (c.channel_scope === "call") {
+            totalOpened.call++;
+            if (c.started_at && c.closed_at) {
+                let callSecs = ((new Date(c.closed_at) - new Date(c.started_at)) / 1000) - 11;
+                callSecs = Math.max(1, callSecs);
+                times.call.push(callSecs);
+                times.total.push(callSecs);
+            }
         }
     });
 
@@ -1901,7 +1906,7 @@ app.post("/api/admin/user-details", async (req, res) => {
         total: formatTime(times.total)
     };
 
-    res.json({ success: true, user, avgTime });
+    res.json({ success: true, user, avgTime, totalOpened });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1922,7 +1927,7 @@ app.post("/api/admin/usage", async (req, res) => {
         return res.json({ 
             success: true, 
             usage: { web: 0, sms: 0, wa: 0, call: 0, total: 0 }, 
-            metrics: { activeUsers: 0, totalUsers: 0, totalTranscripts: 0, avgTime: { web:0, sms:0, wa:0, call:0, total:0 }, chats: { activeWeb:0, activeCall:0, legacyWeb:0, legacyCall:0, total:0 }, docs: 0 } 
+            metrics: { activeUsers: 0, totalUsers: 0, totalTranscripts: 0, avgTime: { web:"0s", sms:"0s", wa:"0s", call:"0s", total:"0s" }, chats: { activeWeb:0, activeCall:0 }, docs: 0, allTimeDocs: 0, allTimeChats: { web:0, call:0, total:0 } } 
         });
       }
     }
@@ -1936,22 +1941,24 @@ app.post("/api/admin/usage", async (req, res) => {
     };
 
     // 2. CONVERSATIONS & CALL DURATION
-    // 🔥 NEW: Pull the is_deleted column so the admin dashboard knows what is active
     let convoQuery = supabase.from("conversations").select("id, channel_scope, started_at, closed_at, is_deleted");
     if (userFilter) convoQuery = convoQuery.eq("user_id", userFilter);
     const { data: allConvos } = await convoQuery;
 
     let chatStats = { activeWeb: 0, activeCall: 0 };
+    let allTimeChats = { web: 0, call: 0, total: 0 }; // 🔥 Counting dynamically now!
     let times = { web: [], sms: [], wa: [], call: [], total: [] };
 
     (allConvos || []).forEach(c => {
         const ch = c.channel_scope || "web";
         
         if (ch === "web") {
+            allTimeChats.web++; 
             if (!c.is_deleted) chatStats.activeWeb++; 
         } else if (ch === "call") {
+            allTimeChats.call++; 
             if (!c.is_deleted) chatStats.activeCall++;
-            // Math runs even if deleted!
+            
             if (c.started_at && c.closed_at) {
                 let callSecs = ((new Date(c.closed_at) - new Date(c.started_at)) / 1000) - 11;
                 callSecs = Math.max(1, callSecs);
@@ -1960,8 +1967,10 @@ app.post("/api/admin/usage", async (req, res) => {
             }
         }
     });
+    
+    allTimeChats.total = allTimeChats.web + allTimeChats.call;
 
-    // 2.5 EXACT ENGAGEMENT TIME (Message Burst Math in SECONDS for Text-Based Chats)
+    // 2.5 EXACT ENGAGEMENT TIME
     let msgQuery = supabase.from("messages").select("conversation_id, channel, created_at").eq("direction", "user").in("channel", ["web", "sms", "wa"]).order("created_at", { ascending: true });
     if (userFilter) msgQuery = msgQuery.in("conversation_id", convoIds);
     const { data: allUserMsgs } = await msgQuery;
@@ -1996,7 +2005,6 @@ app.post("/api/admin/usage", async (req, res) => {
         times.total.push(activeSecs);
     });
 
-    // Beautiful "Xm Ys" formatter
     const formatTime = (secsArray) => {
         if (!secsArray.length) return "0s";
         let avgSecs = Math.round(secsArray.reduce((a, b) => a + b, 0) / secsArray.length);
@@ -2022,14 +2030,14 @@ app.post("/api/admin/usage", async (req, res) => {
     };
 
     // 4. USERS, TRANSCRIPTS, & ALL-TIME UPLOADS
-    let usersQuery = supabase.from("users").select("id, transcript_data, last_seen, all_time_uploads, all_time_web, all_time_call"); 
+    // 🔥 Removed the brittle ghost counters from this query
+    let usersQuery = supabase.from("users").select("id, transcript_data, last_seen, all_time_uploads"); 
     if (userFilter) usersQuery = usersQuery.eq("id", userFilter);
     const { data: usersData } = await usersQuery;
 
     let totalTranscripts = 0;
     let activeUsers = 0;
     let allTimeDocs = 0;
-    let allTimeChats = { web: 0, call: 0, total: 0 }; // 🔥 ONLY Web and Call
     let thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
     (usersData || []).forEach(u => {
@@ -2038,16 +2046,10 @@ app.post("/api/admin/usage", async (req, res) => {
         }
         if (u.last_seen && u.last_seen >= thirtyDaysAgo) activeUsers++;
         allTimeDocs += (u.all_time_uploads || 0);
-        
-        allTimeChats.web += (u.all_time_web || 0);
-        allTimeChats.call += (u.all_time_call || 0);
     });
     
-    allTimeChats.total = allTimeChats.web + allTimeChats.call;
-
     let totalUsers = (usersData || []).length;
 
-    // Execute heavy queries in parallel
     const [webCount, smsCount, waCount, callCount, docsCount] = await Promise.all([
       getMessageCount("web"), getMessageCount("sms"), getMessageCount("wa"), getMessageCount("call"), getDocsCount()
     ]);
@@ -2057,7 +2059,6 @@ app.post("/api/admin/usage", async (req, res) => {
     res.json({ 
       success: true, 
       usage: { web: webCount, sms: smsCount, wa: waCount, call: callCount, total: totalMessages },
-      // 🔥 NEW: Added allTimeDocs to the payload!
       metrics: { activeUsers, totalUsers, totalTranscripts, avgTime, chats: chatStats, docs: docsCount, allTimeDocs, allTimeChats } 
     });
   } catch (err) {
