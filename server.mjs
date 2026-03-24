@@ -419,18 +419,29 @@ function formatRecentHistoryForCall(msgs) {
 
 async function callModel({ systemPrompt, profileContext, ragContext, memorySummary, history, userText }) {
   const sys = systemPrompt || "You are a helpful assistant. Keep replies short and clear.";
-  const messages = [
-    { role: "system", content: sys },
-    ...(profileContext ? [{ role: "system", content: profileContext }] : []),
-    ...(ragContext ? [{ role: "system", content: "Relevant Knowledge Base Context:\n\n" + ragContext }] : []),
-    ...(memorySummary ? [{ role: "system", content: "Long term memory about this user:\n" + memorySummary }] : []),
-    ...(history || []),
-    { role: "user", content: userText }
-  ];
+  
+  // Build the compiled input string for the new Responses API
+  let fullInput = `SYSTEM INSTRUCTIONS:\n${sys}\n\n`;
+  if (profileContext) fullInput += `PROFILE CONTEXT:\n${profileContext}\n\n`;
+  if (ragContext) fullInput += `KNOWLEDGE BASE CONTEXT:\n${ragContext}\n\n`;
+  if (memorySummary) fullInput += `LONG TERM MEMORY:\n${memorySummary}\n\n`;
+  
+  if (history && history.length > 0) {
+      fullInput += `CHAT HISTORY:\n${history.map(h => `${h.role.toUpperCase()}: ${h.content}`).join("\n")}\n\n`;
+  }
+  fullInput += `CURRENT USER MESSAGE:\n${userText}`;
 
-  const resp = await openai.chat.completions.create({ model: OPENAI_MODEL, messages });
-  const out = resp?.choices?.[0]?.message?.content || "";
-  return out.trim() || "Sorry, I could not generate a reply.";
+  try {
+      const resp = await openai.responses.create({ 
+          model: "gpt-5.4", 
+          reasoning: { effort: "none" },
+          input: fullInput
+      });
+      return (resp.output_text || "").trim() || "Sorry, I could not generate a reply.";
+  } catch (e) {
+      console.error("Model call failed:", e);
+      return "Sorry, I could not generate a reply.";
+  }
 }
 
 async function updateMemorySummary({ oldSummary, userText, assistantText, channelLabel = "UNKNOWN" }) {
@@ -1499,11 +1510,10 @@ app.post("/api/chat", async (req, res) => {
     let currentChatModel = OPENAI_MODEL; // Default to gpt-4o
 
     try {
-      if (deepDive && docIds.length > 0) {
+     if (deepDive && docIds.length > 0) {
         // 🤿 DEEP DIVE MODE ACTIVATED
         console.log("🤿 DEEP DIVE ACTIVATED! Fetching full documents...");
-        currentChatModel = "gpt-4o-mini"; // Swap to high-context model
-
+        
         const { data: fullDocs, error: docErr } = await supabase
           .from("user_documents")
           .select("document_name, full_text")
@@ -1511,7 +1521,7 @@ app.post("/api/chat", async (req, res) => {
           .eq("user_id", userId);
 
         if (fullDocs && fullDocs.length > 0) {
-          privateDocContext = "CRITICAL: DEEP DIVE MODE ACTIVATED. The user has provided the ENTIRE full text of the following documents. Read them carefully to answer the prompt:\n\n";
+          privateDocContext = "STRICT RULE: DEEP DIVE MODE ACTIVATED. The user has provided the ENTIRE full text of the following documents. You must read them carefully. If the user asks for a list, breakdown, or analysis of items, you MUST output every single item individually. Do not summarize, do not group them, and do not truncate the list. Generate the complete output regardless of length.\n\n";
           fullDocs.forEach(doc => {
              privateDocContext += `=== START OF DOCUMENT: ${doc.document_name} ===\n${doc.full_text || "(No text found)"}\n=== END OF DOCUMENT ===\n\n`;
           });
@@ -1576,17 +1586,37 @@ ${privateDocContext}
 
 Respond helpfully. Use uploaded documents to answer questions if relevant.`;
 
-    // Call OpenAI
-    const completion = await openai.chat.completions.create({
-      model: currentChatModel, // 🤿 Uses standard or gpt-4o-mini depending on toggle
-      messages: [
-        { role: "system", content: systemPrompt },
-        ...webHistory.slice(0, -1),
-        { role: "user", content: message }
-      ]
-    });
+   // Call OpenAI
+    let reply = "";
+    
+    if (deepDive && docIds.length > 0) {
+      console.log("🧠 Triggering GPT-5.4 Responses API (Medium Reasoning)...");
+      
+      // The new Responses API takes a compiled input string
+      const fullInput = `SYSTEM INSTRUCTIONS:\n${systemPrompt}\n\n` +
+                        `CHAT HISTORY:\n${webHistory.slice(0, -1).map(h => `${h.role.toUpperCase()}: ${h.content}`).join("\n")}\n\n` +
+                        `CURRENT USER MESSAGE:\n${message}`;
 
-    const reply = completion.choices[0].message.content;
+      const response = await openai.responses.create({
+        model: "gpt-5.4",
+        reasoning: { effort: "medium" },
+        input: fullInput
+      });
+      reply = response.output_text;
+    } else {
+      console.log("⚡ Triggering GPT-5.4 Responses API (None Reasoning)...");
+      
+      const fullInput = `SYSTEM INSTRUCTIONS:\n${systemPrompt}\n\n` +
+                        `CHAT HISTORY:\n${webHistory.slice(0, -1).map(h => `${h.role.toUpperCase()}: ${h.content}`).join("\n")}\n\n` +
+                        `CURRENT USER MESSAGE:\n${message}`;
+
+      const response = await openai.responses.create({
+        model: "gpt-5.4",
+        reasoning: { effort: "none" },
+        input: fullInput
+      });
+      reply = response.output_text;
+    }
 
     // Save reply
     const { error: botErr } = await supabase.from("messages").insert({
