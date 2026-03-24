@@ -351,21 +351,20 @@ function addMessageToUI(text, sender, fileCount = 0, isDeepDive = false) {
 
     const wrapper = document.createElement('div');
     wrapper.classList.add('message-wrapper', sender === 'bot' ? 'wrapper-bot' : 'wrapper-user');
-    let formatted = escapeHtml(text);
-    
-    // Convert Markdown **bold** to HTML <strong>bold</strong>
-    formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-    
-    // Convert Markdown *italics* to HTML <em>italics</em>
-    formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
-    
-    // Convert newlines to HTML breaks
-    formatted = formatted.replace(/\n/g, '<br>');
+
+    let formatted = "";
+    if (sender === 'bot') {
+        // Let Marked.js perfectly handle all bolding, lists, and line breaks
+        formatted = marked.parse(text); 
+    } else {
+        // Keep user messages plain and safe
+        formatted = escapeHtml(text).replace(/\n/g, '<br>');
+    }
 
     if (sender === 'bot') {
         wrapper.innerHTML = '<img src="' + botAvatar + '" class="avatar" alt="AI" /><div class="message msg-bot">' + formatted + '</div>';
     } else {
-        // 🔥 NEW: Build the user bubble with dynamic badges!
+        // Build the user bubble with dynamic badges
         let userHtml = `<div style="display: flex; flex-direction: column; align-items: flex-end;">`;
         userHtml += `<div class="message msg-user">${formatted}</div>`;
         
@@ -374,11 +373,11 @@ function addMessageToUI(text, sender, fileCount = 0, isDeepDive = false) {
             userHtml += `<div style="font-size: 11px; margin-top: 6px; display: flex; gap: 6px;">`;
             
             if (fileCount > 0) {
-                userHtml += `<span style="background: #e0f2fe; color: #0284c7; padding: 3px 8px; border-radius: 12px; font-weight: 500;"> ${fileCount} File(s)</span>`;
+                userHtml += `<span style="background: #e0f2fe; color: #0284c7; padding: 3px 8px; border-radius: 12px; font-weight: 500;">📎 ${fileCount} File(s)</span>`;
             }
             
             if (isDeepDive) {
-                userHtml += `<span style="background: #fce7f3; color: #db2777; padding: 3px 8px; border-radius: 12px; font-weight: 500;"> Deep Dive Active</span>`;
+                userHtml += `<span style="background: #fce7f3; color: #db2777; padding: 3px 8px; border-radius: 12px; font-weight: 500;">🤿 Deep Dive Active</span>`;
             }
             
             userHtml += `</div>`;
