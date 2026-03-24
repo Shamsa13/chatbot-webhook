@@ -283,12 +283,35 @@ async function deleteChat(conversationId) {
     } catch (e) { console.error("Delete chat error:", e); }
 }
 
+
+
+
+// ==========================================
+// TYPING INDICATOR
+// ==========================================
+function showTyping() {
+    const msgContainer = document.getElementById('chatMessages');
+    const wrapper = document.createElement('div');
+    wrapper.id = "typingBubble";
+    wrapper.className = "typing-wrapper";
+    wrapper.innerHTML = `
+        <img src="${botAvatar}" class="avatar" alt="AI" />
+        <div class="typing-indicator">
+            <span></span><span></span><span></span>
+        </div>
+    `;
+    msgContainer.appendChild(wrapper);
+    msgContainer.scrollTop = msgContainer.scrollHeight;
+}
+
+function removeTyping() {
+    const typingBubble = document.getElementById('typingBubble');
+    if (typingBubble) typingBubble.remove();
+}
 // ==========================================
 // SEND MESSAGE
 // ==========================================
-// ==========================================
-// SEND MESSAGE
-// ==========================================
+
 async function sendMessage() {
     const inputField = document.getElementById('chatInput');
     const message = inputField.value.trim();
@@ -301,18 +324,19 @@ async function sendMessage() {
     const es = document.getElementById('emptyState');
     if (es) es.remove();
 
-    // 🔥 NEW: Check for files and Deep Dive BEFORE we draw the chat bubble
     const checkedBoxes = document.querySelectorAll('.doc-checkbox:checked');
     const selectedDocIds = Array.from(checkedBoxes).map(cb => cb.value);
     const isDeepDive = document.getElementById('deepDiveToggle').checked;
 
-    // Pass the file count and deep dive status to the UI drawing function
     addMessageToUI(message, 'user', selectedDocIds.length, isDeepDive);
     inputField.value = "";
 
     const sendBtn = document.getElementById('sendBtn');
     sendBtn.disabled = true;
     sendBtn.innerText = "...";
+
+    // 🕒 SHOW TYPING ANIMATION
+    showTyping();
 
     try {
         const res = await fetch('/api/chat', {
@@ -328,6 +352,9 @@ async function sendMessage() {
         });
         const data = await res.json();
 
+        // 🛑 REMOVE TYPING ANIMATION
+        removeTyping();
+
         if (data.success) {
             addMessageToUI(data.reply, 'bot');
             if (data.conversationId) currentConversationId = data.conversationId;
@@ -338,6 +365,7 @@ async function sendMessage() {
         }
     } catch (error) {
         console.error("Chat network error:", error);
+        removeTyping(); // Ensure it is removed on a network crash too
         addMessageToUI("Network error. Please check your connection.", 'bot');
     }
     sendBtn.disabled = false;

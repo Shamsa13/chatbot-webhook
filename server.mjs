@@ -1569,12 +1569,13 @@ app.post("/api/chat", async (req, res) => {
       }
     } catch (e) { console.error("Doc processing failed:", e); }
 
-    // Build system prompt
+   // Build system prompt
     const cfg = await getBotConfig();
 
     const systemPrompt = `${cfg.systemPrompt}
 
-PLATFORM: You are currently chatting with ${user.full_name || 'the user'} on the WEB chat interface.
+PLATFORM: You are currently chatting with ${user.full_name || 'the user'} on the WEB chat interface. 
+FORMATTING RULE: This web interface FULLY supports rich Markdown formatting. You MUST use **bold** for headers, bullet points for lists, and proper spacing to make your answers highly readable and professional.
 
 CROSS-PLATFORM MEMORY (from past SMS, calls, and web chats):
 ${user.memory_summary || "No past memory yet."}
