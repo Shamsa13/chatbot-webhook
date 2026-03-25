@@ -339,7 +339,7 @@ async function sendMessage() {
     showTyping();
 
     try {
-        const res = await fetch('https://your-david-app.onrender.com/api/chat',{
+        const res = await fetch('/api/chat', {
             method: 'POST', 
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
