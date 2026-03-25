@@ -339,7 +339,7 @@ async function sendMessage() {
     showTyping();
 
     try {
-        const res = await fetch('/api/chat', {
+        const res = await fetch('https://your-david-app.onrender.com/api/chat',{
             method: 'POST', 
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -389,28 +389,33 @@ function addMessageToUI(text, sender, fileCount = 0, isDeepDive = false) {
         formatted = escapeHtml(text).replace(/\n/g, '<br>');
     }
 
+    // Safely encode the text so quotes don't break the HTML button
+    const safeText = encodeURIComponent(text);
+
     if (sender === 'bot') {
-        wrapper.innerHTML = '<img src="' + botAvatar + '" class="avatar" alt="AI" /><div class="message msg-bot">' + formatted + '</div>';
+        wrapper.innerHTML = `
+            <img src="${botAvatar}" class="avatar" alt="AI" />
+            <div style="display: flex; flex-direction: column; align-items: flex-start; max-width: 100%;">
+                <div class="message msg-bot">${formatted}</div>
+                <button class="copy-action-btn" onclick="copyMessageText(this, '${safeText}')">📋 Copy Text</button>
+            </div>
+        `;
     } else {
-        // Build the user bubble with dynamic badges
-        let userHtml = `<div style="display: flex; flex-direction: column; align-items: flex-end;">`;
+        // Build the user bubble with dynamic badges and copy button
+        let userHtml = `<div style="display: flex; flex-direction: column; align-items: flex-end; max-width: 100%;">`;
         userHtml += `<div class="message msg-user">${formatted}</div>`;
         
-        // Only inject badges if files are selected OR Deep Dive is active
-        if (fileCount > 0 || isDeepDive) {
-            userHtml += `<div style="font-size: 11px; margin-top: 6px; display: flex; gap: 6px;">`;
-            
-            if (fileCount > 0) {
-                userHtml += `<span style="background: #e0f2fe; color: #0284c7; padding: 3px 8px; border-radius: 12px; font-weight: 500;">📎 ${fileCount} File(s)</span>`;
-            }
-            
-            if (isDeepDive) {
-                userHtml += `<span style="background: #fce7f3; color: #db2777; padding: 3px 8px; border-radius: 12px; font-weight: 500;">🤿 Deep Dive Active</span>`;
-            }
-            
-            userHtml += `</div>`;
+        // Flex container for badges + copy button
+        userHtml += `<div style="display: flex; align-items: center; gap: 10px; margin-top: 6px;">`;
+        userHtml += `<button class="copy-action-btn" style="margin-top: 0;" onclick="copyMessageText(this, '${safeText}')">📋 Copy</button>`;
+        
+        if (fileCount > 0) {
+            userHtml += `<span style="background: #e0f2fe; color: #0284c7; padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 500;">📎 ${fileCount} File(s)</span>`;
         }
-        userHtml += `</div>`;
+        if (isDeepDive) {
+            userHtml += `<span style="background: #fce7f3; color: #db2777; padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 500;">🤿 Deep Dive Active</span>`;
+        }
+        userHtml += `</div></div>`;
         
         wrapper.innerHTML = userHtml;
     }
@@ -578,6 +583,17 @@ function handleDocSelection(checkbox) {
     // Save the current selections to LocalStorage (works for unlimited docs if Deep Dive is OFF)
     const selectedDocIds = Array.from(document.querySelectorAll('.doc-checkbox:checked')).map(cb => cb.value);
     localStorage.setItem('david_saved_docs_' + globalUserId, JSON.stringify(selectedDocIds));
+}
+
+// ==========================================
+// COPY TO CLIPBOARD
+// ==========================================
+function copyMessageText(btn, encodedText) {
+    const text = decodeURIComponent(encodedText);
+    navigator.clipboard.writeText(text).then(() => {
+        btn.innerHTML = "✅ Copied!";
+        setTimeout(() => { btn.innerHTML = "📋 Copy"; }, 2000);
+    }).catch(err => console.error("Copy failed", err));
 }
 
 

@@ -187,3 +187,12 @@ input:checked + .slider:before { transform: translateX(18px); }
     0%, 80%, 100% { transform: scale(0); }
     40% { transform: scale(1); }
 }
+
+/* COPY WIDGET STYLES */
+.copy-action-btn {
+    background: transparent; border: none; color: #999; cursor: pointer;
+    font-size: 11px; margin-top: 6px; padding: 2px 4px; transition: 0.2s;
+    opacity: 0; font-weight: 500; font-family: 'Inter', sans-serif;
+}
+.message-wrapper:hover .copy-action-btn { opacity: 1; }
+.copy-action-btn:hover { color: #181d32; }
