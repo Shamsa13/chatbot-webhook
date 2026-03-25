@@ -551,6 +551,16 @@ async function triggerGoogleAppsScript(email, name, transcriptId, description) {
   }
 }
 
+async function incrementEmailedTranscripts(userId) {
+  try {
+    const { data } = await supabase.from("users").select("transcripts_emailed").eq("id", userId).single();
+    const newVal = (data?.transcripts_emailed || 0) + 1;
+    await supabase.from("users").update({ transcripts_emailed: newVal }).eq("id", userId);
+  } catch (e) {
+    console.error("Failed to increment emailed transcripts:", e);
+  }
+}
+
 async function processSmsIntent(userId, userText) {
   try {
     const { data: user } = await supabase.from("users").select("full_name, email, transcript_data").eq("id", userId).single();
@@ -899,6 +909,7 @@ app.post("/twilio/sms", async (req, res) => {
       processSmsIntent(userId, body).then(pendingTask => {
         if (pendingTask) {
           triggerGoogleAppsScript(pendingTask.email, pendingTask.name, pendingTask.id, pendingTask.desc);
+          incrementEmailedTranscripts(userId);
         }
       }).catch(e => console.error("Intent error:", e));
     }
@@ -1652,10 +1663,10 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
     // 🔥 BACKGROUND TASK: Transcript Intent Extractor (Web)
     const intentKeywords = /(@|\b(transcript|email|send|call|recent|yes|yeah|sure|ok|please|back|ago)\b)/i; 
     if (intentKeywords.test(message)) {
-      // Re-use the exact same intent extractor from the SMS route!
       processSmsIntent(userId, message).then(pendingTask => {
         if (pendingTask) {
           triggerGoogleAppsScript(pendingTask.email, pendingTask.name, pendingTask.id, pendingTask.desc);
+          incrementEmailedTranscripts(userId); // 🔥 Logs the email!
           console.log(`📧 WEB CHAT TRIGGERED EMAIL: Transcript sent to ${pendingTask.email}`);
         }
       }).catch(e => console.error("Web Intent error:", e));
@@ -2087,12 +2098,14 @@ app.post("/api/admin/usage", async (req, res) => {
 
     // 4. USERS, TRANSCRIPTS, & ALL-TIME UPLOADS
     // 🔥 Removed the brittle ghost counters from this query
-    let usersQuery = supabase.from("users").select("id, transcript_data, last_seen, all_time_uploads"); 
+    // 🔥 Added transcripts_emailed to the query
+    let usersQuery = supabase.from("users").select("id, transcript_data, last_seen, all_time_uploads, transcripts_emailed");
     if (userFilter) usersQuery = usersQuery.eq("id", userFilter);
     const { data: usersData } = await usersQuery;
 
     let totalTranscripts = 0;
     let activeUsers = 0;
+    let totalEmailed = 0;
     let allTimeDocs = 0;
     let thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -2102,6 +2115,7 @@ app.post("/api/admin/usage", async (req, res) => {
         }
         if (u.last_seen && u.last_seen >= thirtyDaysAgo) activeUsers++;
         allTimeDocs += (u.all_time_uploads || 0);
+        totalEmailed += (u.transcripts_emailed || 0);
     });
     
     let totalUsers = (usersData || []).length;
@@ -2125,7 +2139,7 @@ app.post("/api/admin/usage", async (req, res) => {
     res.json({ 
       success: true, 
       usage: { web: webCount, sms: smsCount, wa: waCount, call: callCount, total: totalMessages },
-      metrics: { activeUsers, totalUsers, totalTranscripts, avgTime, chats: chatStats, docs: docsCount, allTimeDocs, allTimeChats, deepDiveCount, fileChatCount } 
+      metrics: { activeUsers, totalUsers, totalTranscripts, totalEmailed, avgTime, chats: chatStats, docs: docsCount, allTimeDocs, allTimeChats, deepDiveCount, fileChatCount } 
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2151,6 +2165,8 @@ app.post("/api/admin/send-transcript", async (req, res) => {
       transcriptId, 
       "Manual Send from Admin"
     );
+
+    await incrementEmailedTranscripts(userId);
 
     res.json({ success: true, message: `Transcript sent to ${targetEmail}!` });
   } catch (err) {
