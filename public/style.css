@@ -3,16 +3,43 @@
 /* Slightly darkened background so the white chat panel pops */
 body { font-family: 'Inter', sans-serif; background: #eef0f4; display: flex; justify-content: center; align-items: center; height: 100vh; color: #333; }
 h1, h2, h3 { font-family: 'Playfair Display', serif; }
+/* =========================================
+   LOGIN SCREEN STYLES (Premium Split Layout)
+   ========================================= */
+#loginContainer { display: none; } /* Hidden by default if logged in */
+#loginContainer.split-container { display: flex; height: 100vh; width: 100vw; position: absolute; top: 0; left: 0; background: #fff; z-index: 1000; }
+.pane { flex: 1; padding: 10% 8%; display: flex; flex-direction: column; justify-content: center; box-sizing: border-box; }
+.left-pane { background-color: #FFFFFF; align-items: flex-start; }
+h1.auth-title { font-family: 'Playfair Display', serif; font-size: 3.5rem; color: #181D32; font-weight: 600; margin: 0 0 1rem 0; line-height: 1.1; }
+p.auth-subtitle { font-size: 1.15rem; color: #555; font-weight: 400; margin: 0 0 4rem 0; }
+#loginAreaForm { width: 100%; max-width: 420px; }
+label.auth-label { display: block; font-size: 13px; font-weight: 600; color: #181D32; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; margin-top: 15px;}
 
-#loginContainer { background: white; padding: 50px 40px; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); width: 340px; text-align: center; }
-.input-group { width: 100%; padding: 12px; margin: 15px 0; border: 1px solid #ddd; border-radius: 6px; font-size: 16px; box-sizing: border-box; }
-.input-group:focus { border-color: #181d32; outline: none; }
-.btn { background: #181d32; color: white; border: none; padding: 14px 20px; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: 500; width: 100%; margin-top: 10px; }
-.btn:hover { background: #252b48; }
+/* Pill-shaped inputs */
+input.auth-input, .iti__input { width: 100% !important; padding: 16px !important; border: 1px solid #D1D5DB; border-radius: 9999px !important; font-size: 16px; background: #FFFFFF; color: #181D32; box-sizing: border-box; transition: border-color 0.2s; }
+.iti__input { padding-left: 52px !important; } /* Override for the country flag */
+input.auth-input:focus, .iti__input:focus { outline: none; border-color: #B99784; }
+
+/* Taupe Pill Button */
+button.auth-button { background-color: #B99784; color: #FFFFFF; border: none; padding: 16px 32px; border-radius: 9999px; cursor: pointer; font-weight: 600; font-size: 16px; transition: 0.2s; width: 100%; margin-top: 25px; box-shadow: 0 4px 12px rgba(185, 151, 132, 0.3); }
+button.auth-button:hover { background-color: #AA8877; transform: translateY(-1px); }
+button.auth-button:disabled { background-color: #D1D5DB; cursor: not-allowed; box-shadow: none; transform: none; }
+
+/* Dark Navy Pane */
+.right-pane { background-color: #181D32; align-items: flex-start; color: #FFFFFF; position: relative; }
+.bio-avatar { width: 80px; height: 80px; border-radius: 50%; margin-bottom: 25px; object-fit: cover; border: 2px solid rgba(255,255,255,0.2); }
+h2.bio-title { font-family: 'Playfair Display', serif; font-size: 2.25rem; color: #FFFFFF; font-weight: 600; margin: 0 0 1.5rem 0; line-height: 1.2; }
+p.bio-description { font-size: 1.1rem; line-height: 1.7; font-weight: 400; color: rgba(255, 255, 255, 0.85); margin: 0; max-width: 550px; }
+.typed-cursor { color: #B99784; font-weight: 400; }
+
+/* Disclaimer absolute positioned inside the right pane */
+.disclaimer-footer { position: absolute; bottom: 0; left: 0; width: 100%; padding: 25px 0; text-align: center; font-size: 13px; border-top: 1px solid rgba(255,255,255,0.1); box-sizing: border-box; line-height: 1.6; color: rgba(255,255,255,0.7); }
+.disclaimer-footer a { color: #B99784; text-decoration: none; }
+.disclaimer-footer a:hover { text-decoration: underline; }
+
+/* Hide step 2 initially */
 #step2 { display: none; }
-.iti { width: 100%; text-align: left; margin: 15px 0; }
-.iti__input { width: 100% !important; padding: 12px !important; padding-left: 50px !important; border: 1px solid #ddd; border-radius: 6px; font-size: 16px; box-sizing: border-box; }
-
+.iti { width: 100%; text-align: left; margin: 0; }
 /* FLOATING PANEL LAYOUT (NOTEBOOK LM STYLE) */
 #dashboardContainer { display: none; width: 98%; max-width: 1600px; height: 94vh; background: transparent; overflow: hidden; flex-direction: row; gap: 16px; padding: 10px; }
 

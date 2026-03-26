@@ -10,17 +10,36 @@
 </head>
 <body onclick="closeAllDropdowns()">
 
-<div id="loginContainer">
-    <h2 style="color: #181d32; margin-bottom: 5px;">David Beatty AI</h2>
-    <div id="step1">
-        <p style="color: #666; font-size: 14px; margin-bottom: 25px;">Enter your phone number to access your portal.</p>
-        <input type="tel" id="phoneInput" />
-        <button class="btn" onclick="sendCode()">Send Secure Code</button>
+<div id="loginContainer" class="split-container">
+    <div class="pane left-pane">
+        <h1 class="auth-title">Sign in to<br>Director's Compass</h1>
+        <p class="auth-subtitle">The AI chatbot for board excellence.</p>
+
+        <div id="loginAreaForm">
+            <div id="step1">
+                <label class="auth-label" for="phoneInput">Your Phone Number</label>
+                <input type="tel" id="phoneInput" class="auth-input" />
+                <button class="btn auth-button" onclick="sendCode()">Get Secure Code</button>
+            </div>
+            <div id="step2" style="display: none;">
+                <label class="auth-label" for="codeInput">Enter 6-Digit Code</label>
+                <input type="text" id="codeInput" class="auth-input" placeholder="123456" />
+                <button class="btn auth-button" onclick="verifyCode()">Login to Portal</button>
+            </div>
+        </div>
     </div>
-    <div id="step2">
-        <p style="color: #666; font-size: 14px; margin-bottom: 25px;">Code sent! Enter the 6-digit pin below:</p>
-        <input type="text" id="codeInput" class="input-group" placeholder="123456" />
-        <button class="btn" onclick="verifyCode()">Login to Portal</button>
+
+    <div class="pane right-pane">
+        <img src="/avatar.jpg" alt="David Beatty AI Advisor" class="bio-avatar">
+        <h2 class="bio-title">Your Corporate<br>Governance Advisor</h2>
+        <p class="bio-description">
+            <span id="typed-text"></span>
+        </p>
+        
+        <div class="disclaimer-footer">
+            By using this site you agree to our <a href="https://directorscompass.boardchair.com/disclaimer" target="_blank">Disclaimer</a><br>
+            <span style="color: rgba(255,255,255,0.5); font-size: 11px; display: inline-block; margin-top: 5px;">Last Updated: July 19, 2024</span>
+        </div>
     </div>
 </div>
 
@@ -112,5 +131,18 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/intl-tel-input/17.0.8/js/intlTelInput.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="/app.js"></script>
+
+<script src="https://cdn.jsdelivr.net/npm/typed.js@2.0.12"></script>
+<script>
+    var fullBio = "The Director's Compass combines the governance expertise of Professor David R. Beatty C.M., O.B.E., F.ICD, CFA, with artificial intelligence to provide clear, authoritative guidance on corporate directorship. It serves as an always-available, professional resource designed to inform and prepare aspiring and current directors alike.";
+    var typed = new Typed('#typed-text', {
+        strings: [fullBio],
+        typeSpeed: 25, 
+        showCursor: true,
+        cursorChar: '|'
+    });
+</script>
+
+
 </body>
 </html>
