@@ -42,6 +42,7 @@ input.auth-input:focus, .iti__input:focus { outline: none; border-color: #B99784
 
 /* Specific fixes for the flag dropdown */
 .iti { width: 100%; margin-bottom: 25px; }
+.iti__input { padding-left: 90px !important; } /* Pushes the typing area safely past the flag */
 .iti__selected-flag { padding: 0 16px !important; border-radius: 8px 0 0 8px; background: transparent !important; }
 .iti__country-list { background: #181D32; border: 1px solid #3d4363; color: white; border-radius: 8px; }
 .iti__country-list .iti__country:hover { background: rgba(255,255,255,0.1); }
@@ -64,9 +65,9 @@ h2.showcase-headline { font-family: 'Playfair Display', serif; font-size: 3rem; 
 /* Feature Grid (Now with custom Taupe Bullets) */
 .feature-grid { display: flex; flex-direction: column; gap: 24px; }
 .feature-card { display: flex; gap: 16px; align-items: flex-start; }
-.feat-icon { width: 8px; height: 8px; background: #B99784; border-radius: 50%; margin-top: 6px; flex-shrink: 0; box-shadow: 0 0 10px rgba(185, 151, 132, 0.4); }
-.feat-text h3 { font-family: 'Inter', sans-serif; font-size: 16px; font-weight: 600; color: #181D32; margin: 0 0 4px 0; }
-.feat-text p { margin: 0; font-size: 14px; color: #666; line-height: 1.6; }
+.feat-icon { width: 10px; height: 10px; background: #B99784; border-radius: 50%; margin-top: 6px; flex-shrink: 0; box-shadow: 0 0 10px rgba(185, 151, 132, 0.4); }
+.feat-text h3 { font-family: 'Inter', sans-serif; font-size: 20px; font-weight: 600; color: #181D32; margin: 0 0 4px 0; }
+.feat-text p { margin: 0; font-size: 17px; color: #666; line-height: 1.6; }
 /* FLOATING PANEL LAYOUT (NOTEBOOK LM STYLE) */
 #dashboardContainer { display: none; width: 98%; max-width: 1600px; height: 94vh; background: transparent; overflow: hidden; flex-direction: row; gap: 16px; padding: 10px; }
 
