@@ -45,6 +45,9 @@ input.auth-input:focus { outline: none; border-color: #B99784 !important; backgr
 .iti__country-list { background: #181D32; border: 1px solid #3d4363; color: white; border-radius: 8px; }
 .iti__country-list .iti__country:hover { background: rgba(255,255,255,0.1); }
 
+/* Taupe Button */
+button.auth-button { background-color: #B99784; color: #fff; border: none; padding: 14px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 16px; width: 100%; transition: 0.2s; margin-top: 10px; }
+button.auth-button:hover { background-color: #AA8877; transform: translateY(-1px); }
 /* Disclaimer */
 .disclaimer-footer { font-size: 12px; color: rgba(255,255,255,0.5); line-height: 1.6; }
 .disclaimer-footer a { color: #B99784; text-decoration: none; }
