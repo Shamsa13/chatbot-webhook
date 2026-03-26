@@ -10,35 +10,64 @@
 </head>
 <body onclick="closeAllDropdowns()">
 
-<div id="loginContainer" class="split-container">
-    <div class="pane left-pane">
-        <h1 class="auth-title">Sign in to<br>Director's Compass</h1>
-        <p class="auth-subtitle">The AI chatbot for board excellence.</p>
+<div id="loginContainer" class="modern-login-layout">
+    <div class="login-sidebar">
+        <div class="login-header">
+            <img src="/avatar.jpg" alt="David Beatty" class="login-avatar">
+            <span class="brand-text">Director's Compass</span>
+        </div>
+        
+        <div class="form-wrapper">
+            <h1 class="auth-title">Welcome back</h1>
+            <p class="auth-subtitle">Access your 24/7 corporate governance advisor.</p>
 
-        <div id="loginAreaForm">
-            <div id="step1">
-                <label class="auth-label" for="phoneInput">Your Phone Number</label>
-                <input type="tel" id="phoneInput" class="auth-input" />
-                <button class="btn auth-button" onclick="sendCode()">Get Secure Code</button>
+            <div id="loginAreaForm">
+                <div id="step1">
+                    <label class="auth-label" for="phoneInput">Secure Phone Login</label>
+                    <input type="tel" id="phoneInput" class="auth-input" />
+                    <button class="btn auth-button" onclick="sendCode()">Get Secure Code</button>
+                </div>
+                <div id="step2" style="display: none;">
+                    <label class="auth-label" for="codeInput">Enter 6-Digit Code</label>
+                    <input type="text" id="codeInput" class="auth-input" placeholder="123456" />
+                    <button class="btn auth-button" onclick="verifyCode()">Login to Portal</button>
+                </div>
             </div>
-            <div id="step2" style="display: none;">
-                <label class="auth-label" for="codeInput">Enter 6-Digit Code</label>
-                <input type="text" id="codeInput" class="auth-input" placeholder="123456" />
-                <button class="btn auth-button" onclick="verifyCode()">Login to Portal</button>
-            </div>
+        </div>
+
+        <div class="disclaimer-footer">
+            By logging in, you agree to our <a href="https://directorscompass.boardchair.com/disclaimer" target="_blank">Disclaimer</a><br>
+            <span>Last Updated: July 19, 2024</span>
         </div>
     </div>
 
-    <div class="pane right-pane">
-        <img src="/avatar.jpg" alt="David Beatty AI Advisor" class="bio-avatar">
-        <h2 class="bio-title">Your Corporate<br>Governance Advisor</h2>
-        <p class="bio-description">
-            <span id="typed-text"></span>
-        </p>
-        
-        <div class="disclaimer-footer">
-            By using this site you agree to our <a href="https://directorscompass.boardchair.com/disclaimer" target="_blank">Disclaimer</a><br>
-            <span style="color: rgba(255,255,255,0.5); font-size: 11px; display: inline-block; margin-top: 5px;">Last Updated: July 19, 2024</span>
+    <div class="feature-showcase">
+        <div class="showcase-content">
+            <h2 class="showcase-headline"><span id="typed-text"></span></h2>
+            
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feat-icon">🧠</div>
+                    <div class="feat-text">
+                        <h3>The Universal Brain</h3>
+                        <p>Experience a seamless, persistent memory whether you interact via the Web Portal, SMS, or Voice calls.</p>
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feat-icon">🔒</div>
+                    <div class="feat-text">
+                        <h3>Private Knowledge Base</h3>
+                        <p>Securely upload board packages, reports, and minutes. David reads, remembers, and analyzes them instantly.</p>
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feat-icon">🤿</div>
+                    <div class="feat-text">
+                        <h3>Deep Dive Reasoning</h3>
+                        <p>Activate high-tier AI logic to perform comprehensive, un-summarized analysis of complex governance scenarios.</p>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -133,11 +162,11 @@
 <script src="/app.js"></script>
 
 <script src="https://cdn.jsdelivr.net/npm/typed.js@2.0.12"></script>
+<script src="https://cdn.jsdelivr.net/npm/typed.js@2.0.12"></script>
 <script>
-    var fullBio = "The Director's Compass combines the governance expertise of Professor David R. Beatty C.M., O.B.E., F.ICD, CFA, with artificial intelligence to provide clear, authoritative guidance on corporate directorship. It serves as an always-available, professional resource designed to inform and prepare aspiring and current directors alike.";
     var typed = new Typed('#typed-text', {
-        strings: [fullBio],
-        typeSpeed: 25, 
+        strings: ["Decades of boardroom expertise.^500<br>Now powered by AI."],
+        typeSpeed: 40, 
         showCursor: true,
         cursorChar: '|'
     });
