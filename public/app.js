@@ -168,6 +168,9 @@ async function initDashboard() {
 // ==========================================
 // CREATE NEW CHAT
 // ==========================================
+// ==========================================
+// CREATE NEW CHAT
+// ==========================================
 async function startNewChat() {
     try {
         const res = await fetch('/api/web/conversations/new', {
@@ -184,6 +187,17 @@ async function startNewChat() {
             document.querySelectorAll('.chat-item').forEach(el => {
                 el.classList.toggle('active', el.dataset.id === currentConversationId);
             });
+
+            // --- NEW: AUTO-SWITCH TO CHAT TAB ON MOBILE ---
+            if (window.innerWidth <= 768) {
+                document.querySelector('.sidebar').classList.remove('mobile-active');
+                document.querySelector('.right-sidebar').classList.remove('mobile-active');
+                document.querySelector('.chat-area').classList.add('mobile-active');
+                
+                document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.nav-btn')[1].classList.add('active');
+            }
+            // ----------------------------------------------
         }
     } catch (e) { 
         console.error("Failed to create new chat:", e); 
@@ -287,13 +301,7 @@ async function renameChat(conversationId, currentTitle) {
 }
 
 async function switchChat(conversationId) {
-    if (isLoadingChat) return;
-    if (conversationId === currentConversationId && document.getElementById('chatMessages').children.length > 0) return;
-    
-    isLoadingChat = true;
-    currentConversationId = conversationId;
-
-    // --- NEW: AUTO-SWITCH TO CHAT TAB ON MOBILE ---
+    // --- NEW: ALWAYS AUTO-SWITCH TO CHAT TAB ON MOBILE FIRST ---
     if (window.innerWidth <= 768) {
         document.querySelector('.sidebar').classList.remove('mobile-active');
         document.querySelector('.right-sidebar').classList.remove('mobile-active');
@@ -303,6 +311,12 @@ async function switchChat(conversationId) {
         document.querySelectorAll('.nav-btn')[1].classList.add('active'); // Selects the middle Chat button
     }
     // ----------------------------------------------
+
+    if (isLoadingChat) return;
+    if (conversationId === currentConversationId && document.getElementById('chatMessages').children.length > 0) return;
+    
+    isLoadingChat = true;
+    currentConversationId = conversationId;
 
     document.querySelectorAll('.chat-item').forEach(el => {
         el.classList.toggle('active', el.dataset.id === conversationId);
@@ -479,10 +493,10 @@ function addMessageToUI(text, sender, fileCount = 0, isDeepDive = false) {
         userHtml += `<button class="copy-action-btn" style="margin-top: 0;" onclick="copyMessageText(this, '${safeText}')">📋 Copy</button>`;
         
         if (fileCount > 0) {
-            userHtml += `<span style="background: #e0f2fe; color: #0284c7; padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 500;">📎 ${fileCount} File(s)</span>`;
+            userHtml += `<span style="background: #e0f2fe; color: #0284c7; padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 500;"> ${fileCount} File(s)</span>`;
         }
         if (isDeepDive) {
-            userHtml += `<span style="background: #fce7f3; color: #db2777; padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 500;">🤿 Deep Dive Active</span>`;
+            userHtml += `<span style="background: #fce7f3; color: #db2777; padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 500;"> Deep Dive Active</span>`;
         }
         userHtml += `</div></div>`;
         
