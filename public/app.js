@@ -491,6 +491,44 @@ async function sendMessage() {
     sendBtn.innerText = "Send";
 }
 
+// ==========================================
+// IN-APP DOCUMENT VIEWER
+// ==========================================
+async function viewDocument(docId) {
+    const btn = document.querySelector(`#menu-${docId} button`);
+    const originalText = btn.innerText;
+    btn.innerText = "Loading...";
+
+    try {
+        const res = await fetch(`/api/documents/${docId}/content`);
+        const data = await res.json();
+        
+        if (data.success) {
+            const overlay = document.createElement('div');
+            overlay.className = 'custom-modal-overlay';
+            overlay.innerHTML = `
+                <div class="custom-modal-box" style="max-width: 800px; width: 90%; height: 80vh; display: flex; flex-direction: column;">
+                    <div class="custom-modal-title" style="margin-bottom: 8px;">${escapeHtml(data.name)}</div>
+                    <div style="font-size: 12px; color: #888; margin-bottom: 16px;">This is the raw, unformatted text that David extracted and memorized.</div>
+                    <div style="flex: 1; overflow-y: auto; background: #f4f5f7; padding: 20px; border-radius: 8px; border: 1px solid #e1e4e8; font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.6; white-space: pre-wrap; color: #333;">${escapeHtml(data.text)}</div>
+                    <div class="custom-modal-actions" style="margin-top: 20px;">
+                        <button class="custom-modal-btn confirm" onclick="this.closest('.custom-modal-overlay').classList.remove('show'); setTimeout(() => this.closest('.custom-modal-overlay').remove(), 200);">Close Viewer</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+            setTimeout(() => overlay.classList.add('show'), 10);
+        } else {
+            uiAlert("Error", "Could not load document content.");
+        }
+    } catch (e) {
+        console.error(e);
+        uiAlert("Error", "Failed to connect to server.");
+    } finally {
+        btn.innerText = originalText;
+    }
+}
+
 function addMessageToUI(text, sender, fileCount = 0, isDeepDive = false) {
     const msgContainer = document.getElementById('chatMessages');
     const es = document.getElementById('emptyState');
@@ -659,7 +697,7 @@ async function loadUserDocuments() {
                         <div class="doc-menu-wrapper">
                             <button class="doc-menu-btn" onclick="toggleDocMenu(event, '${doc.id}')">⋮</button>
                             <div class="doc-dropdown" id="menu-${doc.id}">
-                                <button onclick="window.open('/api/documents/${doc.id}/download', '_blank')">Open File</button>
+                                <button onclick="viewDocument('${doc.id}')">View Parsed Text</button>
                                 <button onclick="renameDocument('${doc.id}', '${escapedForFunc}')">Rename File</button>
                                 <button class="delete-btn" onclick="deleteDocument('${doc.id}')">Delete File</button>
                             </div>

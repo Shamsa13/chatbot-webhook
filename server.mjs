@@ -1822,21 +1822,17 @@ app.get("/api/documents", async (req, res) => {
   }
 });
 
-// Download/View a document's extracted text
-app.get("/api/documents/:id/download", async (req, res) => {
+// View a document's extracted text (JSON for frontend modal)
+app.get("/api/documents/:id/content", async (req, res) => {
   try {
     const docId = req.params.id;
-    // We fetch the extracted full text from the database
     const { data, error } = await supabase.from("user_documents").select("document_name, full_text").eq("id", docId).single();
-    if (error || !data) return res.status(404).send("Document not found");
+    if (error || !data) return res.status(404).json({ error: "Document not found" });
 
-    // Package it securely as a downloadable .txt file
-    res.setHeader('Content-disposition', `attachment; filename="${data.document_name}.txt"`);
-    res.setHeader('Content-type', 'text/plain; charset=utf-8');
-    res.send(data.full_text || "(No readable text found)");
+    res.json({ success: true, name: data.document_name, text: data.full_text || "(No readable text found)" });
   } catch (err) {
-    console.error("Download Error:", err);
-    res.status(500).send("Server error");
+    console.error("Content Error:", err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
