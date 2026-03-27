@@ -378,7 +378,8 @@ async function switchChat(conversationId) {
 }
 
 async function deleteChat(conversationId) {
-    if (!confirm("Delete this conversation permanently?")) return;
+    const confirmed = await uiConfirm("Delete Chat", "Are you sure you want to permanently delete this conversation?", true);
+    if (!confirmed) return;
     try {
         const res = await fetch("/api/web/conversations/" + conversationId, {
             method: 'DELETE', 
@@ -657,7 +658,7 @@ async function loadUserDocuments() {
                         <div class="doc-menu-wrapper">
                             <button class="doc-menu-btn" onclick="toggleDocMenu(event, '${doc.id}')">⋮</button>
                             <div class="doc-dropdown" id="menu-${doc.id}">
-                                <button onclick="window.open('/api/documents/${docId}/download', '_blank')">Open File</button>
+                                <button onclick="window.open('/api/documents/${doc.id}/download', '_blank')">Open File</button>
                                 <button onclick="renameDocument('${doc.id}', '${escapedForFunc}')">Rename File</button>
                                 <button class="delete-btn" onclick="deleteDocument('${doc.id}')">Delete File</button>
                             </div>
