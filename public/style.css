@@ -267,9 +267,25 @@ input:checked + .slider:before { transform: translateX(18px); }
 .mobile-nav { display: none; } /* Hidden on Desktop */
 
 @media (max-width: 768px) {
+    /* --- 0. The iOS Keyboard Gap Fix (Nail the body to the screen) --- */
+    body, html {
+        position: fixed;
+        width: 100%;
+        height: 100%;
+        height: 100dvh;
+        overflow: hidden;
+    }
+
     /* --- 1. Login Screen Mobile Fixes --- */
-    #loginContainer.modern-login-layout { flex-direction: column; height: 100%; overflow-y: auto; }
-    .login-sidebar { flex: none; width: 100%; min-height: 100vh; padding: 30px 20px; }
+    #loginContainer.modern-login-layout { 
+        flex-direction: column; 
+        height: 100%; 
+        height: 100dvh;
+        overflow-y: auto; 
+        -webkit-overflow-scrolling: touch; /* Smooth iOS scrolling */
+        width: 100%;
+    }
+    .login-sidebar { flex: none; width: 100%; min-height: 100dvh; padding: 30px 20px; }
     .feature-showcase { padding: 40px 20px; background: #ffffff; }
     h2.showcase-headline { font-size: 2.2rem; min-height: auto; margin-bottom: 20px; }
 
@@ -279,15 +295,15 @@ input:checked + .slider:before { transform: translateX(18px); }
         top: 0;
         left: 0;
         width: 100%; 
+        height: 100%; 
         height: 100dvh; 
         padding: 0; 
         border-radius: 0; 
-        padding-bottom: 65px; 
+        padding-bottom: 65px; /* Room for the nav bar */
         box-sizing: border-box;
-        
     }
     
-    /* When JavaScript logs you in and sets display: flex, force it to block on mobile */
+    /* When JavaScript logs you in, force it to block on mobile */
     #dashboardContainer[style*="display: flex"] {
         display: block !important;
     }

@@ -729,7 +729,6 @@ document.addEventListener('focusout', function(e) {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
         setTimeout(() => {
             window.scrollTo(0, 0);
-            document.body.scrollTop = 0;
-        }, 50); // Slight delay allows the keyboard to finish animating down
+        }, 100); // 100ms gives the keyboard time to fully retract
     }
 });
