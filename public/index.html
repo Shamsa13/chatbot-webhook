@@ -154,6 +154,20 @@
             <div id="uploadStatus"></div>
         </div>
     </div>
+    <div class="mobile-nav">
+        <button class="nav-btn" onclick="switchMobileTab(event, 'sidebar')">
+            <span class="nav-icon">🕒</span>
+            <span>History</span>
+        </button>
+        <button class="nav-btn active" onclick="switchMobileTab(event, 'chat-area')">
+            <span class="nav-icon">💬</span>
+            <span>Chat</span>
+        </button>
+        <button class="nav-btn" onclick="switchMobileTab(event, 'right-sidebar')">
+            <span class="nav-icon">📁</span>
+            <span>Docs</span>
+        </button>
+    </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/intl-tel-input/17.0.8/js/intlTelInput.min.js"></script>

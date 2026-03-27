@@ -48,6 +48,7 @@ input.auth-input:focus { outline: none; border-color: #B99784 !important; backgr
 /* Taupe Button */
 button.auth-button { background-color: #B99784; color: #fff; border: none; padding: 14px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 16px; width: 100%; transition: 0.2s; margin-top: 10px; }
 button.auth-button:hover { background-color: #AA8877; transform: translateY(-1px); }
+
 /* Disclaimer */
 .disclaimer-footer { font-size: 12px; color: rgba(255,255,255,0.5); line-height: 1.6; }
 .disclaimer-footer a { color: #B99784; text-decoration: none; }
@@ -248,3 +249,49 @@ input:checked + .slider:before { transform: translateX(18px); }
 }
 .message-wrapper:hover .copy-action-btn { opacity: 1; }
 .copy-action-btn:hover { color: #181d32; }
+
+/* =========================================
+   MOBILE RESPONSIVE DESIGN (APP LAYOUT)
+   ========================================= */
+.mobile-nav { display: none; } /* Hidden on Desktop */
+
+@media (max-width: 768px) {
+    /* --- 1. Login Screen Mobile Fixes --- */
+    #loginContainer.modern-login-layout { flex-direction: column; height: 100%; overflow-y: auto; }
+    .login-sidebar { flex: none; width: 100%; min-height: 100vh; padding: 30px 20px; }
+    .feature-showcase { padding: 40px 20px; background: #ffffff; }
+    h2.showcase-headline { font-size: 2.2rem; min-height: auto; margin-bottom: 20px; }
+
+    /* --- 2. Dashboard Mobile Wrapper --- */
+    #dashboardContainer { 
+        width: 100%; height: 100vh; padding: 0; border-radius: 0; 
+        position: relative; padding-bottom: 65px; /* Room for the nav bar */
+        display: block; /* Overrides the desktop flex row */
+    }
+    
+    /* --- 3. Hide all columns by default on mobile, remove curves --- */
+    .sidebar, .chat-area, .right-sidebar { 
+        width: 100%; min-width: 100%; height: 100%; 
+        border-radius: 0; display: none; box-shadow: none; border: none;
+    }
+    
+    /* --- 4. Show active column --- */
+    .sidebar.mobile-active, .chat-area.mobile-active, .right-sidebar.mobile-active { display: flex; }
+
+    /* --- 5. Bottom Nav Styles --- */
+    .mobile-nav {
+        display: flex; position: absolute; bottom: 0; left: 0; width: 100%; height: 65px;
+        background: #181D32; border-top: 1px solid #252b48; z-index: 1000;
+    }
+    .nav-btn {
+        flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+        background: transparent; border: none; color: #888; font-size: 11px; font-weight: 500; cursor: pointer; transition: 0.2s;
+    }
+    .nav-btn.active { color: #B99784; }
+    .nav-icon { font-size: 20px; margin-bottom: 4px; }
+    
+    /* --- 6. Form/Input Fixes for iOS (Prevents auto-zoom bug) --- */
+    .chat-input-area { padding: 12px; }
+    .chat-input-area input { font-size: 16px; padding: 12px 16px; }
+    .chat-input-area button { padding: 12px 20px; }
+}

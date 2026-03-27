@@ -17,6 +17,32 @@ const phoneInput = window.intlTelInput(phoneInputField, {
 });
 
 // ==========================================
+// MOBILE APP TAB SWITCHING
+// ==========================================
+function switchMobileTab(event, tabClass) {
+    if (window.innerWidth > 768) return; // Ignore if on desktop
+    
+    // 1. Hide all panels
+    document.querySelector('.sidebar').classList.remove('mobile-active');
+    document.querySelector('.chat-area').classList.remove('mobile-active');
+    document.querySelector('.right-sidebar').classList.remove('mobile-active');
+    
+    // 2. Show the target panel
+    document.querySelector('.' + tabClass).classList.add('mobile-active');
+    
+    // 3. Update bottom nav button colors
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    event.currentTarget.classList.add('active');
+}
+
+// Automatically set 'Chat' as the default active tab when the page loads on mobile
+window.addEventListener('DOMContentLoaded', () => {
+    if (window.innerWidth <= 768) {
+        document.querySelector('.chat-area').classList.add('mobile-active');
+    }
+});
+
+// ==========================================
 // AUTHENTICATION
 // ==========================================
 async function sendCode() {
