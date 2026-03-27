@@ -275,16 +275,21 @@ input:checked + .slider:before { transform: translateX(18px); }
 
    /* --- 2. Dashboard Mobile Wrapper --- */
     #dashboardContainer { 
-        position: fixed; /* 🔥 Locks the app to the screen, stopping all bounce/scroll */
+        position: fixed; 
         top: 0;
         left: 0;
         width: 100%; 
         height: 100dvh; 
         padding: 0; 
         border-radius: 0; 
-        padding-bottom: 65px; /* Room for the nav bar */
-        display: block; 
+        padding-bottom: 65px; 
         box-sizing: border-box;
+        
+    }
+    
+    /* When JavaScript logs you in and sets display: flex, force it to block on mobile */
+    #dashboardContainer[style*="display: flex"] {
+        display: block !important;
     }
     
     /* --- 3. Hide all columns by default on mobile, remove curves --- */
@@ -322,4 +327,8 @@ input:checked + .slider:before { transform: translateX(18px); }
         right: auto !important;
         left: 15px !important;
     }
+    /* --- 8. Fix iOS Double-Tap Bug --- */
+    .chat-action-btn { opacity: 1 !important; } /* Always show icons on mobile */
+    .chat-item:hover { background: transparent; color: inherit; } /* Disable hover highlight */
+    .chat-item.active:hover { background: rgba(184,147,116,0.2); color: #fff; }
 }
