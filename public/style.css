@@ -66,9 +66,20 @@ h2.showcase-headline { font-family: 'Playfair Display', serif; font-size: 3rem; 
 .feat-icon { width: 10px; height: 10px; background: #B99784; border-radius: 50%; margin-top: 6px; flex-shrink: 0; box-shadow: 0 0 10px rgba(185, 151, 132, 0.4); }
 .feat-text h3 { font-family: 'Inter', sans-serif; font-size: 19px; font-weight: 600; color: #181D32; margin: 0 0 4px 0; }
 .feat-text p { margin: 0; font-size: 15px; color: #666; line-height: 1.6; }
-/* FLOATING PANEL LAYOUT (NOTEBOOK LM STYLE) */
-#dashboardContainer { display: none; width: 98%; max-width: 1600px; height: 94vh; background: transparent; overflow: hidden; flex-direction: row; gap: 16px; padding: 10px; }
-
+/* FLOATING PANEL LAYOUT (FULL SCREEN) */
+#dashboardContainer { 
+    display: none; 
+    width: 100%; /* Uses full width */
+    max-width: none; /* Removed the boxed-in 1600px limit */
+    height: 100vh; 
+    height: 100dvh; /* Dynamic height for perfect mobile/desktop fitting */
+    background: #eef0f4; 
+    overflow: hidden; 
+    flex-direction: row; 
+    gap: 16px; 
+    padding: 16px; /* Edge padding */
+    box-sizing: border-box; 
+}
 /* LEFT SIDEBAR (Chats) */
 .sidebar { width: 280px; min-width: 280px; background: #181d32; color: white; display: flex; flex-direction: column; overflow: hidden; border-radius: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); }
 .sidebar-header { padding: 20px; }
@@ -262,11 +273,17 @@ input:checked + .slider:before { transform: translateX(18px); }
     .feature-showcase { padding: 40px 20px; background: #ffffff; }
     h2.showcase-headline { font-size: 2.2rem; min-height: auto; margin-bottom: 20px; }
 
-    /* --- 2. Dashboard Mobile Wrapper --- */
+   /* --- 2. Dashboard Mobile Wrapper --- */
     #dashboardContainer { 
-        width: 100%; height: 100vh; padding: 0; border-radius: 0; 
-        position: relative; padding-bottom: 65px; /* Room for the nav bar */
-        display: block; /* Overrides the desktop flex row */
+        width: 100%; 
+        height: 100vh; 
+        height: 100dvh; /* 🔥 This explicitly stops mobile browsers from allowing scrolling */
+        padding: 0; 
+        border-radius: 0; 
+        position: relative; 
+        padding-bottom: 65px; /* Room for the nav bar */
+        display: block; 
+        box-sizing: border-box;
     }
     
     /* --- 3. Hide all columns by default on mobile, remove curves --- */

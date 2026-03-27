@@ -35,10 +35,24 @@ function switchMobileTab(event, tabClass) {
     event.currentTarget.classList.add('active');
 }
 
-// Automatically set 'Chat' as the default active tab when the page loads on mobile
+// Automatically set 'Chat' as default mobile tab AND check for saved login session
 window.addEventListener('DOMContentLoaded', () => {
+    // 1. Mobile Tab Default
     if (window.innerWidth <= 768) {
         document.querySelector('.chat-area').classList.add('mobile-active');
+    }
+
+    // 2. Auto-Login Check
+    const savedUserId = localStorage.getItem('david_userId');
+    if (savedUserId) {
+        globalUserId = savedUserId;
+        userName = localStorage.getItem('david_userName') || "Guest";
+        userPhone = localStorage.getItem('david_userPhone') || "";
+        
+        document.getElementById('loginTag').innerText = "Logged in as " + userName;
+        document.getElementById('loginContainer').style.display = 'none';
+        document.getElementById('dashboardContainer').style.display = 'flex';
+        initDashboard(); // Boot up the app instantly!
     }
 });
 
@@ -83,12 +97,21 @@ async function verifyCode() {
         });
         const data = await res.json();
         if (data.success) {
+            if (data.success) {
             globalUserId = data.userId;
             userName = (data.name && data.name.toLowerCase() !== "null") ? data.name.split(' ')[0] : "Guest";
+            
+            // --- NEW: Save to Local Storage ---
+            localStorage.setItem('david_userId', globalUserId);
+            localStorage.setItem('david_userName', userName);
+            localStorage.setItem('david_userPhone', userPhone);
+            // ----------------------------------
+
             document.getElementById('loginTag').innerText = "Logged in as " + userName;
             document.getElementById('loginContainer').style.display = 'none';
             document.getElementById('dashboardContainer').style.display = 'flex';
             await initDashboard();
+        }
         } else { 
             alert(data.error); 
             btn.innerText = "Login to Portal"; 
@@ -112,8 +135,17 @@ function logoutUser() {
     globalUserId = "";
     userPhone = "";
     currentConversationId = null;
+    
+    // --- NEW: Clear Local Storage ---
+    localStorage.removeItem('david_userId');
+    localStorage.removeItem('david_userName');
+    localStorage.removeItem('david_userPhone');
+    // --------------------------------
+
     document.getElementById('dashboardContainer').style.display = 'none';
-    document.getElementById('loginContainer').style.display = 'block';
+    
+    // 🔥 THE FIX: Change this to 'flex' so the login layout doesn't break!
+    document.getElementById('loginContainer').style.display = 'flex'; 
     document.getElementById('step2').style.display = 'none';
     document.getElementById('step1').style.display = 'block';
     document.getElementById('codeInput').value = "";
