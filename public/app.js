@@ -293,6 +293,17 @@ async function switchChat(conversationId) {
     isLoadingChat = true;
     currentConversationId = conversationId;
 
+    // --- NEW: AUTO-SWITCH TO CHAT TAB ON MOBILE ---
+    if (window.innerWidth <= 768) {
+        document.querySelector('.sidebar').classList.remove('mobile-active');
+        document.querySelector('.right-sidebar').classList.remove('mobile-active');
+        document.querySelector('.chat-area').classList.add('mobile-active');
+        
+        document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.nav-btn')[1].classList.add('active'); // Selects the middle Chat button
+    }
+    // ----------------------------------------------
+
     document.querySelectorAll('.chat-item').forEach(el => {
         el.classList.toggle('active', el.dataset.id === conversationId);
     });
