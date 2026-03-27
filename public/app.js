@@ -17,6 +17,53 @@ const phoneInput = window.intlTelInput(phoneInputField, {
 });
 
 // ==========================================
+// CUSTOM MODAL ENGINE
+// ==========================================
+function buildUIModal(title, text, type, defaultValue = '', isDanger = false) {
+    return new Promise(resolve => {
+        const overlay = document.createElement('div');
+        overlay.className = 'custom-modal-overlay';
+        
+        let inputHtml = type === 'prompt' ? `<input type="text" class="custom-modal-input" value="${defaultValue}" />` : '';
+        let cancelBtn = type !== 'alert' ? `<button class="custom-modal-btn cancel">Cancel</button>` : '';
+        let confirmClass = isDanger ? 'danger' : 'confirm';
+        let confirmText = type === 'alert' ? 'OK' : (type === 'prompt' ? 'Save' : 'Confirm');
+
+        overlay.innerHTML = `
+            <div class="custom-modal-box">
+                <div class="custom-modal-title">${title}</div>
+                <div class="custom-modal-text">${text}</div>
+                ${inputHtml}
+                <div class="custom-modal-actions">
+                    ${cancelBtn}
+                    <button class="custom-modal-btn ${confirmClass}">${confirmText}</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        
+        // Trigger animation
+        setTimeout(() => overlay.classList.add('show'), 10);
+        
+        const inputEl = overlay.querySelector('.custom-modal-input');
+        if (inputEl) inputEl.focus();
+
+        const close = (val) => {
+            overlay.classList.remove('show');
+            setTimeout(() => overlay.remove(), 200);
+            resolve(val);
+        };
+
+        overlay.querySelector('.confirm, .danger').onclick = () => close(type === 'prompt' ? inputEl.value : true);
+        if (type !== 'alert') overlay.querySelector('.cancel').onclick = () => close(false);
+        if (inputEl) inputEl.onkeydown = (e) => { if (e.key === 'Enter') close(inputEl.value); };
+    });
+}
+const uiAlert = (title, text) => buildUIModal(title, text, 'alert');
+const uiConfirm = (title, text, isDanger) => buildUIModal(title, text, 'confirm', '', isDanger);
+const uiPrompt = (title, text, defaultVal) => buildUIModal(title, text, 'prompt', defaultVal);
+
+// ==========================================
 // MOBILE APP TAB SWITCHING
 // ==========================================
 function switchMobileTab(event, tabClass) {
@@ -37,6 +84,10 @@ function switchMobileTab(event, tabClass) {
 
 // Automatically set 'Chat' as default mobile tab AND check for saved login session
 window.addEventListener('DOMContentLoaded', () => {
+
+    // Allow hitting 'Enter' to submit the 6-digit PIN
+    document.getElementById('codeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); verifyCode(); } });
+
     // 1. Mobile Tab Default
     if (window.innerWidth <= 768) {
         document.querySelector('.chat-area').classList.add('mobile-active');
@@ -56,32 +107,23 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-// ==========================================
-// AUTHENTICATION
-// ==========================================
 async function sendCode() {
     userPhone = phoneInput.getNumber();
-    if (!userPhone) { alert("Please enter a valid phone number."); return; }
+    if (!userPhone) { await uiAlert("Invalid Number", "Please enter a valid phone number."); return; }
     const btn = document.querySelector('#step1 .btn');
     btn.innerText = "Sending...";
     try {
-        const res = await fetch('/api/auth/send-code', {
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ phone: userPhone })
-        });
+        const res = await fetch('/api/auth/send-code', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: userPhone }) });
         const data = await res.json();
         if (data.success) {
             document.getElementById('step1').style.display = 'none';
             document.getElementById('step2').style.display = 'block';
+            document.getElementById('codeInput').focus(); // Auto-focuses the PIN box!
         } else { 
-            alert(data.error); 
+            await uiAlert("Error", data.error); 
             btn.innerText = "Send Secure Code"; 
         }
-    } catch (e) { 
-        alert("Connection error."); 
-        btn.innerText = "Send Secure Code"; 
-    }
+    } catch (e) { await uiAlert("Error", "Connection error."); btn.innerText = "Send Secure Code"; }
 }
 
 async function verifyCode() {
@@ -90,36 +132,24 @@ async function verifyCode() {
     const btn = document.querySelector('#step2 .btn');
     btn.innerText = "Verifying...";
     try {
-        const res = await fetch('/api/auth/verify-code', {
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ phone: userPhone, code })
-        });
+        const res = await fetch('/api/auth/verify-code', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: userPhone, code }) });
         const data = await res.json();
         if (data.success) {
-            if (data.success) {
             globalUserId = data.userId;
             userName = (data.name && data.name.toLowerCase() !== "null") ? data.name.split(' ')[0] : "Guest";
-            
-            // --- NEW: Save to Local Storage ---
             localStorage.setItem('david_userId', globalUserId);
             localStorage.setItem('david_userName', userName);
             localStorage.setItem('david_userPhone', userPhone);
-            // ----------------------------------
 
             document.getElementById('loginTag').innerText = "Logged in as " + userName;
             document.getElementById('loginContainer').style.display = 'none';
             document.getElementById('dashboardContainer').style.display = 'flex';
             await initDashboard();
-        }
         } else { 
-            alert(data.error); 
+            await uiAlert("Error", data.error); 
             btn.innerText = "Login to Portal"; 
         }
-    } catch (e) { 
-        alert("Connection error."); 
-        btn.innerText = "Login to Portal"; 
-    }
+    } catch (e) { await uiAlert("Error", "Connection error."); btn.innerText = "Login to Portal"; }
 }
 
 function logoutUser() {
@@ -236,6 +266,8 @@ function renderConversations() {
         item.className = 'chat-item' + (isActive ? ' active' : '');
         item.dataset.id = c.id;
         
+        item.onclick = () => switchChat(c.id);
+        
         const previewText = c.preview || "New conversation";
         const safePreview = escapeHtml(previewText);
         const escapedForFunc = safePreview.replace(/'/g, "\\'").replace(/"/g, "&quot;");
@@ -287,18 +319,15 @@ async function loadConversationList(autoSelect = false) {
 // RENAME & SWITCH CHAT
 // ==========================================
 async function renameChat(conversationId, currentTitle) {
-    const newTitle = prompt("Enter a new name for this chat (leave blank to auto-generate):", currentTitle === 'New conversation' ? '' : currentTitle);
-    if (newTitle === null) return;
+    const cleanTitle = currentTitle === 'New conversation' ? '' : currentTitle;
+    const newTitle = await uiPrompt("Rename Chat", "Enter a new name for this chat (leave blank to auto-generate):", cleanTitle);
+    if (newTitle === false) return; // User clicked cancel
+    
     try {
-        const res = await fetch(`/api/web/conversations/${conversationId}/title`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: globalUserId, title: newTitle })
-        });
+        const res = await fetch(`/api/web/conversations/${conversationId}/title`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: globalUserId, title: newTitle }) });
         const data = await res.json();
-        if (data.success) {
-            await loadConversationList(false); 
-        } else alert("Failed to rename chat.");
+        if (data.success) { await loadConversationList(false); } 
+        else await uiAlert("Error", "Failed to rename chat.");
     } catch (e) { console.error("Rename error:", e); }
 }
 
@@ -401,10 +430,13 @@ async function sendMessage() {
     const inputField = document.getElementById('chatInput');
     const message = inputField.value.trim();
     if (!message) return;
+    
+    // --- THE FIX: Automatically start a new chat if they don't have one selected ---
     if (!currentConversationId) {
-        alert("Please select or create a chat first.");
-        return;
+        await startNewChat();
+        if (!currentConversationId) return; // Failsafe
     }
+    // -------------------------------------------------------------------------------
 
     const es = document.getElementById('emptyState');
     if (es) es.remove();
@@ -556,31 +588,30 @@ function closeAllDropdowns() {
     document.querySelectorAll('.doc-dropdown').forEach(d => d.classList.remove('show'));
 }
 
-async function renameDocument(docId, oldName) {
-    const newName = prompt("Enter a new name for this document:", oldName);
-    if (!newName || newName.trim() === oldName) return;
+async function renameDocument(docId, oldFullName) {
+    // Splits the name from the extension so the user doesn't accidentally delete it!
+    const extIdx = oldFullName.lastIndexOf('.');
+    const baseName = extIdx > 0 ? oldFullName.substring(0, extIdx) : oldFullName;
+    const ext = extIdx > 0 ? oldFullName.substring(extIdx) : '';
+
+    const newBaseName = await uiPrompt("Rename Document", "Enter a new name for this file:", baseName);
+    if (!newBaseName || newBaseName.trim() === baseName) return;
+    
+    const finalName = newBaseName.trim() + ext; // Re-attaches the extension perfectly
     
     try {
-        const res = await fetch(`/api/documents/${docId}/name`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: globalUserId, newName: newName.trim() })
-        });
+        const res = await fetch(`/api/documents/${docId}/name`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: globalUserId, newName: finalName }) });
         const data = await res.json();
-        if (data.success) {
-            loadUserDocuments();
-        } else alert("Failed to rename document.");
+        if (data.success) loadUserDocuments();
+        else await uiAlert("Error", "Failed to rename document.");
     } catch (e) { console.error("Rename doc error:", e); }
 }
 
 async function deleteDocument(docId) {
-    if (!confirm("Are you sure? This will delete the document and all of its memory chunks permanently.")) return;
+    const confirmed = await uiConfirm("Delete Document", "Are you sure? This will delete the document and wipe it from David's memory.", true);
+    if (!confirmed) return;
     try {
-        const res = await fetch("/api/documents/" + docId, {
-            method: 'DELETE', 
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: globalUserId })
-        });
+        const res = await fetch("/api/documents/" + docId, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: globalUserId }) });
         const data = await res.json();
         if (data.success) loadUserDocuments();
     } catch (e) { console.error("Delete doc error:", e); }
@@ -626,6 +657,7 @@ async function loadUserDocuments() {
                         <div class="doc-menu-wrapper">
                             <button class="doc-menu-btn" onclick="toggleDocMenu(event, '${doc.id}')">⋮</button>
                             <div class="doc-dropdown" id="menu-${doc.id}">
+                                <button onclick="window.open('/api/documents/${docId}/download', '_blank')">Open File</button>
                                 <button onclick="renameDocument('${doc.id}', '${escapedForFunc}')">Rename File</button>
                                 <button class="delete-btn" onclick="deleteDocument('${doc.id}')">Delete File</button>
                             </div>

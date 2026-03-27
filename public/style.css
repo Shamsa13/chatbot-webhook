@@ -266,6 +266,26 @@ input:checked + .slider:before { transform: translateX(18px); }
    ========================================= */
 .mobile-nav { display: none; } /* Hidden on Desktop */
 
+/* =========================================
+   CUSTOM UI MODALS & ALERTS
+   ========================================= */
+.custom-modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 9999; opacity: 0; transition: 0.2s; pointer-events: none; }
+.custom-modal-overlay.show { opacity: 1; pointer-events: auto; }
+.custom-modal-box { background: white; border-radius: 16px; padding: 24px; width: 90%; max-width: 400px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); transform: translateY(20px); transition: 0.2s; font-family: 'Inter', sans-serif; }
+.custom-modal-overlay.show .custom-modal-box { transform: translateY(0); }
+.custom-modal-title { font-family: 'Playfair Display', serif; font-size: 20px; color: #181d32; margin-bottom: 8px; font-weight: 600; }
+.custom-modal-text { font-size: 14px; color: #555; margin-bottom: 24px; line-height: 1.5; }
+.custom-modal-input { width: 100%; padding: 12px 16px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; outline: none; margin-bottom: 24px; background: #fafafa; }
+.custom-modal-input:focus { border-color: #181d32; background: white; }
+.custom-modal-actions { display: flex; justify-content: flex-end; gap: 12px; }
+.custom-modal-btn { padding: 10px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; transition: 0.2s; }
+.custom-modal-btn.cancel { background: transparent; color: #666; }
+.custom-modal-btn.cancel:hover { background: #f0f0f0; color: #181d32; }
+.custom-modal-btn.confirm { background: #181d32; color: white; }
+.custom-modal-btn.confirm:hover { background: #252b48; }
+.custom-modal-btn.danger { background: #ff4c4c; color: white; }
+.custom-modal-btn.danger:hover { background: #e60000; }
+
 @media (max-width: 768px) {
     /* --- 0. The iOS Keyboard Gap Fix (Nail the body to the screen) --- */
     body, html {
