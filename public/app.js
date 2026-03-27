@@ -85,11 +85,12 @@ function switchMobileTab(event, tabClass) {
 // Automatically set 'Chat' as default mobile tab AND check for saved login session
 window.addEventListener('DOMContentLoaded', () => {
 
-    // Allow hitting 'Enter' to submit the 6-digit PIN
+    // Allow hitting 'Enter' to submit the Phone Number AND the 6-digit PIN
+    document.getElementById('phoneInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendCode(); } });
     document.getElementById('codeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); verifyCode(); } });
 
-    // 1. Mobile Tab Default
-    if (window.innerWidth <= 768) {
+    // 1. Mobile/Tablet Tab Default (Updated to 1024px)
+    if (window.innerWidth <= 1024) {
         document.querySelector('.chat-area').classList.add('mobile-active');
     }
 

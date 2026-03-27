@@ -87,7 +87,7 @@ h2.showcase-headline { font-family: 'Playfair Display', serif; font-size: 3rem; 
 .new-chat-btn { background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.15); padding: 11px 16px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500; width: 100%; text-align: left; display: flex; align-items: center; gap: 8px; transition: 0.2s; }
 .new-chat-btn:hover { background: rgba(255,255,255,0.15); }
 
-.sidebar-label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 1px; padding: 12px 20px 6px 20px; }
+.sidebar-label { font-size: 11px; color: #9ba4c4; text-transform: uppercase; letter-spacing: 1px; padding: 12px 20px 6px 20px; }
 
 .chat-list { flex: 1; overflow-y: auto; padding: 0 8px; min-height: 0; }
 .chat-list::-webkit-scrollbar { width: 5px; }
@@ -98,7 +98,7 @@ h2.showcase-headline { font-family: 'Playfair Display', serif; font-size: 3rem; 
 .chat-item.active { background: rgba(184,147,116,0.2); color: #fff; border-left: 3px solid #b89374; }
 .chat-item-text { flex: 1; min-width: 0; }
 .chat-item-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
-.chat-item-date { font-size: 10px; color: #555; display: block; margin-top: 2px; }
+.chat-item-date { font-size: 10px; color: #9ba4c4; display: block; margin-top: 2px; }
 
 .chat-action-btn { opacity: 0; background: none; border: none; color: #aaa; cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; transition: 0.15s; flex-shrink: 0; }
 .chat-item:hover .chat-action-btn { opacity: 1; }
@@ -153,8 +153,8 @@ input:checked + .slider:before { transform: translateX(18px); }
 .sidebar-search { position: relative; }
 .sidebar-search input { width: 100%; padding: 8px 12px 8px 28px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color: white; font-size: 12px; outline: none; transition: 0.2s; }
 .sidebar-search input:focus { border-color: rgba(255,255,255,0.3); background: rgba(255,255,255,0.08); }
-.sidebar-search input::placeholder { color: #888; }
-.sidebar-search-icon { position: absolute; left: 10px; top: 9px; color: #888; font-size: 11px; }
+.sidebar-search input::placeholder { color: #9ba4c4; }
+.sidebar-search-icon { position: absolute; left: 10px; top: 9px; color: #9ba4c4; font-size: 11px; }
 
 .sidebar-filter { width: 100%; padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color: #ccc; font-size: 12px; outline: none; cursor: pointer; }
 .sidebar-filter option { background: #181d32; color: white; }
@@ -286,7 +286,7 @@ input:checked + .slider:before { transform: translateX(18px); }
 .custom-modal-btn.danger { background: #ff4c4c; color: white; }
 .custom-modal-btn.danger:hover { background: #e60000; }
 
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
     /* --- 0. The iOS Keyboard Gap Fix (Nail the body to the screen) --- */
     body, html {
         position: fixed;

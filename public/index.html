@@ -83,7 +83,7 @@
         <div class="sidebar-controls">
             <div class="sidebar-search">
                 <span class="sidebar-search-icon">🔍</span>
-                <input type="text" id="chatSearch" placeholder="Search history..." onkeyup="filterChats()" />
+                <input type="search" id="chatSearch" placeholder="Search history..." oninput="filterChats()" />
             </div>
             <select id="chatFilter" class="sidebar-filter" onchange="filterChats()">
                 <option value="all">All History</option>
@@ -141,7 +141,7 @@
         
         <div class="search-container">
             <span class="search-icon">🔍</span>
-            <input type="text" id="docSearch" placeholder="Search documents..." onkeyup="filterDocs()" />
+           <input type="search" id="docSearch" placeholder="Search documents..." oninput="filterDocs()" />
         </div>
 
         <div class="docs-section" id="documentList">
