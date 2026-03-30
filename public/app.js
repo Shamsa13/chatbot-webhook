@@ -697,7 +697,7 @@ async function loadUserDocuments() {
                         <div class="doc-menu-wrapper">
                             <button class="doc-menu-btn" onclick="toggleDocMenu(event, '${doc.id}')">⋮</button>
                             <div class="doc-dropdown" id="menu-${doc.id}">
-                                <button onclick="viewDocument('${doc.id}')">View Parsed Text</button>
+                                <button onclick="viewDocument('${doc.id}')">View Text</button>
                                 <button onclick="renameDocument('${doc.id}', '${escapedForFunc}')">Rename File</button>
                                 <button class="delete-btn" onclick="deleteDocument('${doc.id}')">Delete File</button>
                             </div>

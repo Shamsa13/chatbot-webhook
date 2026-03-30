@@ -1905,6 +1905,76 @@ app.post("/api/admin/users", async (req, res) => {
   }
 });
 
+// Add a user manually via Admin panel
+app.post("/api/admin/add-user", async (req, res) => {
+  try {
+    const { secret, phone, name } = req.body;
+    if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
+
+    const cleanPhone = normalizeFrom(phone);
+    if (!cleanPhone) return res.status(400).json({ error: "Invalid phone number" });
+
+    // Check if they already exist
+    const { data: existing } = await supabase.from("users").select("id").eq("phone", cleanPhone).limit(1);
+    
+    if (existing && existing.length) {
+      if (name) await supabase.from("users").update({ full_name: name }).eq("id", existing[0].id);
+      return res.json({ success: true, message: "User already exists (updated name if provided)." });
+    }
+
+    // Insert brand new user
+    const { error: insErr } = await supabase.from("users").insert({ phone: cleanPhone, full_name: name || null });
+    if (insErr) throw insErr;
+
+    res.json({ success: true, message: "User successfully added to database!" });
+  } catch (err) {
+    console.error("Add User Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Broadcast bulk SMS messages
+app.post("/api/admin/send-bulk-sms", async (req, res) => {
+  try {
+    const { secret, phones, message } = req.body;
+    if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
+    if (!phones || !phones.length || !message) return res.status(400).json({ error: "Missing phones or message." });
+
+    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const phone of phones) {
+      try {
+        const cleanPhone = normalizeFrom(phone);
+        await twilioClient.messages.create({
+          body: message,
+          from: process.env.TWILIO_PHONE_NUMBER,
+          to: cleanPhone.startsWith("+") ? cleanPhone : "+" + cleanPhone
+        });
+
+        // Log the outbound broadcast in the database
+        const userId = await getOrCreateUser(cleanPhone);
+        const conversationId = await getOrCreateConversation(userId, "sms");
+        await supabase.from("messages").insert({
+          conversation_id: conversationId, channel: "sms", direction: "agent",
+          text: message, provider: "twilio_admin_bulk"
+        });
+        
+        successCount++;
+      } catch(e) {
+        console.error(`Bulk SMS failed for ${phone}:`, e.message);
+        failCount++;
+      }
+    }
+    
+    res.json({ success: true, message: `Broadcast complete! Sent: ${successCount}. Failed: ${failCount}.` });
+  } catch (err) {
+    console.error("Bulk SMS Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 1.5 Get a Single User's Full Profile & Memory
 app.post("/api/admin/user-details", async (req, res) => {
   try {

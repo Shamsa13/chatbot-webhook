@@ -62,6 +62,7 @@
         <div class="tab-container">
             <button id="btnTabUsers" class="tab-btn active" onclick="switchTab('users')">User Management</button>
             <button id="btnTabAnalytics" class="tab-btn" onclick="switchTab('analytics')">Usage Analytics</button>
+            <button id="btnTabOutreach" class="tab-btn" onclick="switchTab('outreach')">Outreach & Invites</button>
         </div>
 
         <div id="tabUsers" class="tab-content active">
@@ -124,6 +125,38 @@
                 
                 <button onclick="fetchAnalytics()" style="margin-top: 20px;">🔄 Refresh Analytics</button>
             </div>
+            <div id="tabOutreach" class="tab-content">
+            <div class="section">
+                <h2>Add Beta User</h2>
+                <div style="display: flex; gap: 15px; align-items: flex-end;">
+                    <div style="flex: 1;">
+                        <label>Phone Number (e.g., +14165551234)</label>
+                        <input type="text" id="newPhoneInput" placeholder="+1..." style="margin-bottom: 0;">
+                    </div>
+                    <div style="flex: 1;">
+                        <label>Full Name (Optional)</label>
+                        <input type="text" id="newNameInput" placeholder="Jane Doe" style="margin-bottom: 0;">
+                    </div>
+                    <button onclick="adminAddUser()" style="background: #4caf50; height: 43px; white-space: nowrap;">➕ Add to Database</button>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>Broadcast SMS</h2>
+                <label>Select Target Users</label>
+                <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                    <button onclick="toggleBulkSelection(true)" style="padding: 6px 12px; font-size: 12px; background: #eee; color: #333;">Select All</button>
+                    <button onclick="toggleBulkSelection(false)" style="padding: 6px 12px; font-size: 12px; background: #eee; color: #333;">Deselect All</button>
+                </div>
+                <div id="bulkUserCheckboxes" style="max-height: 250px; overflow-y: auto; background: white; border: 1px solid #ddd; padding: 15px; border-radius: 6px; margin-bottom: 20px; display: flex; flex-direction: column; gap: 8px;">
+                    <span style="color: #888; font-size: 13px;">Load users first to populate this list...</span>
+                </div>
+
+                <label>Broadcast Message</label>
+                <textarea id="bulkSmsMessage" placeholder="Type your invite or update here..."></textarea>
+                <button onclick="sendBulkSms()" style="background: #2196f3;">📢 Send Broadcast to Selected</button>
+            </div>
+        </div>
         </div>
     </div>
 </div>
@@ -160,23 +193,26 @@
     URL.revokeObjectURL(url);
 }
 
+
     // --- TAB SWITCHING LOGIC ---
     function switchTab(tabName) {
-        // Update Buttons
         document.getElementById('btnTabUsers').classList.remove('active');
         document.getElementById('btnTabAnalytics').classList.remove('active');
+        document.getElementById('btnTabOutreach').classList.remove('active'); // Added
         
         if (tabName === 'users') document.getElementById('btnTabUsers').classList.add('active');
         if (tabName === 'analytics') document.getElementById('btnTabAnalytics').classList.add('active');
+        if (tabName === 'outreach') document.getElementById('btnTabOutreach').classList.add('active'); // Added
 
-        // Update Content Panels
         document.getElementById('tabUsers').classList.remove('active');
         document.getElementById('tabAnalytics').classList.remove('active');
+        document.getElementById('tabOutreach').classList.remove('active'); // Added
         
         if (tabName === 'users') document.getElementById('tabUsers').classList.add('active');
+        if (tabName === 'outreach') document.getElementById('tabOutreach').classList.add('active'); // Added
         if (tabName === 'analytics') {
             document.getElementById('tabAnalytics').classList.add('active');
-            fetchAnalytics(); // Auto-load data when switching to this tab
+            fetchAnalytics();
         }
     }
 
@@ -351,11 +387,25 @@
                     opt.innerText = `${name} (${phone})`;
                     select.appendChild(opt);
 
-                    // 2. 🔥 NEW: Populate the Analytics dropdown
+                    // 2. Populate the Analytics dropdown
                     const optAnalytics = document.createElement('option');
                     optAnalytics.value = u.id;
                     optAnalytics.innerText = `${name} (${phone})`;
                     analyticsSelect.appendChild(optAnalytics);
+
+                    // 3. Populate the Bulk SMS Checkbox list
+                    const bulkContainer = document.getElementById('bulkUserCheckboxes');
+                    bulkContainer.innerHTML = ''; 
+                    data.users.forEach(u => {
+                        if (!u.phone) return; // Skip users without phones
+                    const name = (u.full_name && u.full_name !== 'null') ? u.full_name : 'Unknown User';
+                    bulkContainer.innerHTML += `
+                        <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; font-weight: 400; color: #333; margin: 0;">
+                            <input type="checkbox" class="bulk-user-cb" value="${u.phone}" style="width: auto; margin: 0;">
+                            <strong>${name}</strong> <span style="color:#888;">(${u.phone})</span>
+                        </label>
+                    `;
+                    });
                 });
 
                 document.getElementById('loginArea').style.display = 'none';
@@ -368,6 +418,66 @@
             showStatus("Network error connecting to server.", true);
         }
         btn.innerText = "Connect & Load Users";
+    }
+
+    // --- OUTREACH LOGIC ---
+    async function adminAddUser() {
+        const secret = document.getElementById('secretKey').value;
+        const phone = document.getElementById('newPhoneInput').value.trim();
+        const name = document.getElementById('newNameInput').value.trim();
+
+        if (!phone) return alert("Phone number is required!");
+
+        try {
+            const res = await fetch('/api/admin/add-user', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ secret, phone, name })
+            });
+            const data = await res.json();
+            
+            if (data.success) {
+                showStatus(data.message);
+                document.getElementById('newPhoneInput').value = "";
+                document.getElementById('newNameInput').value = "";
+                await loadUsers(); // Instantly refresh all lists!
+            } else {
+                showStatus(data.error, true);
+            }
+        } catch (e) { showStatus("Network error.", true); }
+    }
+
+    function toggleBulkSelection(selectAll) {
+        document.querySelectorAll('.bulk-user-cb').forEach(cb => cb.checked = selectAll);
+    }
+
+    async function sendBulkSms() {
+        const secret = document.getElementById('secretKey').value;
+        const message = document.getElementById('bulkSmsMessage').value.trim();
+        
+        // Gather all checked boxes
+        const checkedBoxes = document.querySelectorAll('.bulk-user-cb:checked');
+        const phones = Array.from(checkedBoxes).map(cb => cb.value);
+
+        if (phones.length === 0) return alert("Select at least one user to message!");
+        if (!message) return alert("Type a message to broadcast!");
+
+        if (!confirm(`Are you sure you want to send this message to ${phones.length} users?`)) return;
+
+        try {
+            const res = await fetch('/api/admin/send-bulk-sms', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ secret, phones, message })
+            });
+            const data = await res.json();
+            
+            if (data.success) {
+                showStatus(data.message);
+                document.getElementById('bulkSmsMessage').value = "";
+                toggleBulkSelection(false); // Uncheck all when done
+            } else {
+                showStatus(data.error, true);
+            }
+        } catch (e) { showStatus("Network error.", true); }
     }
 
     function handleUserChange() {
