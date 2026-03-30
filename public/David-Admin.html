@@ -44,6 +44,25 @@
         .info-box { background: white; padding: 20px; border-radius: 12px; border: 1px solid #eee; box-shadow: 0 2px 8px rgba(0,0,0,0.03); }
         .memory-area { grid-column: span 2; white-space: pre-wrap; font-family: 'Inter', sans-serif; line-height: 1.6; color: #444; }
         .stat-pill { display: inline-block; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; margin-right: 5px; margin-bottom: 5px; }
+
+
+        /* CUSTOM UI MODALS & ALERTS */
+        .custom-modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 9999; opacity: 0; transition: 0.2s; pointer-events: none; }
+        .custom-modal-overlay.show { opacity: 1; pointer-events: auto; }
+        .custom-modal-box { background: white; border-radius: 16px; padding: 24px; width: 90%; max-width: 400px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); transform: translateY(20px); transition: 0.2s; font-family: 'Inter', sans-serif; }
+        .custom-modal-overlay.show .custom-modal-box { transform: translateY(0); }
+        .custom-modal-title { font-family: 'Playfair Display', serif; font-size: 20px; color: #181d32; margin-bottom: 8px; font-weight: 600; }
+        .custom-modal-text { font-size: 14px; color: #555; margin-bottom: 24px; line-height: 1.5; }
+        .custom-modal-input { width: 100%; padding: 12px 16px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; outline: none; margin-bottom: 24px; background: #fafafa; }
+        .custom-modal-input:focus { border-color: #181d32; background: white; }
+        .custom-modal-actions { display: flex; justify-content: flex-end; gap: 12px; }
+        .custom-modal-btn { padding: 10px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; transition: 0.2s; }
+        .custom-modal-btn.cancel { background: transparent; color: #666; }
+        .custom-modal-btn.cancel:hover { background: #f0f0f0; color: #181d32; }
+        .custom-modal-btn.confirm { background: #181d32; color: white; }
+        .custom-modal-btn.confirm:hover { background: #252b48; }
+        .custom-modal-btn.danger { background: #ff4c4c; color: white; }
+        .custom-modal-btn.danger:hover { background: #e60000; }
     </style>
 </head>
 <body>
@@ -170,6 +189,47 @@
 <script>
     let globalUsers = [];
 
+
+    // ==========================================
+    // CUSTOM MODAL ENGINE
+    // ==========================================
+    function buildUIModal(title, text, type, defaultValue = '', isDanger = false) {
+        return new Promise(resolve => {
+            const overlay = document.createElement('div');
+            overlay.className = 'custom-modal-overlay';
+            
+            let inputHtml = type === 'prompt' ? `<input type="text" class="custom-modal-input" value="${defaultValue}" />` : '';
+            let cancelBtn = type !== 'alert' ? `<button class="custom-modal-btn cancel">Cancel</button>` : '';
+            let confirmClass = isDanger ? 'danger' : 'confirm';
+            let confirmText = type === 'alert' ? 'OK' : (type === 'prompt' ? 'Save' : 'Confirm');
+
+            overlay.innerHTML = `
+                <div class="custom-modal-box">
+                    <div class="custom-modal-title">${title}</div>
+                    <div class="custom-modal-text">${text}</div>
+                    ${inputHtml}
+                    <div class="custom-modal-actions">
+                        ${cancelBtn}
+                        <button class="custom-modal-btn ${confirmClass}">${confirmText}</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+            setTimeout(() => overlay.classList.add('show'), 10);
+            
+            const close = (val) => {
+                overlay.classList.remove('show');
+                setTimeout(() => overlay.remove(), 200);
+                resolve(val);
+            };
+
+            overlay.querySelector('.confirm, .danger').onclick = () => close(type === 'prompt' ? overlay.querySelector('.custom-modal-input').value : true);
+            if (type !== 'alert') overlay.querySelector('.cancel').onclick = () => close(false);
+        });
+    }
+    const uiAlert = (title, text) => buildUIModal(title, text, 'alert');
+    const uiConfirm = (title, text, isDanger) => buildUIModal(title, text, 'confirm', '', isDanger);
+    
     function showStatus(msg, isError = false) {
         const box = document.getElementById('statusBox');
         box.style.display = 'block';
@@ -181,10 +241,9 @@
     function exportChatHistory() {
     // (Update 'historyContainer' to whatever the ID of your modal/div actually is)
     const historyBox = document.getElementById('historyText');
-    
-    if (!historyBox || historyBox.innerText.trim() === "") {
-        return alert("No history available to export.");
-    }
+        if (!historyBox || historyBox.innerText.trim() === "") {
+            await uiAlert("Notice", "No history available to export."); return;
+        }
 
     // Grab the raw text exactly as it appears on the screen
     const rawText = "David AI - User Chat History Export\n===================================\n\n" + historyBox.innerText; 
@@ -360,8 +419,9 @@
 
     // --- EXISTING USER LOGIC ---
     async function loadUsers() {
+        async function loadUsers() {
         const secret = document.getElementById('secretKey').value.trim();
-        if (!secret) return alert("Enter the secret key first.");
+        if (!secret) { await uiAlert("Authentication", "Enter the secret key first."); return; }
         
         const btn = document.getElementById('loadBtn');
         btn.innerText = "Loading...";
@@ -433,7 +493,7 @@
         const name = document.getElementById('newNameInput').value.trim();
         const email = document.getElementById('newEmailInput').value.trim();
 
-        if (!phone) return alert("Phone number is required!");
+        if (!phone) { await uiAlert("Error", "Phone number is required!"); return; }
 
         // 🔥 THE AUTO-FORMATTER
         let cleaned = phone.replace(/\D/g, ''); // Strips all spaces, dashes, and brackets
@@ -476,10 +536,11 @@
         const checkedBoxes = document.querySelectorAll('.bulk-user-cb:checked');
         const phones = Array.from(checkedBoxes).map(cb => cb.value);
 
-        if (phones.length === 0) return alert("Select at least one user to message!");
-        if (!message) return alert("Type a message to broadcast!");
+        if (phones.length === 0) { await uiAlert("Error", "Select at least one user to message!"); return; }
+        if (!message) { await uiAlert("Error", "Type a message to broadcast!"); return; }
 
-        if (!confirm(`Are you sure you want to send this message to ${phones.length} users?`)) return;
+        const confirmed = await uiConfirm("Confirm Broadcast", `Are you sure you want to send this exact message to ${phones.length} users?`, false);
+        if (!confirmed) return;
 
         try {
             const res = await fetch('/api/admin/send-bulk-sms', {
@@ -534,7 +595,8 @@
         const select = document.getElementById('userSelect');
         const phone = select.options[select.selectedIndex]?.dataset.phone;
 
-        if (!phone) return alert("Select a valid user first.");
+        if (!phone) { await uiAlert("Notice", "Select a valid user first."); return; }
+        
 
         try {
             const res = await fetch('/api/admin/get-history', {
@@ -556,7 +618,7 @@
     }
     function openSelectedUserProfile() {
         const userId = document.getElementById('userSelect').value;
-        if (!userId) return alert("Please select a user from the dropdown first.");
+        if (!userId) { uiAlert("Notice", "Please select a user from the dropdown first."); return; }
         showUserDeepDive(userId);
     }
 
@@ -627,8 +689,11 @@ async function showUserDeepDive(userId) {
         const phone = select.options[select.selectedIndex]?.dataset.phone;
         const message = document.getElementById('smsMessage').value.trim();
 
-        if (!phone) return alert("Select a valid user first.");
-        if (!message) return alert("Type a message to send.");
+        if (!phone) { await uiAlert("Notice", "Select a valid user first."); return; }
+        if (!message) { await uiAlert("Error", "Type a message to send."); return; }
+
+        const confirmed = await uiConfirm("Confirm SMS", `Send this message directly to ${phone}?`, false);
+        if (!confirmed) return;
 
         try {
             const res = await fetch('/api/admin/send-sms', {
@@ -655,9 +720,12 @@ async function showUserDeepDive(userId) {
         const transcriptId = document.getElementById('transcriptSelect').value;
         const emailOverride = document.getElementById('emailOverride').value.trim();
 
-        if (!userId) return alert("Select a user first.");
-        if (!transcriptId) return alert("Select a transcript from the dropdown.");
+        if (!userId) { await uiAlert("Notice", "Select a user first."); return; }
+        if (!transcriptId) { await uiAlert("Error", "Select a transcript from the dropdown."); return; }
 
+        const confirmed = await uiConfirm("Confirm Email", "Are you sure you want to manually trigger this transcript email?", false);
+        if (!confirmed) return;
+        
         try {
             const res = await fetch('/api/admin/send-transcript', {
                 method: 'POST',
