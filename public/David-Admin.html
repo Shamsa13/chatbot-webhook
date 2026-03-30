@@ -238,7 +238,7 @@
         setTimeout(() => box.style.display = 'none', 5000);
     }
 
-    function exportChatHistory() {
+   async function exportChatHistory() {
     // (Update 'historyContainer' to whatever the ID of your modal/div actually is)
     const historyBox = document.getElementById('historyText');
         if (!historyBox || historyBox.innerText.trim() === "") {
@@ -436,11 +436,15 @@
             
             if (data.success) {
                 globalUsers = data.users;
+                
                 const select = document.getElementById('userSelect');
                 select.innerHTML = '<option value="">-- Choose a user --</option>';
                 
                 const analyticsSelect = document.getElementById('analyticsUserSelect');
                 analyticsSelect.innerHTML = '<option value="all">Global Total (All Users)</option>';
+
+                const bulkContainer = document.getElementById('bulkUserCheckboxes');
+                bulkContainer.innerHTML = ''; 
 
                 data.users.forEach(u => {
                     const name = (u.full_name && u.full_name !== 'null') ? u.full_name : 'Unknown User';
@@ -460,18 +464,14 @@
                     analyticsSelect.appendChild(optAnalytics);
 
                     // 3. Populate the Bulk SMS Checkbox list
-                    const bulkContainer = document.getElementById('bulkUserCheckboxes');
-                    bulkContainer.innerHTML = ''; 
-                    data.users.forEach(u => {
-                        if (!u.phone) return; // Skip users without phones
-                    const name = (u.full_name && u.full_name !== 'null') ? u.full_name : 'Unknown User';
-                    bulkContainer.innerHTML += `
-                        <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; font-weight: 400; color: #333; margin: 0;">
-                            <input type="checkbox" class="bulk-user-cb" value="${u.phone}" style="width: auto; margin: 0;">
-                            <strong>${name}</strong> <span style="color:#888;">(${u.phone})</span>
-                        </label>
-                    `;
-                    });
+                    if (u.phone) {
+                        bulkContainer.innerHTML += `
+                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; font-weight: 400; color: #333; margin: 0;">
+                                <input type="checkbox" class="bulk-user-cb" value="${u.phone}" style="width: auto; margin: 0;">
+                                <strong>${name}</strong> <span style="color:#888;">(${u.phone})</span>
+                            </label>
+                        `;
+                    }
                 });
 
                 document.getElementById('loginArea').style.display = 'none';
