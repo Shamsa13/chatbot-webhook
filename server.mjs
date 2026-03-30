@@ -1954,6 +1954,7 @@ app.post("/api/admin/send-bulk-sms", async (req, res) => {
     const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
     let successCount = 0;
     let failCount = 0;
+    let failedDetails = []; // 🔥 Tracks exactly who failed
 
     for (const phone of phones) {
       try {
@@ -1976,10 +1977,11 @@ app.post("/api/admin/send-bulk-sms", async (req, res) => {
       } catch(e) {
         console.error(`Bulk SMS failed for ${phone}:`, e.message);
         failCount++;
+        failedDetails.push(phone); // 🔥 Save the failed number
       }
     }
     
-    res.json({ success: true, message: `Broadcast complete! Sent: ${successCount}. Failed: ${failCount}.` });
+    res.json({ success: true, message: `Broadcast complete! Sent: ${successCount}. Failed: ${failCount}.`, failedDetails });
   } catch (err) {
     console.error("Bulk SMS Error:", err);
     res.status(500).json({ error: err.message });

@@ -232,10 +232,9 @@
     const uiAlert = (title, text) => buildUIModal(title, text, 'alert');
     const uiConfirm = (title, text, isDanger) => buildUIModal(title, text, 'confirm', '', isDanger);
     
-    function showStatus(msg, isError = false) {
+   function showStatus(msg, isError = false, detailsHtml = "") {
         const box = document.getElementById('statusBox');
         
-        // Reset the box to force the slide-in animation to replay
         box.style.display = 'none';
         box.style.opacity = '1';
         void box.offsetWidth; // Trigger reflow
@@ -243,17 +242,37 @@
         box.className = 'status ' + (isError ? 'error' : 'success');
         box.style.display = 'block';
         
-        // Add a nice visual icon
         const icon = isError ? "❌" : "✅";
-        box.innerHTML = `<div style="display: flex; gap: 10px; align-items: center;"><span>${icon}</span><span>${msg}</span></div>`;
         
-        // Clear any existing timers so it doesn't disappear too early
+        // Build the Toast UI with an X close button
+        let html = `
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 15px;">
+                <div style="display: flex; gap: 10px; align-items: center; font-weight: 600;">
+                    <span>${icon}</span>
+                    <span>${msg}</span>
+                </div>
+                <button onclick="this.parentElement.parentElement.style.display='none'" style="background:none; border:none; color:inherit; opacity: 0.5; cursor:pointer; padding:0; font-size:18px; line-height: 1;">&times;</button>
+            </div>
+        `;
+        
+        // Add the expandable details section if provided
+        if (detailsHtml) {
+            html += `<div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(0,0,0,0.1); font-size: 13px; font-weight: 400; max-height: 200px; overflow-y: auto;">${detailsHtml}</div>`;
+        }
+        
+        box.innerHTML = html;
+        
+        // Clear old timers
         if (window.statusTimeout) clearTimeout(window.statusTimeout);
         
-        window.statusTimeout = setTimeout(() => {
-            box.style.opacity = '0';
-            setTimeout(() => { box.style.display = 'none'; }, 300); // Wait for fade out
-        }, 4000);
+        // 🔥 CRITICAL FIX: If there are details to read OR it's an error, KEEP it open permanently until the user clicks 'X'.
+        // Only auto-hide pure, simple success messages.
+        if (!detailsHtml && !isError) {
+            window.statusTimeout = setTimeout(() => {
+                box.style.opacity = '0';
+                setTimeout(() => { box.style.display = 'none'; }, 300); 
+            }, 4000);
+        }
     }
 
  async function exportChatHistory() {
@@ -567,7 +586,13 @@
             const data = await res.json();
             
             if (data.success) {
-                showStatus(data.message);
+                let detailHtml = "";
+                // If there are failed numbers, format them to show inside the toast!
+                if (data.failedDetails && data.failedDetails.length > 0) {
+                    detailHtml = `<strong style="color: #c62828;">Failed to deliver to:</strong><br><span style="color: #555;">${data.failedDetails.join("<br>")}</span>`;
+                }
+                
+                showStatus(data.message, false, detailHtml);
                 document.getElementById('bulkSmsMessage').value = "";
                 toggleBulkSelection(false); // Uncheck all when done
             } else {
