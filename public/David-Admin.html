@@ -22,9 +22,11 @@
         button:disabled { background: #aaa; cursor: not-allowed; }
 
         #dashboardArea { display: none; }
-        .status { padding: 15px; border-radius: 6px; font-size: 14px; margin-bottom: 15px; display: none; }
-        .success { background: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
-        .error { background: #ffebee; color: #c62828; border: 1px solid #ffcdd2; }
+     /* MODERN FLOATING TOAST NOTIFICATION */
+        .status { position: fixed; top: 30px; right: 30px; padding: 16px 24px; border-radius: 8px; font-size: 14px; font-weight: 500; z-index: 10000; box-shadow: 0 10px 40px rgba(0,0,0,0.15); display: none; animation: slideInToast 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; max-width: 350px; transition: opacity 0.3s; }
+        @keyframes slideInToast { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        .status.success { background: white; color: #181d32; border-left: 4px solid #4caf50; }
+        .status.error { background: white; color: #181d32; border-left: 4px solid #ff4c4c; }
         
         pre { background: #f8f9fa; padding: 15px; border-radius: 6px; border: 1px solid #ddd; white-space: pre-wrap; font-size: 12px; max-height: 400px; overflow-y: auto; }
 
@@ -232,10 +234,26 @@
     
     function showStatus(msg, isError = false) {
         const box = document.getElementById('statusBox');
-        box.style.display = 'block';
+        
+        // Reset the box to force the slide-in animation to replay
+        box.style.display = 'none';
+        box.style.opacity = '1';
+        void box.offsetWidth; // Trigger reflow
+        
         box.className = 'status ' + (isError ? 'error' : 'success');
-        box.innerText = msg;
-        setTimeout(() => box.style.display = 'none', 5000);
+        box.style.display = 'block';
+        
+        // Add a nice visual icon
+        const icon = isError ? "❌" : "✅";
+        box.innerHTML = `<div style="display: flex; gap: 10px; align-items: center;"><span>${icon}</span><span>${msg}</span></div>`;
+        
+        // Clear any existing timers so it doesn't disappear too early
+        if (window.statusTimeout) clearTimeout(window.statusTimeout);
+        
+        window.statusTimeout = setTimeout(() => {
+            box.style.opacity = '0';
+            setTimeout(() => { box.style.display = 'none'; }, 300); // Wait for fade out
+        }, 4000);
     }
 
  async function exportChatHistory() {
