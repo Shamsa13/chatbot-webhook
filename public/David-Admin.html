@@ -419,7 +419,7 @@
 
     // --- EXISTING USER LOGIC ---
     async function loadUsers() {
-        async function loadUsers() {
+        
         const secret = document.getElementById('secretKey').value.trim();
         if (!secret) { await uiAlert("Authentication", "Enter the secret key first."); return; }
         
@@ -725,7 +725,7 @@ async function showUserDeepDive(userId) {
 
         const confirmed = await uiConfirm("Confirm Email", "Are you sure you want to manually trigger this transcript email?", false);
         if (!confirmed) return;
-        
+
         try {
             const res = await fetch('/api/admin/send-transcript', {
                 method: 'POST',
