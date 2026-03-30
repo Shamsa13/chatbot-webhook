@@ -238,25 +238,24 @@
         setTimeout(() => box.style.display = 'none', 5000);
     }
 
-   async function exportChatHistory() {
-    // (Update 'historyContainer' to whatever the ID of your modal/div actually is)
-    const historyBox = document.getElementById('historyText');
+ async function exportChatHistory() {
+        const historyBox = document.getElementById('historyText');
         if (!historyBox || historyBox.innerText.trim() === "") {
             await uiAlert("Notice", "No history available to export."); return;
         }
 
-    // Grab the raw text exactly as it appears on the screen
-    const rawText = "David AI - User Chat History Export\n===================================\n\n" + historyBox.innerText; 
-    
-    // Create an invisible text file and trigger the download
-    const blob = new Blob([rawText], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "David_AI_Chat_History.txt";
-    a.click();
-    URL.revokeObjectURL(url);
-}
+        // Grab the raw text exactly as it appears on the screen
+        const rawText = "David AI - User Chat History Export\n===================================\n\n" + historyBox.innerText; 
+        
+        // Create an invisible text file and trigger the download
+        const blob = new Blob([rawText], { type: "text/plain" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "David_AI_Chat_History.txt";
+        a.click();
+        URL.revokeObjectURL(url);
+    }
 
 
     // --- TAB SWITCHING LOGIC ---

@@ -720,7 +720,7 @@ function handleToggleChange(toggle) {
     
     // If they try to turn Deep Dive ON while > 2 docs are selected
     if (toggle.checked && checkedBoxes.length > 2) {
-        alert("Deep Dive mode can only process up to 2 documents at a time. Please uncheck some documents first.");
+        uiAlert("Notice", "Deep Dive mode can only process up to 2 documents at a time. Please uncheck some documents first.");
         toggle.checked = false; // Instantly flip the toggle back off
     }
 }
@@ -732,7 +732,7 @@ function handleDocSelection(checkbox) {
     
     // Enforce the 2-file limit ONLY if Deep Dive is currently ON
     if (isDeepDive && checkedBoxes.length > 2) {
-        alert("Deep Dive mode can only process a maximum of 2 documents at a time.");
+        uiAlert("Notice", "Deep Dive mode can only process a maximum of 2 documents at a time.");
         checkbox.checked = false; // Uncheck the box they just clicked
         return;
     }
@@ -804,3 +804,4 @@ document.addEventListener('focusout', function(e) {
         }, 100); // 100ms gives the keyboard time to fully retract
     }
 });
+
