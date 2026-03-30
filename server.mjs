@@ -1908,22 +1908,33 @@ app.post("/api/admin/users", async (req, res) => {
 // Add a user manually via Admin panel
 app.post("/api/admin/add-user", async (req, res) => {
   try {
-    const { secret, phone, name } = req.body;
+    const { secret, phone, name, email } = req.body;
     if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
 
     const cleanPhone = normalizeFrom(phone);
     if (!cleanPhone) return res.status(400).json({ error: "Invalid phone number" });
+    const cleanEmail = email ? email.toLowerCase().trim() : null;
 
     // Check if they already exist
     const { data: existing } = await supabase.from("users").select("id").eq("phone", cleanPhone).limit(1);
     
     if (existing && existing.length) {
-      if (name) await supabase.from("users").update({ full_name: name }).eq("id", existing[0].id);
-      return res.json({ success: true, message: "User already exists (updated name if provided)." });
+      const updates = {};
+      if (name) updates.full_name = name;
+      if (cleanEmail) updates.email = cleanEmail;
+      
+      if (Object.keys(updates).length > 0) {
+          await supabase.from("users").update(updates).eq("id", existing[0].id);
+      }
+      return res.json({ success: true, message: "User already exists (updated name/email if provided)." });
     }
 
     // Insert brand new user
-    const { error: insErr } = await supabase.from("users").insert({ phone: cleanPhone, full_name: name || null });
+    const { error: insErr } = await supabase.from("users").insert({ 
+        phone: cleanPhone, 
+        full_name: name || null,
+        email: cleanEmail
+    });
     if (insErr) throw insErr;
 
     res.json({ success: true, message: "User successfully added to database!" });

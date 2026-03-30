@@ -132,12 +132,16 @@
                 <h2>Add Beta User</h2>
                 <div style="display: flex; gap: 15px; align-items: flex-end;">
                     <div style="flex: 1;">
-                        <label>Phone Number (e.g., +14165551234)</label>
+                        <label>Phone Number</label>
                         <input type="text" id="newPhoneInput" placeholder="+1..." style="margin-bottom: 0;">
                     </div>
                     <div style="flex: 1;">
                         <label>Full Name (Optional)</label>
                         <input type="text" id="newNameInput" placeholder="Jane Doe" style="margin-bottom: 0;">
+                    </div>
+                    <div style="flex: 1;">
+                        <label>Email (Optional)</label>
+                        <input type="email" id="newEmailInput" placeholder="jane@example.com" style="margin-bottom: 0;">
                     </div>
                     <button onclick="adminAddUser()" style="background: #4caf50; height: 43px; white-space: nowrap;">➕ Add to Database</button>
                 </div>
@@ -422,18 +426,29 @@
         btn.innerText = "Connect & Load Users";
     }
 
-    // --- OUTREACH LOGIC ---
+   // --- OUTREACH LOGIC ---
     async function adminAddUser() {
         const secret = document.getElementById('secretKey').value;
-        const phone = document.getElementById('newPhoneInput').value.trim();
+        let phone = document.getElementById('newPhoneInput').value.trim();
         const name = document.getElementById('newNameInput').value.trim();
+        const email = document.getElementById('newEmailInput').value.trim();
 
         if (!phone) return alert("Phone number is required!");
+
+        // 🔥 THE AUTO-FORMATTER
+        let cleaned = phone.replace(/\D/g, ''); // Strips all spaces, dashes, and brackets
+        if (cleaned.length === 10) {
+            phone = '+1' + cleaned; // Auto-adds +1 for standard 10-digit numbers
+        } else if (cleaned.length === 11 && cleaned.startsWith('1')) {
+            phone = '+' + cleaned;  // Handles if you typed '1' but forgot the '+'
+        } else if (!phone.startsWith('+')) {
+            phone = '+' + cleaned;  // Fallback for international numbers
+        }
 
         try {
             const res = await fetch('/api/admin/add-user', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ secret, phone, name })
+                body: JSON.stringify({ secret, phone, name, email })
             });
             const data = await res.json();
             
@@ -441,6 +456,7 @@
                 showStatus(data.message);
                 document.getElementById('newPhoneInput').value = "";
                 document.getElementById('newNameInput').value = "";
+                document.getElementById('newEmailInput').value = "";
                 await loadUsers(); // Instantly refresh all lists!
             } else {
                 showStatus(data.error, true);
