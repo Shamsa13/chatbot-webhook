@@ -138,9 +138,10 @@ async function verifyCode() {
         if (data.success) {
             globalUserId = data.userId;
             userName = (data.name && data.name.toLowerCase() !== "null") ? data.name.split(' ')[0] : "Guest";
-            localStorage.setItem('david_userId', globalUserId);
+           localStorage.setItem('david_userId', globalUserId);
             localStorage.setItem('david_userName', userName);
             localStorage.setItem('david_userPhone', userPhone);
+            localStorage.setItem('david_jwt', data.token); // 🔐 Save the VIP Pass
 
             document.getElementById('loginTag').innerText = "Logged in as " + userName;
             document.getElementById('loginContainer').style.display = 'none';
@@ -171,6 +172,7 @@ function logoutUser() {
     localStorage.removeItem('david_userId');
     localStorage.removeItem('david_userName');
     localStorage.removeItem('david_userPhone');
+    localStorage.removeItem('david_jwt'); // 🔐 Destroy the VIP Pass
     // --------------------------------
 
     document.getElementById('dashboardContainer').style.display = 'none';
@@ -457,13 +459,17 @@ async function sendMessage() {
     // 🕒 SHOW TYPING ANIMATION
     showTyping();
 
-    try {
+  try {
+        const token = localStorage.getItem('david_jwt'); // Get the token
+        
         const res = await fetch('/api/chat', {
             method: 'POST', 
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}` // 🔐 Attach the VIP Pass
+            },
             body: JSON.stringify({
-                userId: globalUserId,
-                message,
+                message, // userId is removed, the backend gets it from the token!
                 conversationId: currentConversationId,
                 selectedDocIds,
                 deepDive: isDeepDive

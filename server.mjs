@@ -9,6 +9,10 @@ import { createClient } from "@supabase/supabase-js";
 import multer from 'multer';
 import mammoth from 'mammoth';
 import { extractText, getDocumentProxy } from 'unpdf';
+import jwt from "jsonwebtoken";
+import rateLimit from "express-rate-limit";
+
+const JWT_SECRET = process.env.JWT_SECRET || "david-beatty-super-secret-key-change-this";
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -40,6 +44,48 @@ const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 // 🔥 THE EVENT RAM CACHE
 let activeEventsCache = [];
+
+// --- 🛡️ RATE LIMITERS ---
+
+// 1. Strict OTP Limiter (Stops Twilio SMS draining)
+// Max 3 requests per IP every 15 minutes
+const otpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, 
+  max: 3, 
+  message: { error: "Too many login attempts. Please wait 15 minutes." }
+});
+
+// 2. Chat & Upload Limiter (Stops OpenAI API draining)
+// Max 20 requests per IP every 1 minute
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  message: { error: "You are sending messages too quickly. Please slow down." }
+});
+
+// 3. Admin Brute Force Limiter
+// Max 10 attempts per 15 minutes
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: "Too many admin attempts." }
+});
+
+// --- 🔐 JWT AUTH MIDDLEWARE ---
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1]; // Expects "Bearer <token>"
+
+  if (!token) return res.status(401).json({ error: "Access denied. No token provided." });
+
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    if (err) return res.status(403).json({ error: "Invalid or expired session. Please log in again." });
+    
+    // Attach the secure userId to the request
+    req.user = decoded; 
+    next();
+  });
+}
 
 async function refreshEventsCache() {
   try {
@@ -1213,7 +1259,7 @@ function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-app.post("/api/auth/send-code", async (req, res) => {
+app.post("/api/auth/send-code", otpLimiter, async (req, res) => {
   try {
     const rawPhone = req.body.phone;
     if (!rawPhone) return res.status(400).json({ error: "Phone number is required" });
@@ -1245,7 +1291,7 @@ app.post("/api/auth/send-code", async (req, res) => {
   }
 });
 
-app.post("/api/auth/verify-code", async (req, res) => {
+app.post("/api/auth/verify-code", otpLimiter, async (req, res) => {
   try {
     const rawPhone = req.body.phone;
     const code = req.body.code;
@@ -1263,7 +1309,12 @@ app.post("/api/auth/verify-code", async (req, res) => {
     }
     
     await supabase.from("users").update({ otp_code: null, otp_expires_at: null, last_seen: new Date().toISOString() }).eq("id", user.id);
-    res.json({ success: true, userId: user.id, name: user.full_name });
+    
+    // 🔐 GENERATE THE JWT TOKEN (Valid for 7 days)
+    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
+
+    // Send the token back to the frontend along with the user info
+    res.json({ success: true, userId: user.id, name: user.full_name, token: token });
   } catch (err) {
     console.error("OTP Verify Error:", err.message);
     res.status(500).json({ error: "Verification failed." });
@@ -1464,9 +1515,10 @@ app.delete("/api/web/conversations/:id", async (req, res) => {
 // ==========================================
 // WEB CHAT ENDPOINT
 // ==========================================
-app.post("/api/chat", async (req, res) => {
+app.post("/api/chat", apiLimiter, authenticateToken, async (req, res) => {
   try {
-    const { userId, message, selectedDocIds, deepDive } = req.body; // 🤿 Catching Deep Dive
+    const userId = req.user.userId; // 🔐 Pull secure ID from the token!
+    const { message, selectedDocIds, deepDive } = req.body;
     let { conversationId } = req.body;
     if (!userId || !message) return res.status(400).json({ error: "Missing userId or message." });
 
@@ -1888,7 +1940,7 @@ app.put("/api/documents/:id/name", async (req, res) => {
 // ==========================================
 
 // 1. Get all users for the dropdown
-app.post("/api/admin/users", async (req, res) => {
+app.post("/api/admin/users", adminLimiter, async (req, res) => {
   try {
     const { secret } = req.body;
     if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
@@ -1906,7 +1958,7 @@ app.post("/api/admin/users", async (req, res) => {
 });
 
 // Add a user manually via Admin panel
-app.post("/api/admin/add-user", async (req, res) => {
+app.post("/api/admin/add-user", adminLimiter, async (req, res) => {
   try {
     const { secret, phone, name, email } = req.body;
     if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
