@@ -43,7 +43,10 @@
 
     <div class="feature-showcase">
         <div class="showcase-content">
-            <h2 class="showcase-headline"><span id="typed-text"></span></h2>
+            <h2 class="showcase-headline" style="margin-bottom: 12px;"><span id="typed-headline"></span></h2>
+<div style="font-size: 1.15rem; font-family: 'Inter', sans-serif; font-weight: 400; color: #555; line-height: 1.6; margin-bottom: 30px;">
+    <span id="typed-paragraph"></span>
+</div>
             
             <div class="feature-grid">
                 <div class="feature-card">
@@ -175,21 +178,25 @@
 <script src="/app.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/typed.js@2.0.12"></script>
 <script>
-    var typed = new Typed('#typed-text', {
-        strings: [
-            "Tap into David’s 50 years of board expertise, on demand.^800<br><span style='font-size: 1.2rem; font-family: \"Inter\", sans-serif; font-weight: 400; color: #555; line-height: 1.6; display: block; margin-top: 12px;'>Engage with an AI avatar of David Beatty and his rich library of governance education to think through your next board duty, to sharpen your practice, and to prepare for any conversation that matters.</span>"
-        ],
+    // 1. Type the big headline first
+    new Typed('#typed-headline', {
+        strings: ["Tap into David’s 50 years of board expertise, on demand."],
         typeSpeed: 25,
         showCursor: true,
         cursorChar: '|',
         onComplete: function(self) {
-            // Instead of hiding the cursor, we shrink it to match the smaller paragraph text!
-            let cursor = document.querySelector('.typed-cursor');
-            if (cursor) {
-                cursor.style.fontSize = '1.2rem';
-                cursor.style.color = '#555';
-                cursor.style.fontWeight = '400';
-            }
+            // Instantly hide the big cursor when done
+            document.querySelector('.showcase-headline .typed-cursor').style.display = 'none';
+            
+            // Wait 0.8 seconds, then start typing the paragraph
+            setTimeout(function() {
+                new Typed('#typed-paragraph', {
+                    strings: ["Engage with an AI avatar of David Beatty and his rich library of governance education to think through your next board duty, to sharpen your practice, and to prepare for any conversation that matters."],
+                    typeSpeed: 35,
+                    showCursor: true,
+                    cursorChar: '|'
+                });
+            }, 800);
         }
     });
 </script>
