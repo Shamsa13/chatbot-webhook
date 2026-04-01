@@ -124,10 +124,15 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 
 async function sendCode() {
+    const btn = document.querySelector('#step1 .btn');
+    if (btn.disabled) return; // 🛑 CRITICAL: Stops the Enter key from double-firing
+    
     userPhone = phoneInput.getNumber();
     if (!userPhone) { await uiAlert("Invalid Number", "Please enter a valid phone number."); return; }
-    const btn = document.querySelector('#step1 .btn');
+    
+    btn.disabled = true; // Lock the button immediately
     btn.innerText = "Sending...";
+    
     try {
         const res = await fetch('/api/auth/send-code', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: userPhone }) });
         const data = await res.json();
@@ -137,26 +142,37 @@ async function sendCode() {
             document.getElementById('codeInput').focus(); // Auto-focuses the PIN box!
         } else { 
             await uiAlert("Error", data.error); 
-            btn.innerText = "Get Secure Code to Your Phone";
         }
-    } catch (e) { await uiAlert("Error", "Connection error."); btn.innerText = "Get Secure Code to Your Phone"; }
+    } catch (e) { 
+        await uiAlert("Error", "Connection error."); 
+    } finally {
+        // Always reset the button state when finished
+        btn.innerText = "Get Secure Code to Your Phone";
+        btn.disabled = false;
+    }
 }
 
 async function verifyCode() {
+    const btn = document.querySelector('#step2 .btn');
+    if (btn.disabled) return; // 🛑 CRITICAL: Stops the Enter key from double-firing
+    
     const code = document.getElementById('codeInput').value.trim();
     if (!code) return;
-    const btn = document.querySelector('#step2 .btn');
+    
+    btn.disabled = true; // Lock the button immediately
     btn.innerText = "Verifying...";
+    
     try {
         const res = await fetch('/api/auth/verify-code', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: userPhone, code }) });
         const data = await res.json();
         if (data.success) {
             globalUserId = data.userId;
             userName = (data.name && data.name.toLowerCase() !== "null") ? data.name.split(' ')[0] : "Guest";
-           localStorage.setItem('david_userId', globalUserId);
+            
+            localStorage.setItem('david_userId', globalUserId);
             localStorage.setItem('david_userName', userName);
             localStorage.setItem('david_userPhone', userPhone);
-            localStorage.setItem('david_jwt', data.token); // 🔐 Save the VIP Pass
+            localStorage.setItem('david_jwt', data.token); 
             localStorage.setItem('david_last_active', Date.now());
 
             document.getElementById('loginTag').innerText = "Logged in as " + userName;
@@ -165,9 +181,14 @@ async function verifyCode() {
             await initDashboard();
         } else { 
             await uiAlert("Error", data.error); 
-            btn.innerText = "Login to Portal"; 
         }
-    } catch (e) { await uiAlert("Error", "Connection error."); btn.innerText = "Login to Portal"; }
+    } catch (e) { 
+        await uiAlert("Error", "Connection error."); 
+    } finally {
+        // Always reset the button state when finished
+        btn.innerText = "Login to Portal"; 
+        btn.disabled = false;
+    }
 }
 
 function logoutUser() {

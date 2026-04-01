@@ -1640,6 +1640,8 @@ app.post("/api/chat", apiLimiter, authenticateToken, async (req, res) => {
 PLATFORM: You are currently chatting with ${user.full_name || 'the user'} on the WEB chat interface. 
 FORMATTING RULE: This web interface FULLY supports rich Markdown formatting. You MUST use **bold** for headers, bullet points for lists, and proper spacing to make your answers highly readable and professional.
 
+CRITICAL BEHAVIOR RULE: If there is CHAT HISTORY provided below (whether from an older web chat or a saved voice call), DO NOT greet the user again, DO NOT re-introduce yourself, and DO NOT state your purpose (e.g., "Hi, I am here to assist..."). Just naturally and directly answer the prompt and continue the conversation.
+
 CROSS-PLATFORM MEMORY (from past SMS, calls, and web chats):
 ${user.memory_summary || "No past memory yet."}
 
