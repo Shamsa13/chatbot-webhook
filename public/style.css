@@ -55,13 +55,13 @@ button.auth-button:hover { background-color: #AA8877; transform: translateY(-1px
 .disclaimer-footer a:hover { text-decoration: underline; }
 
 /* RIGHT SHOWCASE PANE (Light - 65% width) */
-.feature-showcase { flex: 1; display: flex; align-items: center; justify-content: center; padding: 60px; background: radial-gradient(circle at top right, #ffffff, #f0f2f5); }
+.feature-showcase { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px; background: radial-gradient(circle at top right, #ffffff, #f0f2f5); }
 .showcase-content { max-width: 600px; width: 100%; }
-h2.showcase-headline { font-family: 'Playfair Display', serif; font-size: 3rem; color: #181D32; line-height: 1.2; margin-bottom: 50px; min-height: 120px; }
+h2.showcase-headline { font-family: 'Playfair Display', serif; font-size: 2.6rem; color: #181D32; line-height: 1.2; margin-bottom: 30px; }
 .typed-cursor { color: #B99784; }
 
 /* Feature Grid (Now with custom Taupe Bullets) */
-.feature-grid { display: flex; flex-direction: column; gap: 24px; }
+.feature-grid { display: flex; flex-direction: column; gap: 18px; }
 .feature-card { display: flex; gap: 16px; align-items: flex-start; }
 .feat-icon { width: 10px; height: 10px; background: #B99784; border-radius: 50%; margin-top: 6px; flex-shrink: 0; box-shadow: 0 0 10px rgba(185, 151, 132, 0.4); }
 .feat-text h3 { font-family: 'Inter', sans-serif; font-size: 19px; font-weight: 600; color: #181D32; margin: 0 0 4px 0; }

@@ -173,19 +173,26 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/intl-tel-input/17.0.8/js/intlTelInput.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="/app.js"></script>
-
 <script src="https://cdn.jsdelivr.net/npm/typed.js@2.0.12"></script>
 <script>
     var typed = new Typed('#typed-text', {
         strings: [
-            "Tap into David’s 50 years of board expertise, on demand.^800<br><span style='font-size: 1.2rem; font-family: \"Inter\", sans-serif; font-weight: 400; color: #555; line-height: 1.6; display: block; margin-top: 20px;'>Engage with an AI avatar of David Beatty and his rich library of governance education to think through your next board duty, to sharpen your practice, and to prepare for any conversation that matters.</span>"
+            "Tap into David’s 50 years of board expertise, on demand.^800<br><span style='font-size: 1.2rem; font-family: \"Inter\", sans-serif; font-weight: 400; color: #555; line-height: 1.6; display: block; margin-top: 12px;'>Engage with an AI avatar of David Beatty and his rich library of governance education to think through your next board duty, to sharpen your practice, and to prepare for any conversation that matters.</span>"
         ],
-        typeSpeed: 25, // Sped up slightly so the user isn't waiting too long for the big paragraph!
+        typeSpeed: 25,
         showCursor: true,
-        cursorChar: '|'
+        cursorChar: '|',
+        onComplete: function(self) {
+            // Instead of hiding the cursor, we shrink it to match the smaller paragraph text!
+            let cursor = document.querySelector('.typed-cursor');
+            if (cursor) {
+                cursor.style.fontSize = '1.2rem';
+                cursor.style.color = '#555';
+                cursor.style.fontWeight = '400';
+            }
+        }
     });
 </script>
-
 
 </body>
 </html>

@@ -122,9 +122,9 @@ async function sendCode() {
             document.getElementById('codeInput').focus(); // Auto-focuses the PIN box!
         } else { 
             await uiAlert("Error", data.error); 
-            btn.innerText = "Send Secure Code"; 
+            btn.innerText = "Get Secure Code to Your Phone";
         }
-    } catch (e) { await uiAlert("Error", "Connection error."); btn.innerText = "Send Secure Code"; }
+    } catch (e) { await uiAlert("Error", "Connection error."); btn.innerText = "Get Secure Code to Your Phone"; }
 }
 
 async function verifyCode() {
@@ -182,7 +182,7 @@ function logoutUser() {
     document.getElementById('step2').style.display = 'none';
     document.getElementById('step1').style.display = 'block';
     document.getElementById('codeInput').value = "";
-    document.querySelector('#step1 .btn').innerText = "Send Secure Code";
+    document.querySelector('#step1 .btn').innerText = "Get Secure Code to Your Phone";
     document.querySelector('#step2 .btn').innerText = "Login to Portal";
     document.getElementById('chatMessages').innerHTML = "";
     document.getElementById('chatList').innerHTML = "";
