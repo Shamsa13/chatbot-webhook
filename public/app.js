@@ -96,15 +96,30 @@ window.addEventListener('DOMContentLoaded', () => {
 
     // 2. Auto-Login Check
     const savedUserId = localStorage.getItem('david_userId');
-    if (savedUserId) {
+    const lastActive = localStorage.getItem('david_last_active');
+    const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+
+    // Check if the session exists BUT has been inactive for > 24 hours
+    if (savedUserId && lastActive && (Date.now() - parseInt(lastActive) > TWENTY_FOUR_HOURS)) {
+        console.log("Session expired due to inactivity.");
+        localStorage.removeItem('david_userId');
+        localStorage.removeItem('david_userName');
+        localStorage.removeItem('david_userPhone');
+        localStorage.removeItem('david_jwt');
+        localStorage.removeItem('david_last_active');
+        // Do not auto-login, leave them on the Sign In screen
+    } else if (savedUserId) {
+        // Valid session! Boot up the app
         globalUserId = savedUserId;
         userName = localStorage.getItem('david_userName') || "Guest";
         userPhone = localStorage.getItem('david_userPhone') || "";
         
+        localStorage.setItem('david_last_active', Date.now()); // Reset timer on fresh load
+        
         document.getElementById('loginTag').innerText = "Logged in as " + userName;
         document.getElementById('loginContainer').style.display = 'none';
         document.getElementById('dashboardContainer').style.display = 'flex';
-        initDashboard(); // Boot up the app instantly!
+        initDashboard(); 
     }
 });
 
@@ -142,6 +157,7 @@ async function verifyCode() {
             localStorage.setItem('david_userName', userName);
             localStorage.setItem('david_userPhone', userPhone);
             localStorage.setItem('david_jwt', data.token); // 🔐 Save the VIP Pass
+            localStorage.setItem('david_last_active', Date.now());
 
             document.getElementById('loginTag').innerText = "Logged in as " + userName;
             document.getElementById('loginContainer').style.display = 'none';
@@ -173,6 +189,7 @@ function logoutUser() {
     localStorage.removeItem('david_userName');
     localStorage.removeItem('david_userPhone');
     localStorage.removeItem('david_jwt'); // 🔐 Destroy the VIP Pass
+    localStorage.removeItem('david_last_active');
     // --------------------------------
 
     document.getElementById('dashboardContainer').style.display = 'none';
@@ -809,5 +826,40 @@ document.addEventListener('focusout', function(e) {
             window.scrollTo(0, 0);
         }, 100); // 100ms gives the keyboard time to fully retract
     }
+});
+
+
+// ==========================================
+// SESSION INACTIVITY TRACKER
+// ==========================================
+let activityTimeout = null;
+
+function resetInactivityTimer() {
+    // Only track activity if the user is actually logged in
+    if (globalUserId) {
+        localStorage.setItem('david_last_active', Date.now());
+        
+        // Optional active session check: If they somehow bypassed the boot check 
+        // and try to click around after 24h, kick them out immediately.
+        const lastActive = localStorage.getItem('david_last_active');
+        if (lastActive && (Date.now() - parseInt(lastActive) > 24 * 60 * 60 * 1000)) {
+            uiAlert("Session Expired", "You have been logged out due to 24 hours of inactivity.");
+            logoutUser();
+        }
+    }
+}
+
+// Listen for interactions, but throttle the updates to once per minute 
+// so we don't spam the browser's local storage engine on every mouse movement.
+['click', 'touchstart', 'keypress', 'scroll'].forEach(evt => {
+    document.addEventListener(evt, () => {
+        if (activityTimeout) return;
+        
+        activityTimeout = setTimeout(() => {
+            resetInactivityTimer();
+            activityTimeout = null;
+        }, 60000); // 1-minute throttle
+        
+    }, { passive: true });
 });
 
