@@ -77,7 +77,10 @@
 <div id="dashboardContainer">
     <div class="sidebar">
         <div class="sidebar-header">
-            <div class="sidebar-brand">David AI</div>
+            <div class="sidebar-brand-container">
+                <div class="sidebar-brand">Director Compass</div>
+                <div class="sidebar-subtitle">Chats</div>
+            </div>
             <button class="new-chat-btn" onclick="startNewChat()"><span style="font-size:18px;">+</span> New Chat</button>
         </div>
         <hr class="sidebar-divider" style="border: none; border-top: 1px solid #252b48; margin: 4px 0;"/>
@@ -100,7 +103,10 @@
 
     <div class="chat-area">
         <div class="chat-header">
-            <span class="header-title">Corporate Governance AI</span>
+            <div class="chat-brand-container">
+                <span class="header-title">Director Compass</span>
+                <span class="header-subtitle" id="chatSubtitle">Workspace (New Conversation)</span>
+            </div>
             <div class="header-actions">
                 <span style="color:#888;" id="loginTag"></span>
                 <button class="logout-btn" onclick="logoutUser()">Logout</button>
@@ -133,11 +139,14 @@
 
     <div class="right-sidebar">
         <div class="right-header">
-            <div>
-                Knowledge Base
-                <div class="kb-tooltip-container">
-                    ⓘ
-                    <span class="kb-tooltip-text">Securely upload board packages, meeting minutes, or reports. David will read and recall them instantly for your future chats and calls.</span>
+            <div class="right-brand-container">
+                <div class="right-title">Director Compass</div>
+                <div class="right-subtitle">
+                    Knowledge Base
+                    <div class="kb-tooltip-container">
+                        ⓘ
+                        <span class="kb-tooltip-text">Securely upload board packages, meeting minutes, or reports. David will read and recall them instantly for your future chats and calls.</span>
+                    </div>
                 </div>
             </div>
         </div>

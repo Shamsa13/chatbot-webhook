@@ -233,6 +233,7 @@ async function startNewChat() {
             currentConversationId = data.conversationId;
             document.getElementById('chatMessages').innerHTML = "";
             showEmptyState();
+            document.getElementById('chatSubtitle').innerText = "Workspace (New Conversation)";
             await loadConversationList(false);
             document.querySelectorAll('.chat-item').forEach(el => {
                 el.classList.toggle('active', el.dataset.id === currentConversationId);
@@ -368,6 +369,10 @@ async function switchChat(conversationId) {
     
     isLoadingChat = true;
     currentConversationId = conversationId;
+
+    const activeChat = globalConversations.find(c => c.id === conversationId);
+    const chatTitle = activeChat ? (activeChat.title || activeChat.preview || "New Conversation") : "New Conversation";
+    document.getElementById('chatSubtitle').innerText = `Workspace (${chatTitle})`;
 
     document.querySelectorAll('.chat-item').forEach(el => {
         el.classList.toggle('active', el.dataset.id === conversationId);
