@@ -405,3 +405,22 @@ input:checked + .slider:before { transform: translateX(18px); }
         display: none; /* Hides "Logged in as..." on mobile to make room for the titles */
     }
 }
+
+/* =========================================
+   PROFILE DROPDOWN MENU
+   ========================================= */
+.profile-dropdown-container { position: relative; }
+.profile-trigger-btn { display: flex; align-items: center; gap: 8px; background: white; border: 1px solid #ddd; padding: 6px 14px; border-radius: 30px; cursor: pointer; color: #181d32; font-size: 13px; font-weight: 500; font-family: 'Inter', sans-serif; transition: 0.2s; }
+.profile-trigger-btn:hover { background: #f4f5f7; border-color: #ccc; }
+.profile-trigger-btn svg { color: #555; }
+.profile-trigger-btn .chevron { transition: 0.2s; }
+.profile-trigger-btn.active .chevron { transform: rotate(180deg); }
+
+.profile-dropdown-menu { position: absolute; top: calc(100% + 8px); right: 0; background: white; border: 1px solid #eaeaea; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); min-width: 200px; display: flex; flex-direction: column; opacity: 0; pointer-events: none; transform: translateY(-10px); transition: 0.2s cubic-bezier(0.2, 0.8, 0.2, 1); z-index: 1000; overflow: hidden; padding: 6px 0; }
+.profile-dropdown-menu.show { opacity: 1; pointer-events: auto; transform: translateY(0); }
+
+.profile-dropdown-menu button, .profile-dropdown-menu a { display: flex; align-items: center; gap: 10px; background: none; border: none; padding: 12px 18px; width: 100%; text-align: left; font-size: 13px; color: #444; cursor: pointer; text-decoration: none; font-family: 'Inter', sans-serif; transition: 0.15s; }
+.profile-dropdown-menu button:hover, .profile-dropdown-menu a:hover { background: #f8f9fa; color: #181d32; }
+.menu-divider { height: 1px; background: #eaeaea; margin: 4px 0; }
+.logout-menu-btn { color: #d32f2f !important; }
+.logout-menu-btn:hover { background: #ffebee !important; }

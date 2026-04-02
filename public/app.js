@@ -174,6 +174,7 @@ async function verifyCode() {
             localStorage.setItem('david_userPhone', userPhone);
             localStorage.setItem('david_jwt', data.token); 
             localStorage.setItem('david_last_active', Date.now());
+            localStorage.setItem('david_previous_login', data.previousLogin);
 
             document.getElementById('loginTag').innerText = "Logged in as " + userName;
             document.getElementById('loginContainer').style.display = 'none';
@@ -211,6 +212,7 @@ function logoutUser() {
     localStorage.removeItem('david_userPhone');
     localStorage.removeItem('david_jwt'); // 🔐 Destroy the VIP Pass
     localStorage.removeItem('david_last_active');
+    localStorage.removeItem('david_previous_login');
     // --------------------------------
 
     document.getElementById('dashboardContainer').style.display = 'none';
@@ -789,6 +791,105 @@ function handleDocSelection(checkbox) {
     // Save the current selections to LocalStorage (works for unlimited docs if Deep Dive is OFF)
     const selectedDocIds = Array.from(document.querySelectorAll('.doc-checkbox:checked')).map(cb => cb.value);
     localStorage.setItem('david_saved_docs_' + globalUserId, JSON.stringify(selectedDocIds));
+}
+
+
+// ==========================================
+// DROPDOWN & PROFILE MANAGEMENT
+// ==========================================
+function toggleProfileMenu(event) {
+    event.stopPropagation();
+    const menu = document.getElementById('profileMenu');
+    const btn = document.querySelector('.profile-trigger-btn');
+    menu.classList.toggle('show');
+    btn.classList.toggle('active');
+}
+
+// Close dropdown if clicking outside
+document.addEventListener('click', (e) => {
+    const menu = document.getElementById('profileMenu');
+    const btn = document.querySelector('.profile-trigger-btn');
+    if (menu && menu.classList.contains('show') && !e.target.closest('.profile-dropdown-container')) {
+        menu.classList.remove('show');
+        btn.classList.remove('active');
+    }
+});
+
+async function openProfileModal() {
+    document.getElementById('profileMenu').classList.remove('show');
+    document.querySelector('.profile-trigger-btn').classList.remove('active');
+    
+    const modal = document.getElementById('profileModal');
+    const nameInput = document.getElementById('profileNameInput');
+    const emailInput = document.getElementById('profileEmailInput');
+    const loginDisplay = document.getElementById('lastLoginDisplay');
+    
+    // Format previous login
+    const prev = localStorage.getItem('david_previous_login');
+    if (prev && prev !== "First time logging in") {
+        const d = new Date(prev);
+        loginDisplay.innerText = "Last login: " + d.toLocaleDateString() + " at " + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+    } else {
+        loginDisplay.innerText = "Last login: This is your first session!";
+    }
+
+    nameInput.value = "Loading...";
+    emailInput.value = "Loading...";
+    modal.classList.add('show');
+
+    try {
+        const res = await fetch('/api/web/profile', {
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` }
+        });
+        const data = await res.json();
+        if (data.success) {
+            nameInput.value = (data.profile.full_name && data.profile.full_name !== 'null') ? data.profile.full_name : "";
+            emailInput.value = (data.profile.email && data.profile.email !== 'null') ? data.profile.email : "";
+        }
+    } catch (e) {
+        nameInput.value = ""; emailInput.value = "";
+    }
+}
+
+function closeProfileModal() {
+    document.getElementById('profileModal').classList.remove('show');
+}
+
+async function saveProfileSettings() {
+    const name = document.getElementById('profileNameInput').value.trim();
+    const email = document.getElementById('profileEmailInput').value.trim();
+    const btn = document.getElementById('saveProfileBtn');
+    
+    btn.innerText = "Saving...";
+    btn.disabled = true;
+
+    try {
+        const res = await fetch('/api/web/profile', {
+            method: 'PUT',
+            headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('david_jwt')}`
+            },
+            body: JSON.stringify({ name, email })
+        });
+        const data = await res.json();
+        if (data.success) {
+            // Update the top right UI name instantly!
+            if (name) {
+                const firstName = name.split(' ')[0];
+                document.getElementById('loginTag').innerText = "Logged in as " + firstName;
+                localStorage.setItem('david_userName', firstName);
+            }
+            closeProfileModal();
+        } else {
+            uiAlert("Error", "Failed to save profile.");
+        }
+    } catch (e) {
+        uiAlert("Error", "Network connection failed.");
+    } finally {
+        btn.innerText = "Save Changes";
+        btn.disabled = false;
+    }
 }
 
 // ==========================================

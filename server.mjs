@@ -1308,13 +1308,15 @@ app.post("/api/auth/verify-code", otpLimiter, async (req, res) => {
       return res.status(400).json({ error: "Code expired. Please request a new one." });
     }
     
+    const previousLogin = user.last_seen || "First time logging in"; // 🕰️ Grab the old timestamp before overwriting it!
+    
     await supabase.from("users").update({ otp_code: null, otp_expires_at: null, last_seen: new Date().toISOString() }).eq("id", user.id);
     
     // 🔐 GENERATE THE JWT TOKEN (Valid for 7 days)
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
 
-    // Send the token back to the frontend along with the user info
-    res.json({ success: true, userId: user.id, name: user.full_name, token: token });
+    // Send the token back to the frontend along with the user info AND the previous login
+    res.json({ success: true, userId: user.id, name: user.full_name, token: token, previousLogin: previousLogin });
   } catch (err) {
     console.error("OTP Verify Error:", err.message);
     res.status(500).json({ error: "Verification failed." });
@@ -1767,6 +1769,32 @@ updateMemorySummary({ oldSummary: user.memory_summary, userText: message, assist
 // ==========================================
 // DOCUMENT UPLOAD & MANAGEMENT
 // ==========================================
+
+// ==========================================
+// USER PROFILE MANAGEMENT
+// ==========================================
+app.get("/api/web/profile", authenticateToken, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from("users").select("full_name, email").eq("id", req.user.userId).single();
+    if (error) throw error;
+    res.json({ success: true, profile: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put("/api/web/profile", authenticateToken, async (req, res) => {
+  try {
+    const { name, email } = req.body;
+    const updates = { 
+        full_name: name && name.trim() !== "" ? name.trim() : null, 
+        email: email && email.trim() !== "" ? email.trim().toLowerCase() : null 
+    };
+    const { error } = await supabase.from("users").update(updates).eq("id", req.user.userId);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
 function chunkText(text, size = 1500) {
   const chunks = [];
   let i = 0;
