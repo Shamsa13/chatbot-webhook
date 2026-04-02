@@ -94,13 +94,13 @@ window.addEventListener('DOMContentLoaded', () => {
         document.querySelector('.chat-area').classList.add('mobile-active');
     }
 
-    // 2. Auto-Login Check
+  // 2. Auto-Login Check
     const savedUserId = localStorage.getItem('david_userId');
     const lastActive = localStorage.getItem('david_last_active');
-    const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+    const SIXTEEN_HOURS = 16 * 60 * 60 * 1000;
 
-    // Check if the session exists BUT has been inactive for > 24 hours
-    if (savedUserId && lastActive && (Date.now() - parseInt(lastActive) > TWENTY_FOUR_HOURS)) {
+    // Check if the session exists BUT has been inactive for > 16 hours
+    if (savedUserId && lastActive && (Date.now() - parseInt(lastActive) > SIXTEEN_HOURS)) {
         console.log("Session expired due to inactivity.");
         localStorage.removeItem('david_userId');
         localStorage.removeItem('david_userName');
@@ -361,6 +361,17 @@ async function loadConversationList(autoSelect = false) {
         if (autoSelect && !currentConversationId && globalConversations.length > 0) {
             await switchChat(globalConversations[0].id);
         }
+
+        // --- NEW: Keep Workspace Header in Sync ---
+        if (currentConversationId) {
+            const activeChat = globalConversations.find(c => c.id === currentConversationId);
+            if (activeChat) {
+                const chatTitle = activeChat.title || activeChat.preview || "New Conversation";
+                document.getElementById('chatSubtitle').innerText = `Workspace (${chatTitle})`;
+            }
+        }
+        // ------------------------------------------
+
     } catch (e) {
         console.error("Failed to load conversation list:", e);
     }
@@ -1015,11 +1026,11 @@ function resetInactivityTimer() {
     if (globalUserId) {
         localStorage.setItem('david_last_active', Date.now());
         
-        // Optional active session check: If they somehow bypassed the boot check 
-        // and try to click around after 24h, kick them out immediately.
+       // Optional active session check: If they somehow bypassed the boot check 
+        // and try to click around after 16h, kick them out immediately.
         const lastActive = localStorage.getItem('david_last_active');
-        if (lastActive && (Date.now() - parseInt(lastActive) > 24 * 60 * 60 * 1000)) {
-            uiAlert("Session Expired", "You have been logged out due to 24 hours of inactivity.");
+        if (lastActive && (Date.now() - parseInt(lastActive) > 16 * 60 * 60 * 1000)) {
+            uiAlert("Session Expired", "You have been logged out due to 16 hours of inactivity.");
             logoutUser();
         }
     }
