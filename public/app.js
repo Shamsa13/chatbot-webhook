@@ -116,7 +116,7 @@ window.addEventListener('DOMContentLoaded', () => {
         
         localStorage.setItem('david_last_active', Date.now()); // Reset timer on fresh load
         
-        document.getElementById('loginTag').innerText = "Logged in as " + userName;
+        document.querySelectorAll('.login-tag-text').forEach(el => el.innerText = "Logged in as " + userName);
         document.getElementById('loginContainer').style.display = 'none';
         document.getElementById('dashboardContainer').style.display = 'flex';
         initDashboard(); 
@@ -176,7 +176,7 @@ async function verifyCode() {
             localStorage.setItem('david_last_active', Date.now());
             localStorage.setItem('david_previous_login', data.previousLogin);
 
-            document.getElementById('loginTag').innerText = "Logged in as " + userName;
+            document.querySelectorAll('.login-tag-text').forEach(el => el.innerText = "Logged in as " + userName);
             document.getElementById('loginContainer').style.display = 'none';
             document.getElementById('dashboardContainer').style.display = 'flex';
             await initDashboard();
@@ -799,25 +799,34 @@ function handleDocSelection(checkbox) {
 // ==========================================
 function toggleProfileMenu(event) {
     event.stopPropagation();
-    const menu = document.getElementById('profileMenu');
-    const btn = document.querySelector('.profile-trigger-btn');
+    
+    const container = event.currentTarget.closest('.profile-dropdown-container');
+    const menu = container.querySelector('.profile-dropdown-menu');
+    const btn = container.querySelector('.profile-trigger-btn');
+    
+    // Close all other menus
+    document.querySelectorAll('.profile-dropdown-menu.show').forEach(m => {
+        if (m !== menu) m.classList.remove('show');
+    });
+    document.querySelectorAll('.profile-trigger-btn.active').forEach(b => {
+        if (b !== btn) b.classList.remove('active');
+    });
+
     menu.classList.toggle('show');
     btn.classList.toggle('active');
 }
 
 // Close dropdown if clicking outside
 document.addEventListener('click', (e) => {
-    const menu = document.getElementById('profileMenu');
-    const btn = document.querySelector('.profile-trigger-btn');
-    if (menu && menu.classList.contains('show') && !e.target.closest('.profile-dropdown-container')) {
-        menu.classList.remove('show');
-        btn.classList.remove('active');
+    if (!e.target.closest('.profile-dropdown-container')) {
+        document.querySelectorAll('.profile-dropdown-menu.show').forEach(m => m.classList.remove('show'));
+        document.querySelectorAll('.profile-trigger-btn.active').forEach(b => b.classList.remove('active'));
     }
 });
 
 async function openProfileModal() {
-    document.getElementById('profileMenu').classList.remove('show');
-    document.querySelector('.profile-trigger-btn').classList.remove('active');
+    document.querySelectorAll('.profile-dropdown-menu.show').forEach(m => m.classList.remove('show'));
+    document.querySelectorAll('.profile-trigger-btn.active').forEach(b => b.classList.remove('active'));
     
     const modal = document.getElementById('profileModal');
     const nameInput = document.getElementById('profileNameInput');
@@ -877,7 +886,7 @@ async function saveProfileSettings() {
             // Update the top right UI name instantly!
             if (name) {
                 const firstName = name.split(' ')[0];
-                document.getElementById('loginTag').innerText = "Logged in as " + firstName;
+                document.querySelectorAll('.login-tag-text').forEach(el => el.innerText = "Logged in as " + firstName);
                 localStorage.setItem('david_userName', firstName);
             }
             closeProfileModal();
