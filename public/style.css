@@ -440,7 +440,21 @@ input:checked + .slider:before { transform: translateX(18px); }
     .right-header .profile-dropdown-container { display: block; }
     
     /* Ensure the side headers space out correctly to hold the dropdowns */
-    .sidebar-header, .right-header { display: flex; justify-content: space-between; align-items: flex-start; }
+    .sidebar-header, .right-header { 
+        display: flex; 
+        flex-wrap: wrap; 
+        justify-content: space-between; 
+        align-items: center; 
+    }
+    
+    /* Force the New Chat button to drop down to its own row on mobile */
+    .sidebar-header .sidebar-brand-container { order: 1; }
+    .sidebar-header .profile-dropdown-container { order: 2; }
+    .sidebar-header .new-chat-btn { 
+        order: 3; 
+        width: 100%; 
+        margin-top: 16px; 
+    }
     /* Hide the "Logged in as" tag on mobile so the button is just a small icon circle */
     .login-tag-text { display: none; }
     .profile-trigger-btn { padding: 8px 12px; } /* Makes the button smaller/circular on mobile */

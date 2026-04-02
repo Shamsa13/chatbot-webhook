@@ -197,8 +197,10 @@ function logoutUser() {
     if (globalUserId) {
         fetch('/api/web/logout', { 
             method: 'POST', 
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: globalUserId }) 
+            headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` 
+            }
         }).catch(e => console.error("Logout ping failed", e));
     }
 
@@ -248,8 +250,10 @@ async function startNewChat() {
     try {
         const res = await fetch('/api/web/conversations/new', {
             method: 'POST', 
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: globalUserId })
+            headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` 
+            }
         });
         const data = await res.json();
         if (data.success) {
@@ -340,7 +344,10 @@ function renderConversations() {
 // 🌐 LOAD CONVERSATIONS (UPDATED FOR FILTERS)
 async function loadConversationList(autoSelect = false) {
     try {
-        const res = await fetch("/api/web/conversations?userId=" + globalUserId, { cache: "no-store" });
+        const res = await fetch("/api/web/conversations", { 
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` },
+            cache: "no-store" 
+        });
         const data = await res.json();
         
         if (data.success && data.conversations) {
@@ -368,7 +375,14 @@ async function renameChat(conversationId, currentTitle) {
     if (newTitle === false) return; // User clicked cancel
     
     try {
-        const res = await fetch(`/api/web/conversations/${conversationId}/title`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: globalUserId, title: newTitle }) });
+        const res = await fetch(`/api/web/conversations/${conversationId}/title`, { 
+            method: 'PUT', 
+            headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` 
+            }, 
+            body: JSON.stringify({ title: newTitle }) 
+        });
         const data = await res.json();
         if (data.success) { await loadConversationList(false); } 
         else await uiAlert("Error", "Failed to rename chat.");
@@ -405,7 +419,10 @@ async function switchChat(conversationId) {
     msgContainer.innerHTML = '<div style="text-align:center;padding:40px;color:#bbb;">Loading messages...</div>';
 
     try {
-        const res = await fetch(`/api/web/messages?userId=${globalUserId}&conversationId=${conversationId}`, { cache: "no-store" });
+       const res = await fetch(`/api/web/messages?conversationId=${conversationId}`, { 
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` },
+            cache: "no-store" 
+        });
         const data = await res.json();
         
         msgContainer.innerHTML = "";
@@ -431,8 +448,10 @@ async function deleteChat(conversationId) {
     try {
         const res = await fetch("/api/web/conversations/" + conversationId, {
             method: 'DELETE', 
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: globalUserId })
+            headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` 
+            }
         });
         const data = await res.json();
         if (data.success) {
@@ -551,7 +570,9 @@ async function viewDocument(docId) {
     btn.innerText = "Loading...";
 
     try {
-        const res = await fetch(`/api/documents/${docId}/content`);
+        const res = await fetch(`/api/documents/${docId}/content`, {
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` }
+        });
         const data = await res.json();
         
         if (data.success) {
@@ -691,7 +712,14 @@ async function renameDocument(docId, oldFullName) {
     const finalName = newBaseName.trim() + ext; // Re-attaches the extension perfectly
     
     try {
-        const res = await fetch(`/api/documents/${docId}/name`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: globalUserId, newName: finalName }) });
+        const res = await fetch(`/api/documents/${docId}/name`, { 
+            method: 'PUT', 
+            headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` 
+            }, 
+            body: JSON.stringify({ newName: finalName }) 
+        });
         const data = await res.json();
         if (data.success) loadUserDocuments();
         else await uiAlert("Error", "Failed to rename document.");
@@ -702,7 +730,13 @@ async function deleteDocument(docId) {
     const confirmed = await uiConfirm("Delete Document", "Are you sure? This will delete the document and wipe it from David's memory.", true);
     if (!confirmed) return;
     try {
-        const res = await fetch("/api/documents/" + docId, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: globalUserId }) });
+       const res = await fetch("/api/documents/" + docId, { 
+            method: 'DELETE', 
+            headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` 
+            } 
+        });
         const data = await res.json();
         if (data.success) loadUserDocuments();
     } catch (e) { console.error("Delete doc error:", e); }
@@ -711,7 +745,10 @@ async function deleteDocument(docId) {
 async function loadUserDocuments() {
     if (!globalUserId) return;
     try {
-        const res = await fetch("/api/documents?userId=" + globalUserId, { cache: "no-store" });
+       const res = await fetch("/api/documents", { 
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` },
+            cache: "no-store" 
+        });
         const data = await res.json();
         const list = document.getElementById('documentList');
 
@@ -923,7 +960,6 @@ async function uploadDocument() {
     }
 
     const formData = new FormData();
-    formData.append("userId", globalUserId);
     formData.append("document", fileInput.files[0]);
 
     status.innerText = "Analyzing and building memory chunks...";
@@ -932,7 +968,11 @@ async function uploadDocument() {
     btn.innerText = "Uploading...";
 
     try {
-        const res = await fetch('/api/upload', { method: 'POST', body: formData });
+        const res = await fetch('/api/upload', { 
+            method: 'POST', 
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` },
+            body: formData 
+        });
         const data = await res.json();
         if (data.success) {
             status.innerText = "✅ Saved and Memorized";

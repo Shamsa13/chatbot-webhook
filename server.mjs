@@ -1376,14 +1376,12 @@ setInterval(async () => {
 }, 5 * 60000); // Checks every 5 minutes
 
 // Instant Web Logout Trigger
-app.post("/api/web/logout", async (req, res) => {
+app.post("/api/web/logout", authenticateToken, async (req, res) => {
    try {
-     const { userId } = req.body;
-     if (userId) {
-       const { data: user } = await supabase.from("users").select("phone, full_name, vcard_sent").eq("id", userId).single();
-       if (user && !user.vcard_sent && user.phone) {
-         await triggerWebWelcomeSMS(userId, user.phone, user.full_name);
-       }
+     const userId = req.user.userId; // 🔒 SECURE: Extracted from JWT
+     const { data: user } = await supabase.from("users").select("phone, full_name, vcard_sent").eq("id", userId).single();
+     if (user && !user.vcard_sent && user.phone) {
+       await triggerWebWelcomeSMS(userId, user.phone, user.full_name);
      }
      res.json({ success: true });
    } catch(e) { res.json({ success: true }); }
@@ -1393,13 +1391,14 @@ app.post("/api/web/logout", async (req, res) => {
 // WEB CONVERSATION MANAGEMENT
 // ==========================================
 
+// ==========================================
+// WEB CONVERSATION MANAGEMENT
+// ==========================================
+
 // List all web conversations for sidebar
-// List all web conversations for sidebar
-// List all web conversations for sidebar
-app.get("/api/web/conversations", async (req, res) => {
+app.get("/api/web/conversations", authenticateToken, async (req, res) => {
   try {
-    const userId = req.query.userId;
-    if (!userId) return res.status(400).json({ error: "Missing userId" });
+    const userId = req.user.userId; // 🔒 SECURE: Extracted from JWT token, not URL
 
     const { data: convos, error } = await supabase
       .from("conversations")
@@ -1411,7 +1410,6 @@ app.get("/api/web/conversations", async (req, res) => {
       .limit(30);
 
     if (error) throw error;
-
 
     const results = [];
     for (const c of (convos || [])) {
@@ -1443,12 +1441,17 @@ app.get("/api/web/conversations", async (req, res) => {
   }
 });
 
-
 // Get messages for a specific conversation
-app.get("/api/web/messages", async (req, res) => {
+app.get("/api/web/messages", authenticateToken, async (req, res) => {
   try {
-    const { userId, conversationId } = req.query;
-    if (!userId || !conversationId) return res.status(400).json({ error: "Missing params" });
+    const userId = req.user.userId; // 🔒 SECURE
+    const { conversationId } = req.query;
+    
+    if (!conversationId) return res.status(400).json({ error: "Missing params" });
+
+    // 🔒 IDOR CHECK: Verify this user actually owns this conversation!
+    const { data: convo } = await supabase.from("conversations").select("id").eq("id", conversationId).eq("user_id", userId).single();
+    if (!convo) return res.status(403).json({ error: "Access denied. You do not own this chat." });
 
     console.log("📨 Loading messages for conversation:", conversationId);
 
@@ -1469,10 +1472,9 @@ app.get("/api/web/messages", async (req, res) => {
 });
 
 // Create a new web conversation (does NOT close old ones)
-app.post("/api/web/conversations/new", async (req, res) => {
+app.post("/api/web/conversations/new", authenticateToken, async (req, res) => {
   try {
-    const { userId } = req.body;
-    if (!userId) return res.status(400).json({ error: "Missing userId" });
+    const userId = req.user.userId; // 🔒 SECURE
 
     const nowIso = new Date().toISOString();
     const { data: newConvo, error } = await supabase
@@ -1490,20 +1492,21 @@ app.post("/api/web/conversations/new", async (req, res) => {
   }
 });
 
-// Delete a web conversation and its messages
 // Delete a web conversation (SOFT DELETE)
-app.delete("/api/web/conversations/:id", async (req, res) => {
+app.delete("/api/web/conversations/:id", authenticateToken, async (req, res) => {
   try {
     const conversationId = req.params.id;
-    const { userId } = req.body;
-    if (!conversationId || !userId) return res.status(400).json({ error: "Missing params" });
+    const userId = req.user.userId; // 🔒 SECURE
+    
+    if (!conversationId) return res.status(400).json({ error: "Missing params" });
 
     // 🔥 NEW: Just flip the is_deleted switch! Do not delete the messages.
+    // 🔒 IDOR: Notice how we require both the conversationId AND the secure userId to match
     const { error } = await supabase
       .from("conversations")
       .update({ is_deleted: true })
       .eq("id", conversationId)
-      .eq("user_id", userId);
+      .eq("user_id", userId); 
 
     if (error) throw error;
     console.log("🗑️ Soft Deleted conversation:", conversationId);
@@ -1805,14 +1808,11 @@ function chunkText(text, size = 1500) {
   return chunks;
 }
 
-app.post("/api/upload", upload.single("document"), async (req, res) => {
+app.post("/api/upload", authenticateToken, upload.single("document"), async (req, res) => {
   try {
-    const userId = req.body.userId;
+    const userId = req.user.userId; // 🔒 SECURE
     const file = req.file;
-
-    if (!userId || !file) {
-      return res.status(400).json({ error: "Missing user ID or file." });
-    }
+    if (!file) return res.status(400).json({ error: "Missing file." });
 
     let extractedText = "";
     
@@ -1885,84 +1885,47 @@ app.post("/api/upload", upload.single("document"), async (req, res) => {
   }
 });
 
-app.get("/api/documents", async (req, res) => {
+app.get("/api/documents", authenticateToken, async (req, res) => {
   try {
-    const userId = req.query.userId;
-    if (!userId) return res.status(400).json({ error: "Missing userId" });
-
-    const { data: docs, error } = await supabase
-      .from("user_documents")
-      .select("id, document_name, uploaded_at")
-      .eq("user_id", userId)
-      .order("uploaded_at", { ascending: false });
-
+    const userId = req.user.userId; // 🔒 SECURE
+    const { data: docs, error } = await supabase.from("user_documents").select("id, document_name, uploaded_at").eq("user_id", userId).order("uploaded_at", { ascending: false });
     if (error) throw error;
     res.json({ success: true, documents: docs || [] });
-  } catch (err) {
-    console.error("Fetch Docs Error:", err);
-    res.status(500).json({ error: "Failed to load documents." });
-  }
+  } catch (err) { res.status(500).json({ error: "Failed to load documents." }); }
 });
 
-// View a document's extracted text (JSON for frontend modal)
-app.get("/api/documents/:id/content", async (req, res) => {
+app.get("/api/documents/:id/content", authenticateToken, async (req, res) => {
   try {
     const docId = req.params.id;
-    const { data, error } = await supabase.from("user_documents").select("document_name, full_text").eq("id", docId).single();
-    if (error || !data) return res.status(404).json({ error: "Document not found" });
-
+    const userId = req.user.userId; // 🔒 SECURE
+    // 🔒 IDOR CHECK: Ensures the user owns the doc before returning the text
+    const { data, error } = await supabase.from("user_documents").select("document_name, full_text").eq("id", docId).eq("user_id", userId).single();
+    if (error || !data) return res.status(404).json({ error: "Document not found or access denied" });
     res.json({ success: true, name: data.document_name, text: data.full_text || "(No readable text found)" });
-  } catch (err) {
-    console.error("Content Error:", err);
-    res.status(500).json({ error: "Server error" });
-  }
+  } catch (err) { res.status(500).json({ error: "Server error" }); }
 });
 
-app.delete("/api/documents/:id", async (req, res) => {
+app.delete("/api/documents/:id", authenticateToken, async (req, res) => {
   try {
     const docId = req.params.id;
-    const userId = req.body.userId;
-
-    if (!docId || !userId) return res.status(400).json({ error: "Missing docId or userId" });
-
-    // 1. Delete all RAG chunks from the vector database first
+    const userId = req.user.userId; // 🔒 SECURE
     await supabase.from("user_document_chunks").delete().eq("document_id", docId);
-
-    // 2. Delete the main document record
-    const { error } = await supabase
-      .from("user_documents")
-      .delete()
-      .eq("id", docId)
-      .eq("user_id", userId);
-
+    const { error } = await supabase.from("user_documents").delete().eq("id", docId).eq("user_id", userId);
     if (error) throw error;
-    res.json({ success: true, message: "Document and all memory chunks completely deleted." });
-  } catch (err) {
-    console.error("Delete Doc Error:", err);
-    res.status(500).json({ error: "Failed to delete document." });
-  }
+    res.json({ success: true, message: "Document deleted." });
+  } catch (err) { res.status(500).json({ error: "Failed to delete document." }); }
 });
 
-// Rename a document
-app.put("/api/documents/:id/name", async (req, res) => {
+app.put("/api/documents/:id/name", authenticateToken, async (req, res) => {
   try {
     const docId = req.params.id;
-    const { userId, newName } = req.body;
-    
-    if (!docId || !userId || !newName) return res.status(400).json({ error: "Missing parameters" });
-
-    const { error } = await supabase
-      .from("user_documents")
-      .update({ document_name: newName.trim() })
-      .eq("id", docId)
-      .eq("user_id", userId);
-
+    const userId = req.user.userId; // 🔒 SECURE
+    const { newName } = req.body;
+    if (!newName) return res.status(400).json({ error: "Missing parameters" });
+    const { error } = await supabase.from("user_documents").update({ document_name: newName.trim() }).eq("id", docId).eq("user_id", userId);
     if (error) throw error;
     res.json({ success: true });
-  } catch (err) {
-    console.error("Rename Doc Error:", err);
-    res.status(500).json({ error: "Failed to rename document." });
-  }
+  } catch (err) { res.status(500).json({ error: "Failed to rename document." }); }
 });
 
 // ==========================================
@@ -2426,12 +2389,15 @@ app.post("/api/admin/get-history", async (req, res) => {
 });
 
 // Rename a web conversation
-app.put("/api/web/conversations/:id/title", async (req, res) => {
+app.put("/api/web/conversations/:id/title", authenticateToken, async (req, res) => {
   try {
     const conversationId = req.params.id;
-    const { userId, title } = req.body;
-    if (!conversationId || !userId || title === undefined) return res.status(400).json({ error: "Missing params" });
+    const userId = req.user.userId; // 🔒 SECURE: Extracted from JWT
+    const { title } = req.body;
+    
+    if (!conversationId || title === undefined) return res.status(400).json({ error: "Missing params" });
 
+    // 🔒 IDOR CHECK: Match conversationId AND secure userId
     const { error } = await supabase
       .from("conversations")
       .update({ title: title.trim() || null }) // null resets it to auto-preview
