@@ -151,18 +151,80 @@ input:checked + .slider:before { transform: translateX(18px); }
 .chat-input-area { padding: 15px 30px 25px 30px; background: white; display: flex; gap: 12px; align-items: center; flex-shrink: 0; }
 .chat-input-area input { flex-grow: 1; padding: 14px 20px; border: 1px solid #ddd; border-radius: 30px; outline: none; font-size: 15px; background: #fafafa; }
 .chat-input-area input:focus { border-color: #181d32; background: white; }
+/* Ensure the center input placeholder is consistent */
+.chat-input-area input::placeholder { color: #888; font-size: 14px; font-weight: 400; }
 .chat-input-area button { background: #181d32; color: white; border: none; padding: 14px 28px; border-radius: 30px; cursor: pointer; font-weight: 600; font-size: 14px; white-space: nowrap; }
 .chat-input-area button:hover { background: #252b48; }
 .chat-input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
-/* CHAT SEARCH & FILTER CONTROLS */
-.sidebar-controls { padding: 0 16px 12px 16px; display: flex; flex-direction: column; gap: 8px; }
-.sidebar-search { position: relative; }
-.sidebar-search input { width: 100%; padding: 8px 12px 8px 28px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color: white; font-size: 12px; outline: none; transition: 0.2s; }
-.sidebar-search input:focus { border-color: rgba(255,255,255,0.3); background: rgba(255,255,255,0.08); }
-.sidebar-search input::placeholder { color: #9ba4c4; }
-.sidebar-search-icon { position: absolute; left: 10px; top: 9px; color: #9ba4c4; font-size: 11px; }
+/* =========================================
+   UNIFIED SEARCH & FILTER CONTROLS
+   ========================================= */
+.sidebar-controls, .search-container { padding: 0 20px 15px 20px; display: flex; flex-direction: column; gap: 8px; position: relative; }
+.sidebar-search { position: relative; width: 100%; }
 
-.sidebar-filter { width: 100%; padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color: #ccc; font-size: 12px; outline: none; cursor: pointer; }
+/* The Search Inputs */
+.sidebar-search input, .search-container input { 
+    width: 100%; 
+    padding: 10px 14px 10px 34px; 
+    border-radius: 8px; 
+    border: 1px solid rgba(255,255,255,0.1); 
+    background: rgba(255,255,255,0.05); 
+    color: white; 
+    font-size: 13px; 
+    outline: none; 
+    transition: 0.2s; 
+    color-scheme: dark; 
+}
+
+.sidebar-search input:focus, .search-container input:focus { 
+    border-color: rgba(255,255,255,0.3); 
+    background: rgba(255,255,255,0.08); 
+}
+
+/* The Placeholder Text */
+.sidebar-search input::placeholder, .search-container input::placeholder { 
+    color: #8a94b5; 
+    font-size: 13px; 
+    font-weight: 400;
+}
+
+/* 🔥 THE FIX: Custom WebKit 'x' clear button (Overrides the blue OS default) */
+.sidebar-search input::-webkit-search-cancel-button, 
+.search-container input::-webkit-search-cancel-button {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 14px;
+    width: 14px;
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238a94b5' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='18' y1='6' x2='6' y2='18'%3E%3C/line%3E%3Cline x1='6' y1='6' x2='18' y2='18'%3E%3C/line%3E%3C/svg%3E");
+    background-size: contain;
+    cursor: pointer;
+    opacity: 0.6;
+    transition: 0.2s;
+}
+.sidebar-search input::-webkit-search-cancel-button:hover, 
+.search-container input::-webkit-search-cancel-button:hover {
+    opacity: 1;
+}
+
+/* The Magnifying Glass Icons */
+.sidebar-search-icon { position: absolute; left: 12px; top: 11px; color: #8a94b5; font-size: 13px; pointer-events: none; }
+.search-icon { position: absolute; left: 32px; top: 11px; color: #8a94b5; font-size: 13px; pointer-events: none; }
+
+/* The Filter Dropdown */
+.sidebar-filter { 
+    width: 100%; 
+    padding: 10px 14px; 
+    border-radius: 8px; 
+    border: 1px solid rgba(255,255,255,0.1); 
+    background: rgba(255,255,255,0.05); 
+    color: #e0e0e0; 
+    font-size: 13px; 
+    outline: none; 
+    cursor: pointer; 
+    transition: 0.2s;
+    color-scheme: dark;
+}
+.sidebar-filter:focus { border-color: rgba(255,255,255,0.3); }
 .sidebar-filter option { background: #181d32; color: white; }
 
 /* KNOWLEDGE BASE TOOLTIP */
@@ -176,12 +238,6 @@ input:checked + .slider:before { transform: translateX(18px); }
 .right-brand-container { display: flex; flex-direction: column; }
 .right-title { font-family: 'Playfair Display', serif; font-size: 20px; color: #fff; line-height: 1.1; }
 .right-subtitle { font-family: 'Inter', sans-serif; font-size: 13px; color: #9ba4c4; margin-top: 6px; font-weight: 500; display: flex; align-items: center; }
-
-.search-container { padding: 0 16px 12px 16px; position: relative; }
-.search-container input { width: 100%; padding: 10px 14px 10px 32px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03); color: white; font-size: 13px; outline: none; transition: 0.2s; }
-.search-container input:focus { border-color: rgba(255,255,255,0.2); background: rgba(255,255,255,0.08); }
-.search-container input::placeholder { color: #666; }
-.search-icon { position: absolute; left: 26px; top: 11px; color: #666; font-size: 12px; }
 
 .docs-section { flex: 1; overflow-y: auto; padding: 0 8px; }
 .docs-section::-webkit-scrollbar { width: 5px; }
