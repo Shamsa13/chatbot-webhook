@@ -1546,14 +1546,16 @@ app.post("/api/chat", apiLimiter, authenticateToken, async (req, res) => {
       await supabase.from("conversations").update({ last_active_at: new Date().toISOString() }).eq("id", conversationId);
     }
 
-    // Save user message
-    const { error: userErr } = await supabase.from("messages").insert({
+    // Save user message and capture its ID
+    const { data: userMsgData, error: userErr } = await supabase.from("messages").insert({
       conversation_id: conversationId, channel: "web", direction: "user",
       text: message, provider: "web",
       has_files: selectedDocIds && selectedDocIds.length > 0,
       is_deep_dive: deepDive === true
-    });
+    }).select("id").single();
+    
     if (userErr) console.error("🚨 DB REJECTED USER MSG:", userErr.message);     
+    const userMessageId = userMsgData?.id;   
 
     // Fetch THIS conversation's history
     const { data: convoMessages } = await supabase
@@ -1706,6 +1708,8 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
       await supabase.from("users").update({ deep_dive_count: currentCount + 1, deep_dive_reset_date: todayDate }).eq("id", userId);
     }
 
+   let isStreamFinished = false;
+
     try {
       const stream = await openai.chat.completions.create({
         model: OPENAI_MODEL || "gpt-4o",
@@ -1714,8 +1718,14 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
       });
 
       // Abort OpenAI generation if the user clicks "Stop Generating"
-      req.on("close", () => {
+      req.on("close", async () => {
         if (stream && stream.controller) stream.controller.abort();
+        
+        // --- NEW: If aborted before finishing, delete the user message so it "never happened" ---
+        if (!isStreamFinished && userMessageId) {
+            console.log("🛑 User aborted stream. Deleting aborted user message...");
+            await supabase.from("messages").delete().eq("id", userMessageId);
+        }
       });
 
       for await (const chunk of stream) {
@@ -1727,6 +1737,7 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
       }
       res.write(`data: [DONE]\n\n`);
       res.end();
+      isStreamFinished = true;
 
     } catch (streamErr) {
       console.error("OpenAI Stream Error:", streamErr);

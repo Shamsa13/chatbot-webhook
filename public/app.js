@@ -534,6 +534,20 @@ function stopGenerating() {
     document.getElementById('stopBtn').style.display = 'none';
     document.getElementById('sendBtn').style.display = 'block';
     removeTyping();
+
+    // --- NEW: Remove the aborted messages from the UI ---
+    const msgContainer = document.getElementById('chatMessages');
+    const wrappers = msgContainer.querySelectorAll('.message-wrapper');
+    if (wrappers.length >= 2) {
+        const last = wrappers[wrappers.length - 1];
+        const prev = wrappers[wrappers.length - 2];
+        // Ensure we are deleting the aborted bot bubble AND the user prompt
+        if (last.classList.contains('wrapper-bot') && prev.classList.contains('wrapper-user')) {
+            last.remove();
+            prev.remove();
+        }
+    }
+
     document.getElementById('chatInput').disabled = false;
     document.getElementById('chatInput').focus();
 }
@@ -564,11 +578,11 @@ async function sendMessage() {
     inputField.value = "";
     inputField.style.height = 'auto';
 
-    // Swap Send for Stop
+   // Swap Send for Stop
     const sendBtn = document.getElementById('sendBtn');
     const stopBtn = document.getElementById('stopBtn');
     sendBtn.style.display = 'none';
-    stopBtn.style.display = 'block';
+    stopBtn.style.display = 'flex';
 
     showTyping();
     chatAbortController = new AbortController();
