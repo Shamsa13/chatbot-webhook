@@ -160,9 +160,22 @@ input:checked + .slider:before { transform: translateX(18px); }
 .chat-input-area textarea:focus { border-color: #181d32; background: white; }
 .chat-input-area textarea::placeholder { color: #888; font-size: 14px; font-weight: 400; }
 
-/* Stop Button */
-.stop-btn { background: #ff4c4c !important; }
-.stop-btn:hover { background: #e60000 !important; }
+/* Sleek Modern Stop Button (Overrides generic text button styles) */
+.stop-btn { 
+    background: #181d32 !important; /* Muted navy instead of aggressive red */
+    border-radius: 50% !important; /* Make it circular */
+    width: 46px !important; /* Match mic button size */
+    height: 46px !important;
+    padding: 0 !important; /* Remove large text padding */
+    display: flex !important; /* Corectly center the SVG */
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.2s;
+}
+.stop-btn:hover { 
+    background: #252b48 !important; /* Muted hover state */
+}
 .chat-input-area button { background: #181d32; color: white; border: none; padding: 14px 28px; border-radius: 30px; cursor: pointer; font-weight: 600; font-size: 14px; white-space: nowrap; }
 .chat-input-area button:hover { background: #252b48; }
 .chat-input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
