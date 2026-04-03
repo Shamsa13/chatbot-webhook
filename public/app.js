@@ -1050,3 +1050,80 @@ function resetInactivityTimer() {
     }, { passive: true });
 });
 
+
+// ==========================================
+// VOICE-TO-TEXT (WHISPER)
+// ==========================================
+let mediaRecorder;
+let audioChunks = [];
+let isRecording = false;
+
+async function toggleRecording() {
+    const micBtn = document.getElementById('micBtn');
+    const chatInput = document.getElementById('chatInput');
+
+    // If already recording, STOP and SEND
+    if (isRecording) {
+        mediaRecorder.stop();
+        isRecording = false;
+        micBtn.classList.remove('recording');
+        micBtn.innerText = "🎤";
+        chatInput.placeholder = "Transcribing voice...";
+        chatInput.disabled = true;
+        return;
+    }
+
+    // Start Recording
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = event => {
+            if (event.data.size > 0) audioChunks.push(event.data);
+        };
+
+        mediaRecorder.onstop = async () => {
+            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+            const formData = new FormData();
+            formData.append('audio', audioBlob, 'voice.webm');
+
+            try {
+                const res = await fetch('/api/transcribe', {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` },
+                    body: formData
+                });
+                const data = await res.json();
+                
+                if (data.success && data.text.trim().length > 0) {
+                    chatInput.value = data.text;
+                    sendMessage(); // Automatically send the message!
+                } else if (!data.success) {
+                    uiAlert("Error", data.error || "Could not transcribe audio.");
+                }
+            } catch(e) {
+                console.error(e);
+                uiAlert("Error", "Network error during transcription.");
+            } finally {
+                // Reset input field
+                chatInput.disabled = false;
+                chatInput.placeholder = "Ask David a question...";
+                chatInput.focus();
+            }
+
+            // Turn off the microphone hardware indicator in the browser tab
+            stream.getTracks().forEach(track => track.stop());
+        };
+
+        mediaRecorder.start();
+        isRecording = true;
+        micBtn.classList.add('recording');
+        micBtn.innerText = "⏹️";
+        chatInput.placeholder = "Listening... (Tap Stop when done)";
+    } catch (err) {
+        console.error("Microphone access denied:", err);
+        uiAlert("Microphone Access", "Please allow microphone access in your browser settings to use voice typing.");
+    }
+}
+

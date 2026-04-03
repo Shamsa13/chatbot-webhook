@@ -157,6 +157,17 @@ input:checked + .slider:before { transform: translateX(18px); }
 .chat-input-area button { background: #181d32; color: white; border: none; padding: 14px 28px; border-radius: 30px; cursor: pointer; font-weight: 600; font-size: 14px; white-space: nowrap; }
 .chat-input-area button:hover { background: #252b48; }
 .chat-input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* VOICE RECORDING BUTTON */
+.mic-btn { background: #f4f5f7; border: 1px solid #ddd; color: #555; width: 46px; height: 46px; border-radius: 50%; cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: 0.2s; outline: none; }
+.mic-btn:hover { background: #eaeaea; }
+.mic-btn.recording { background: #ff4c4c; color: white; border-color: #ff4c4c; animation: pulseMic 1.5s infinite; }
+
+@keyframes pulseMic {
+    0% { box-shadow: 0 0 0 0 rgba(255, 76, 76, 0.4); }
+    70% { box-shadow: 0 0 0 12px rgba(255, 76, 76, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(255, 76, 76, 0); }
+}
 /* =========================================
    UNIFIED SEARCH & FILTER CONTROLS
    ========================================= */

@@ -170,6 +170,7 @@
         </div>
 
         <div class="chat-input-area">
+            <button id="micBtn" class="mic-btn" onclick="toggleRecording()" title="Voice Message">🎤</button>
             <input type="text" id="chatInput" placeholder="Ask David a question..." onkeypress="if(event.key==='Enter')sendMessage()" />
             <button id="sendBtn" onclick="sendMessage()">Send</button>
         </div>

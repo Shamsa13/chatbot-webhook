@@ -11,6 +11,9 @@ import mammoth from 'mammoth';
 import { extractText, getDocumentProxy } from 'unpdf';
 import jwt from "jsonwebtoken";
 import rateLimit from "express-rate-limit";
+import fs from "fs";     
+import os from "os";     
+import path from "path";
 
 const JWT_SECRET = process.env.JWT_SECRET || "david-beatty-super-secret-key-change-this";
 
@@ -42,7 +45,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, {
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
-// 🔥 THE EVENT RAM CACHE
+//   THE EVENT RAM CACHE
 let activeEventsCache = [];
 
 // --- 🛡️ RATE LIMITERS ---
@@ -145,7 +148,7 @@ function scheduleSessionSummary(userId, conversationId, channel, userText, assis
   session.timer = setTimeout(async () => {
     sessionTimers.delete(key); // Clear from map — next message = fresh session
     
-    // 🔥 NEW: Threshold Check (6 turns = 12 messages total)
+    //   NEW: Threshold Check (6 turns = 12 messages total)
     // If the conversation is too short, we skip summarization because 
     // David already reads the last 12 raw messages directly from the DB!
     if (session.turns.length < 6) {
@@ -164,7 +167,7 @@ function scheduleSessionSummary(userId, conversationId, channel, userText, assis
       await saveConversationSummary(userId, session.conversationId, channel, fullTranscript);
       console.log(`✅ Session summary saved for ${key}`);
       
-      // 🔥 NEW: Only auto-close phone-based chats! Web chats stay open so the user can use their sidebar history.
+      //   NEW: Only auto-close phone-based chats! Web chats stay open so the user can use their sidebar history.
       if (channel !== "web") {
           await supabase.from("conversations").update({ closed_at: new Date().toISOString() }).eq("id", session.conversationId);
       }
@@ -193,7 +196,7 @@ function twimlReply(text) {
   return twiml.toString();
 }
 
-// 🔥 NEW: Function to push messages directly to your Slack channel
+//   NEW: Function to push messages directly to your Slack channel
 async function sendToSlack(message) {
   if (!SLACK_WEBHOOK_URL) return; // Skips if you haven't added the URL to Render yet
   try {
@@ -417,7 +420,7 @@ async function getOrCreateConversation(userId, channelScope) {
   const { data: inserted, error: insErr } = await supabase.from("conversations").insert({ user_id: userId, started_at: nowIso, last_active_at: nowIso, channel_scope: channelScope }).select("id").single();
   if (insErr) throw new Error("conversations insert failed: " + insErr.message);
 
-  // 🔥 NEW: Increment the Ghost Counter ONLY for Web and Call
+  //   NEW: Increment the Ghost Counter ONLY for Web and Call
   if (channelScope === "web" || channelScope === "call") {
       const colName = `all_time_${channelScope}`;
       try {
@@ -722,7 +725,7 @@ async function checkAndSendVCard(userId, rawPhone) {
   }
 }
 
-// 🔥 SMART PROFILE EXTRACTOR for SMS/Voice
+//   SMART PROFILE EXTRACTOR for SMS/Voice
 async function smartProfileExtractor(userId, currentText, historyMsgs, currentFullName) {
   const nameKeywords = /\b(my name is|i am|i'm|im |call me|spelled|name is|change my name|nickname|this is|speaking|addressed as|preferred name|called)\b/i;
   const isNameMissing = !currentFullName || currentFullName.toLowerCase() === 'null';
@@ -837,8 +840,8 @@ app.get("/health", (req, res) => res.status(200).send("ok"));
 // ==========================================
 app.post("/twilio/sms", async (req, res) => {
   const rawFrom = req.body.From || ""; 
-  const isWA = rawFrom.startsWith("whatsapp:"); // 🔥 NEW: Detect WhatsApp
-  const currentChannel = isWA ? "wa" : "sms";   // 🔥 NEW: Dynamic channel routing
+  const isWA = rawFrom.startsWith("whatsapp:"); //   NEW: Detect WhatsApp
+  const currentChannel = isWA ? "wa" : "sms";   //   NEW: Dynamic channel routing
   
   const cleanPhone = normalizeFrom(rawFrom); 
   const body = String(req.body.Body || "").trim();
@@ -1325,7 +1328,7 @@ app.post("/api/auth/verify-code", otpLimiter, async (req, res) => {
 
 
 
-// 🔥 Web-First Welcome SMS Logic (With Invalid Number Protection)
+//   Web-First Welcome SMS Logic (With Invalid Number Protection)
 async function triggerWebWelcomeSMS(userId, phone, name) {
   try {
     const { data: user } = await supabase.from("users").select("vcard_sent").eq("id", userId).single();
@@ -1405,7 +1408,7 @@ app.get("/api/web/conversations", authenticateToken, async (req, res) => {
       .select("id, started_at, last_active_at, closed_at, title, channel_scope")
       .eq("user_id", userId)
       .in("channel_scope", ["web", "call"])
-      .eq("is_deleted", false) // 🔥 HIDES DELETED CHATS FROM THE USER
+      .eq("is_deleted", false) //   HIDES DELETED CHATS FROM THE USER
       .order("last_active_at", { ascending: false })
       .limit(30);
 
@@ -1500,7 +1503,7 @@ app.delete("/api/web/conversations/:id", authenticateToken, async (req, res) => 
     
     if (!conversationId) return res.status(400).json({ error: "Missing params" });
 
-    // 🔥 NEW: Just flip the is_deleted switch! Do not delete the messages.
+    //   NEW: Just flip the is_deleted switch! Do not delete the messages.
     // 🔒 IDOR: Notice how we require both the conversationId AND the secure userId to match
     const { error } = await supabase
       .from("conversations")
@@ -1719,22 +1722,21 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
     });
     if (botErr) console.error("🚨 DB REJECTED BOT MSG:", botErr.message); 
 
-    // 🔥 BACKGROUND TASK: Transcript Intent Extractor (Web)
+    //   BACKGROUND TASK: Transcript Intent Extractor (Web)
     const intentKeywords = /(@|\b(transcript|email|send|call|recent|yes|yeah|sure|ok|please|back|ago)\b)/i; 
     if (intentKeywords.test(message)) {
       processSmsIntent(userId, message).then(pendingTask => {
         if (pendingTask) {
           triggerGoogleAppsScript(pendingTask.email, pendingTask.name, pendingTask.id, pendingTask.desc);
-          incrementEmailedTranscripts(userId); // 🔥 Logs the email!
+          incrementEmailedTranscripts(userId); //   Logs the email!
           console.log(`📧 WEB CHAT TRIGGERED EMAIL: Transcript sent to ${pendingTask.email}`);
         }
       }).catch(e => console.error("Web Intent error:", e));
     }
 
-    // 🔥 BACKGROUND TASK: AI Auto-Naming
-    // Wait until the 2nd user message (when history length is 3: User, Agent, User) for better context
-    if (webHistory.length === 3) {
-      // Build a mini-transcript for the AI to read
+    // BACKGROUND TASK: Progressive AI Auto-Naming
+    // Triggers on the 1st user message (length === 1) and refines on the 2nd (length === 3)
+    if (webHistory.length === 1 || webHistory.length === 3) {
       const miniTranscript = webHistory.map(m => `${m.role}: ${m.content}`).join("\n");
       
       openai.chat.completions.create({
@@ -1748,9 +1750,9 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
         }]
       }).then(async (titleResp) => {
         const smartTitle = titleResp.choices[0].message.content.trim();
-        // Only update it if the user hasn't already manually renamed it
-        await supabase.from("conversations").update({ title: smartTitle }).eq("id", conversationId).is("title", null);
-        console.log(`🏷️ Auto-named chat ${conversationId}: "${smartTitle}"`);
+        // Overwrite the title so it gets progressively more accurate
+        await supabase.from("conversations").update({ title: smartTitle }).eq("id", conversationId);
+        console.log(`🏷️ Auto-named chat ${conversationId}: "${smartTitle}" (Turn ${webHistory.length})`);
       }).catch(e => console.error("Auto-title error:", e));
     }
       
@@ -1766,6 +1768,33 @@ updateMemorySummary({ oldSummary: user.memory_summary, userText: message, assist
     console.error("❌ Chat Error:", err.message);
     logError({ channel: "web", stage: "OpenAI Generation", message: err.message });
     res.status(500).json({ error: "Failed to generate reply: " + err.message });
+  }
+});
+
+// ==========================================
+// VOICE TRANSCRIPTION (WHISPER)
+// ==========================================
+app.post("/api/transcribe", apiLimiter, authenticateToken, upload.single("audio"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No audio file provided." });
+
+    // OpenAI requires a physical file to transcribe, so we save it to the server's temporary RAM disk
+    const tempFilePath = path.join(os.tmpdir(), `voice-${Date.now()}.webm`);
+    fs.writeFileSync(tempFilePath, req.file.buffer);
+
+    // Send to OpenAI Whisper
+    const transcription = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(tempFilePath),
+      model: "whisper-1",
+    });
+
+    // Clean up the temp file
+    fs.unlinkSync(tempFilePath);
+
+    res.json({ success: true, text: transcription.text });
+  } catch (err) {
+    console.error("Transcription Error:", err.message);
+    res.status(500).json({ error: "Failed to transcribe audio." });
   }
 });
 
@@ -1999,7 +2028,7 @@ app.post("/api/admin/send-bulk-sms", async (req, res) => {
     const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
     let successCount = 0;
     let failCount = 0;
-    let failedDetails = []; // 🔥 Tracks exactly who failed
+    let failedDetails = []; //   Tracks exactly who failed
 
     for (const phone of phones) {
       try {
@@ -2022,7 +2051,7 @@ app.post("/api/admin/send-bulk-sms", async (req, res) => {
       } catch(e) {
         console.error(`Bulk SMS failed for ${phone}:`, e.message);
         failCount++;
-        failedDetails.push(phone); // 🔥 Save the failed number
+        failedDetails.push(phone); //   Save the failed number
       }
     }
     
@@ -2052,7 +2081,7 @@ app.post("/api/admin/user-details", async (req, res) => {
     let times = { web: [], call: [], total: [] };
     let convoIds = (convos || []).map(c => c.id);
     
-    // 🔥 NEW: Dynamically count total opened here!
+    //   NEW: Dynamically count total opened here!
     let totalOpened = { web: 0, call: 0 };
 
     (convos || []).forEach(c => {
@@ -2155,7 +2184,7 @@ app.post("/api/admin/usage", async (req, res) => {
     const { data: allConvos } = await convoQuery;
 
     let chatStats = { activeWeb: 0, activeCall: 0 };
-    let allTimeChats = { web: 0, call: 0, total: 0 }; // 🔥 Counting dynamically now!
+    let allTimeChats = { web: 0, call: 0, total: 0 }; //   Counting dynamically now!
     let times = { web: [], sms: [], wa: [], call: [], total: [] };
 
     (allConvos || []).forEach(c => {
@@ -2239,8 +2268,8 @@ app.post("/api/admin/usage", async (req, res) => {
     };
 
     // 4. USERS, TRANSCRIPTS, & ALL-TIME UPLOADS
-    // 🔥 Removed the brittle ghost counters from this query
-    // 🔥 Added transcripts_emailed to the query
+    //   Removed the brittle ghost counters from this query
+    //   Added transcripts_emailed to the query
     let usersQuery = supabase.from("users").select("id, transcript_data, last_seen, all_time_uploads, transcripts_emailed");
     if (userFilter) usersQuery = usersQuery.eq("id", userFilter);
     const { data: usersData } = await usersQuery;
@@ -2262,7 +2291,7 @@ app.post("/api/admin/usage", async (req, res) => {
     
     let totalUsers = (usersData || []).length;
 
-    // 🔥 NEW: Function to count specific feature usage
+    //   NEW: Function to count specific feature usage
     const getFeatureCount = async (col) => {
         let query = supabase.from("messages").select("*", { count: "exact", head: true }).eq(col, true).eq("direction", "user");
         if (userFilter) query = query.in("conversation_id", convoIds);
