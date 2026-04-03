@@ -1671,110 +1671,117 @@ ${privateDocContext}
 
 Respond helpfully. Use uploaded documents to answer questions if relevant.`;
 
-// Call OpenAI
+// ==========================================
+    // Call OpenAI with Real-Time Streaming
+    // ==========================================
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders(); // Establish the stream
+
+    // Send conversationId immediately so the frontend can lock it in
+    res.write(`data: ${JSON.stringify({ type: "meta", conversationId })}\n\n`);
+
     let reply = "";
     
-    const fullInput = `SYSTEM INSTRUCTIONS:\n${systemPrompt}\n\n` +
-                      `CHAT HISTORY:\n${webHistory.slice(0, -1).map(h => `${h.role.toUpperCase()}: ${h.content}`).join("\n")}\n\n` +
-                      `CURRENT USER MESSAGE:\n${message}`;
+    // Convert history for standard OpenAI Chat Completions API
+    const chatMessages = [
+      { role: "system", content: systemPrompt },
+      ...webHistory.slice(0, -1),
+      { role: "user", content: message }
+    ];
 
     if (deepDive && docIds.length > 0) {
-      // 1. QUOTA CHECK
       const todayDate = new Date().toISOString().split('T')[0];
       let currentCount = user.deep_dive_count || 0;
-      
-      // Reset the counter if it is a new day
-      if (user.deep_dive_reset_date !== todayDate) {
-          currentCount = 0; 
-      }
+      if (user.deep_dive_reset_date !== todayDate) currentCount = 0; 
 
-      // Block if they hit the cap
       if (currentCount >= 10) {
-          return res.json({ 
-              success: true, 
-              reply: "You have reached your daily limit of 10 Deep Dive queries. Please toggle Deep Dive off to continue chatting, or try again tomorrow.", 
-              conversationId 
-          });
+          reply = "You have reached your daily limit of 10 Deep Dive queries. Please toggle Deep Dive off to continue chatting, or try again tomorrow.";
+          res.write(`data: ${JSON.stringify({ type: "chunk", text: reply })}\n\n`);
+          res.write(`data: [DONE]\n\n`);
+          res.end();
+          return;
       }
-
-      // 2. RUN HIGH REASONING
-      console.log("🧠 Triggering GPT-5.4 Responses API (High Reasoning)...");
-      const response = await openai.responses.create({
-        model: "gpt-5.4",
-        reasoning: { effort: "high" },
-        input: fullInput
-      });
-      reply = response.output_text;
-
-      // 3. INCREMENT QUOTA
-      await supabase.from("users").update({
-          deep_dive_count: currentCount + 1,
-          deep_dive_reset_date: todayDate
-      }).eq("id", userId);
-
-    } else {
-      console.log("⚡ Triggering GPT-5.4 Responses API (None Reasoning)...");
-      const response = await openai.responses.create({
-        model: "gpt-5.4",
-        reasoning: { effort: "none" },
-        input: fullInput
-      });
-      reply = response.output_text;
+      await supabase.from("users").update({ deep_dive_count: currentCount + 1, deep_dive_reset_date: todayDate }).eq("id", userId);
     }
 
-    // Save reply
+    try {
+      const stream = await openai.chat.completions.create({
+        model: OPENAI_MODEL || "gpt-4o",
+        messages: chatMessages,
+        stream: true
+      });
+
+      // Abort OpenAI generation if the user clicks "Stop Generating"
+      req.on("close", () => {
+        if (stream && stream.controller) stream.controller.abort();
+      });
+
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta?.content || "";
+        if (content) {
+          reply += content;
+          res.write(`data: ${JSON.stringify({ type: "chunk", text: content })}\n\n`);
+        }
+      }
+      res.write(`data: [DONE]\n\n`);
+      res.end();
+
+    } catch (streamErr) {
+      console.error("OpenAI Stream Error:", streamErr);
+      res.write(`data: ${JSON.stringify({ type: "error", error: streamErr.message })}\n\n`);
+      res.end();
+      return; // Stop execution if OpenAI crashed or user aborted
+    }
+
+    // ==========================================
+    // POST-STREAM BACKGROUND TASKS
+    // ==========================================
+    // Save reply to database
     const { error: botErr } = await supabase.from("messages").insert({
       conversation_id: conversationId, channel: "web", direction: "agent",
       text: reply, provider: "openai"
     });
     if (botErr) console.error("🚨 DB REJECTED BOT MSG:", botErr.message); 
 
-    //   BACKGROUND TASK: Transcript Intent Extractor (Web)
+    // Intent Extractor
     const intentKeywords = /(@|\b(transcript|email|send|call|recent|yes|yeah|sure|ok|please|back|ago)\b)/i; 
     if (intentKeywords.test(message)) {
       processSmsIntent(userId, message).then(pendingTask => {
         if (pendingTask) {
           triggerGoogleAppsScript(pendingTask.email, pendingTask.name, pendingTask.id, pendingTask.desc);
-          incrementEmailedTranscripts(userId); //   Logs the email!
-          console.log(`📧 WEB CHAT TRIGGERED EMAIL: Transcript sent to ${pendingTask.email}`);
+          incrementEmailedTranscripts(userId); 
         }
       }).catch(e => console.error("Web Intent error:", e));
     }
 
-    // BACKGROUND TASK: Progressive AI Auto-Naming
-    // Triggers on the 1st user message (length === 1) and refines on the 2nd (length === 3)
+    // Progressive Auto-Naming
     if (webHistory.length === 1 || webHistory.length === 3) {
       const miniTranscript = webHistory.map(m => `${m.role}: ${m.content}`).join("\n");
-      
       openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [{ 
           role: "system", 
           content: "You are a summarization AI. Read the short conversation below and generate a very short, 3-to-4 word title for this chat. Do NOT use quotation marks. Example: Board Governance Dispute" 
-        }, { 
-          role: "user", 
-          content: miniTranscript 
-        }]
+        }, { role: "user", content: miniTranscript }]
       }).then(async (titleResp) => {
         const smartTitle = titleResp.choices[0].message.content.trim();
-        // Overwrite the title so it gets progressively more accurate
         await supabase.from("conversations").update({ title: smartTitle }).eq("id", conversationId);
-        console.log(`🏷️ Auto-named chat ${conversationId}: "${smartTitle}" (Turn ${webHistory.length})`);
       }).catch(e => console.error("Auto-title error:", e));
     }
       
-    // Update memory (Protected from Deep Dive flood!)
-    // Update compressed memory facts
-updateMemorySummary({ oldSummary: user.memory_summary, userText: message, assistantText: reply, channelLabel: "WEB" })
-  .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
-  .catch(e => console.error("Memory update failed:", e));
-  scheduleSessionSummary(userId, conversationId, "web", message, reply);
-    res.json({ success: true, reply, conversationId });
+    // Update memory
+    updateMemorySummary({ oldSummary: user.memory_summary, userText: message, assistantText: reply, channelLabel: "WEB" })
+      .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
+      .catch(e => console.error("Memory update failed:", e));
+      
+    scheduleSessionSummary(userId, conversationId, "web", message, reply);
 
   } catch (err) {
     console.error("❌ Chat Error:", err.message);
     logError({ channel: "web", stage: "OpenAI Generation", message: err.message });
-    res.status(500).json({ error: "Failed to generate reply: " + err.message });
+    if (!res.headersSent) res.status(500).json({ error: "Failed to generate reply: " + err.message });
   }
 });
 

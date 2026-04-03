@@ -7,6 +7,7 @@ let globalConversations = [];
 let currentConversationId = null;
 let userName = "Guest";
 let isLoadingChat = false;
+let chatAbortController = null;
 const botAvatar = "/avatar.jpg";
 
 const phoneInputField = document.querySelector("#phoneInput");
@@ -504,18 +505,51 @@ function removeTyping() {
 // ==========================================
 // SEND MESSAGE
 // ==========================================
+// ==========================================
+// TEXTAREA AUTO-RESIZE & SHIFT+ENTER
+// ==========================================
+document.addEventListener("DOMContentLoaded", () => {
+    const chatInput = document.getElementById('chatInput');
+    if (chatInput) {
+        chatInput.addEventListener('keydown', function(e) {
+            // Send on Enter (but drop to new line on Shift+Enter)
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault(); 
+                sendMessage();
+            }
+        });
+        chatInput.addEventListener('input', function() {
+            this.style.height = 'auto'; // Reset height to recalculate
+            this.style.height = (this.scrollHeight) + 'px'; 
+            if (this.value === "") this.style.height = 'auto'; 
+        });
+    }
+});
 
+function stopGenerating() {
+    if (chatAbortController) {
+        chatAbortController.abort(); // Kills the fetch request instantly
+        chatAbortController = null;
+    }
+    document.getElementById('stopBtn').style.display = 'none';
+    document.getElementById('sendBtn').style.display = 'block';
+    removeTyping();
+    document.getElementById('chatInput').disabled = false;
+    document.getElementById('chatInput').focus();
+}
+
+// ==========================================
+// SEND MESSAGE (STREAMING)
+// ==========================================
 async function sendMessage() {
     const inputField = document.getElementById('chatInput');
     const message = inputField.value.trim();
     if (!message) return;
     
-    // --- THE FIX: Automatically start a new chat if they don't have one selected ---
     if (!currentConversationId) {
         await startNewChat();
-        if (!currentConversationId) return; // Failsafe
+        if (!currentConversationId) return; 
     }
-    // -------------------------------------------------------------------------------
 
     const es = document.getElementById('emptyState');
     if (es) es.remove();
@@ -525,51 +559,106 @@ async function sendMessage() {
     const isDeepDive = document.getElementById('deepDiveToggle').checked;
 
     addMessageToUI(message, 'user', selectedDocIds.length, isDeepDive);
+    
+    // Reset input box
     inputField.value = "";
+    inputField.style.height = 'auto';
 
+    // Swap Send for Stop
     const sendBtn = document.getElementById('sendBtn');
-    sendBtn.disabled = true;
-    sendBtn.innerText = "...";
+    const stopBtn = document.getElementById('stopBtn');
+    sendBtn.style.display = 'none';
+    stopBtn.style.display = 'block';
 
-    // 🕒 SHOW TYPING ANIMATION
     showTyping();
+    chatAbortController = new AbortController();
 
-  try {
-        const token = localStorage.getItem('david_jwt'); // Get the token
+    try {
+        const token = localStorage.getItem('david_jwt');
         
         const res = await fetch('/api/chat', {
             method: 'POST', 
             headers: { 
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}` // 🔐 Attach the VIP Pass
+                'Authorization': `Bearer ${token}` 
             },
-            body: JSON.stringify({
-                message, // userId is removed, the backend gets it from the token!
-                conversationId: currentConversationId,
-                selectedDocIds,
-                deepDive: isDeepDive
-            })
+            body: JSON.stringify({ message, conversationId: currentConversationId, selectedDocIds, deepDive: isDeepDive }),
+            signal: chatAbortController.signal // Hooks into our Stop button!
         });
-        const data = await res.json();
 
-        // 🛑 REMOVE TYPING ANIMATION
         removeTyping();
 
-        if (data.success) {
-            addMessageToUI(data.reply, 'bot');
-            if (data.conversationId) currentConversationId = data.conversationId;
-            loadConversationList(false);
-        } else {
-            console.error("Chat error response:", data);
-            addMessageToUI("Sorry, something went wrong. " + (data.error || ""), 'bot');
+        // 1. Create an empty message bubble for the Bot
+        const msgContainer = document.getElementById('chatMessages');
+        const wrapper = document.createElement('div');
+        wrapper.classList.add('message-wrapper', 'wrapper-bot');
+        
+        wrapper.innerHTML = `
+            <img src="${botAvatar}" class="avatar" alt="AI" />
+            <div style="display: flex; flex-direction: column; align-items: flex-start; max-width: 100%;">
+                <div class="message msg-bot streaming-text"></div>
+                <button class="copy-action-btn" style="display:none;">📋 Copy Text</button>
+            </div>
+        `;
+        msgContainer.appendChild(wrapper);
+        
+        const textNode = wrapper.querySelector('.streaming-text');
+        const copyBtn = wrapper.querySelector('.copy-action-btn');
+        let fullReply = "";
+
+        // 2. Read the Stream Data
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let done = false;
+
+        while (!done) {
+            const { value, done: readerDone } = await reader.read();
+            if (value) {
+                const chunkStr = decoder.decode(value, { stream: true });
+                const lines = chunkStr.split('\n');
+                
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const dataStr = line.substring(6).trim();
+                        if (dataStr === '[DONE]') { done = true; break; }
+                        
+                        try {
+                            const data = JSON.parse(dataStr);
+                            if (data.type === 'meta' && data.conversationId) {
+                                currentConversationId = data.conversationId;
+                            } else if (data.type === 'chunk') {
+                                fullReply += data.text;
+                                textNode.innerHTML = marked.parse(fullReply); // Renders Markdown in real-time!
+                                msgContainer.scrollTop = msgContainer.scrollHeight;
+                            } else if (data.type === 'error') {
+                                fullReply += "\n\n**Error:** " + data.error;
+                                textNode.innerHTML = marked.parse(fullReply);
+                            }
+                        } catch(e) {}
+                    }
+                }
+            }
+            if (readerDone) done = true;
         }
+
+        // 3. Finalize
+        copyBtn.style.display = 'block';
+        copyBtn.onclick = function() { copyMessageText(this, encodeURIComponent(fullReply)); };
+        loadConversationList(false);
+
     } catch (error) {
-        console.error("Chat network error:", error);
-        removeTyping(); // Ensure it is removed on a network crash too
-        addMessageToUI("Network error. Please check your connection.", 'bot');
+        if (error.name === 'AbortError') {
+            console.log("Generation stopped by user.");
+        } else {
+            console.error("Chat network error:", error);
+            removeTyping();
+            addMessageToUI("Network error. Please check your connection.", 'bot');
+        }
+    } finally {
+        // Swap Stop back to Send
+        sendBtn.style.display = 'block';
+        stopBtn.style.display = 'none';
     }
-    sendBtn.disabled = false;
-    sendBtn.innerText = "Send";
 }
 
 // ==========================================

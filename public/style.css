@@ -150,10 +150,19 @@ input:checked + .slider:before { transform: translateX(18px); }
 .tooltip-container:hover .tooltip-text { visibility: visible; opacity: 1; }
 
 .chat-input-area { padding: 15px 30px 25px 30px; background: white; display: flex; gap: 12px; align-items: center; flex-shrink: 0; }
-.chat-input-area input { flex-grow: 1; padding: 14px 20px; border: 1px solid #ddd; border-radius: 30px; outline: none; font-size: 15px; background: #fafafa; }
-.chat-input-area input:focus { border-color: #181d32; background: white; }
-/* Ensure the center input placeholder is consistent */
-.chat-input-area input::placeholder { color: #888; font-size: 14px; font-weight: 400; }
+/* Multi-line Chat Input (Textarea) */
+.chat-input-area textarea { 
+    flex-grow: 1; padding: 14px 20px; border: 1px solid #ddd; border-radius: 24px; 
+    outline: none; font-size: 15px; background: #fafafa; resize: none; 
+    font-family: 'Inter', sans-serif; min-height: 48px; max-height: 150px; 
+    overflow-y: auto; line-height: 1.4; transition: border-color 0.2s, background 0.2s;
+}
+.chat-input-area textarea:focus { border-color: #181d32; background: white; }
+.chat-input-area textarea::placeholder { color: #888; font-size: 14px; font-weight: 400; }
+
+/* Stop Button */
+.stop-btn { background: #ff4c4c !important; }
+.stop-btn:hover { background: #e60000 !important; }
 .chat-input-area button { background: #181d32; color: white; border: none; padding: 14px 28px; border-radius: 30px; cursor: pointer; font-weight: 600; font-size: 14px; white-space: nowrap; }
 .chat-input-area button:hover { background: #252b48; }
 .chat-input-area button:disabled { opacity: 0.5; cursor: not-allowed; }

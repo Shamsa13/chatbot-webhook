@@ -171,7 +171,8 @@
 
         <div class="chat-input-area">
             <button id="micBtn" class="mic-btn" onclick="toggleRecording()" title="Voice Message">🎤</button>
-            <input type="text" id="chatInput" placeholder="Ask David a question..." onkeypress="if(event.key==='Enter')sendMessage()" />
+            <textarea id="chatInput" placeholder="Ask David a question..." rows="1"></textarea>
+            <button id="stopBtn" class="stop-btn" onclick="stopGenerating()" style="display: none;">⏹️ Stop</button>
             <button id="sendBtn" onclick="sendMessage()">Send</button>
         </div>
     </div>
