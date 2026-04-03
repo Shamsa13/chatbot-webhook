@@ -168,7 +168,7 @@ input:checked + .slider:before { transform: translateX(18px); }
 .chat-input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* VOICE RECORDING BUTTON */
-.mic-btn { background: #181d32; border: none; color: white; width: 46px; height: 46px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: 0.2s; outline: none; }
+.mic-btn { background: #181d32; border: none; color: white; width: 46px; height: 46px; border-radius: 50%; padding: 0 !important; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: 0.2s; outline: none; }
 .mic-btn:hover { background: #252b48; }
 .mic-btn.recording { background: #ff4c4c; color: white; animation: pulseMic 1.5s infinite; }
 
