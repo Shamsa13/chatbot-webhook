@@ -902,9 +902,23 @@ async function openProfileModal() {
         if (data.success) {
             nameInput.value = (data.profile.full_name && data.profile.full_name !== 'null') ? data.profile.full_name : "";
             emailInput.value = (data.profile.email && data.profile.email !== 'null') ? data.profile.email : "";
+            
+            // 🕰️ Evaluate Strict Web Login Trail
+            const prev = localStorage.getItem('david_previous_login');
+            if (prev && prev !== "First time logging in" && prev !== "null" && prev !== "undefined") {
+                const d = new Date(prev);
+                loginDisplay.innerText = "Last login: " + d.toLocaleDateString() + " at " + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            } else if (data.profile.last_web_login) {
+                // Fallback to the strict Supabase web audit trail
+                const d = new Date(data.profile.last_web_login);
+                loginDisplay.innerText = "Last login: " + d.toLocaleDateString() + " at " + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            } else {
+                loginDisplay.innerText = "Last login: This is your first web session!";
+            }
         }
     } catch (e) {
         nameInput.value = ""; emailInput.value = "";
+        loginDisplay.innerText = "Could not load login history.";
     }
 }
 

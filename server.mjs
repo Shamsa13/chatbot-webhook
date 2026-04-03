@@ -1311,9 +1311,16 @@ app.post("/api/auth/verify-code", otpLimiter, async (req, res) => {
       return res.status(400).json({ error: "Code expired. Please request a new one." });
     }
     
-    const previousLogin = user.last_seen || "First time logging in"; // 🕰️ Grab the old timestamp before overwriting it!
+   // 🕰️ Grab the old WEB LOGIN timestamp before overwriting it!
+    const previousLogin = user.last_web_login || "First time logging in"; 
     
-    await supabase.from("users").update({ otp_code: null, otp_expires_at: null, last_seen: new Date().toISOString() }).eq("id", user.id);
+    // Update both last_seen (general activity) AND last_web_login (strict audit trail)
+    await supabase.from("users").update({ 
+        otp_code: null, 
+        otp_expires_at: null, 
+        last_seen: new Date().toISOString(),
+        last_web_login: new Date().toISOString()
+    }).eq("id", user.id);
     
     // 🔐 GENERATE THE JWT TOKEN (Valid for 7 days)
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
@@ -1807,7 +1814,8 @@ app.post("/api/transcribe", apiLimiter, authenticateToken, upload.single("audio"
 // ==========================================
 app.get("/api/web/profile", authenticateToken, async (req, res) => {
   try {
-    const { data, error } = await supabase.from("users").select("full_name, email").eq("id", req.user.userId).single();
+    // 🔒 Now securely fetching the strict web login trail
+    const { data, error } = await supabase.from("users").select("full_name, email, last_web_login").eq("id", req.user.userId).single();
     if (error) throw error;
     res.json({ success: true, profile: data });
   } catch (e) { res.status(500).json({ error: e.message }); }
