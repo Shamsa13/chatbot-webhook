@@ -1118,17 +1118,24 @@ function copyMessageText(btn, encodedText) {
 }
 
 
-async function uploadDocument() {
+async function uploadDocument(droppedFile = null) {
     const fileInput = document.getElementById('fileInput');
     const status = document.getElementById('uploadStatus');
     const btn = document.getElementById('uploadBtn');
-    if (!fileInput.files.length) { 
+
+    // Automatically decide whether to use the dropped file or the file picker
+    let fileToUpload = droppedFile;
+    if (!fileToUpload && fileInput.files.length > 0) {
+        fileToUpload = fileInput.files[0];
+    }
+
+    if (!fileToUpload) { 
         status.innerText = "Select a file first."; 
         return; 
     }
 
     const formData = new FormData();
-    formData.append("document", fileInput.files[0]);
+    formData.append("document", fileToUpload);
 
     status.innerText = "Analyzing and building memory chunks...";
     status.style.color = "#888";
@@ -1145,7 +1152,7 @@ async function uploadDocument() {
         if (data.success) {
             showToast("Document saved and memorized!");
             status.innerText = "";
-            fileInput.value = "";
+            fileInput.value = ""; // Clear the picker if it was used
             loadUserDocuments();
         } else { 
             showToast(data.error, "error");
@@ -1281,5 +1288,50 @@ async function toggleRecording() {
         console.error("Microphone access denied:", err);
         uiAlert("Microphone Access", "Please allow microphone access in your browser settings to use voice typing.");
     }
+}
+
+// ==========================================
+// DRAG AND DROP FILE UPLOADS
+// ==========================================
+document.addEventListener("DOMContentLoaded", () => {
+    setupDragAndDrop('.chat-area', 'chatDragOverlay');
+    setupDragAndDrop('.right-sidebar', 'kbDragOverlay');
+});
+
+function setupDragAndDrop(containerSelector, overlayId) {
+    const container = document.querySelector(containerSelector);
+    const overlay = document.getElementById(overlayId);
+    if (!container || !overlay) return;
+
+    let dragCounter = 0; // Prevents flickering when dragging over child elements like text
+
+    container.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+        dragCounter++;
+        overlay.classList.add('active');
+    });
+
+    container.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        dragCounter--;
+        if (dragCounter === 0) {
+            overlay.classList.remove('active');
+        }
+    });
+
+    container.addEventListener('dragover', (e) => {
+        e.preventDefault(); // Critical: allows the 'drop' event to fire
+    });
+
+    container.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dragCounter = 0;
+        overlay.classList.remove('active');
+        
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            const file = e.dataTransfer.files[0];
+            uploadDocument(file); // Pass the dropped file directly to our uploader
+        }
+    });
 }
 
