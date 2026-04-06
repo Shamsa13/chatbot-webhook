@@ -415,9 +415,25 @@ input:checked + .slider:before { transform: translateX(18px); }
 /* =========================================
    TOAST NOTIFICATIONS
    ========================================= */
-.toast-notification { position: fixed; top: 30px; right: 30px; padding: 14px 20px; border-radius: 8px; font-size: 14px; font-weight: 500; z-index: 10000; box-shadow: 0 10px 40px rgba(0,0,0,0.15); display: none; animation: slideInToast 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; max-width: 350px; transition: opacity 0.3s; background: white; color: #181d32; border-left: 4px solid #4caf50; font-family: 'Inter', sans-serif; }
+/* Sleek Frosted Glass Toasts */
+.toast-notification { 
+    position: fixed; top: 30px; right: 30px; padding: 14px 20px; 
+    border-radius: 8px; font-size: 14px; font-weight: 500; 
+    z-index: 10000; box-shadow: 0 10px 40px rgba(0,0,0,0.2); 
+    display: none; animation: slideInToast 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; 
+    max-width: 350px; transition: opacity 0.3s; 
+    
+    /* The Transparent / Frosted Glass Magic */
+    background: rgba(24, 29, 50, 0.85); 
+    backdrop-filter: blur(12px); 
+    -webkit-backdrop-filter: blur(12px);
+    
+    color: #ffffff; 
+    border: 1px solid rgba(255,255,255,0.1); 
+    font-family: 'Inter', sans-serif; 
+}
 @keyframes slideInToast { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-.toast-notification.error { border-left-color: #ff4c4c; }
+.toast-notification.error { border-color: rgba(255, 76, 76, 0.3); }
 
 /* =========================================
    MARKDOWN POLISH (Tables, Code, Quotes)
