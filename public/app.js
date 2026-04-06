@@ -64,6 +64,23 @@ const uiAlert = (title, text) => buildUIModal(title, text, 'alert');
 const uiConfirm = (title, text, isDanger) => buildUIModal(title, text, 'confirm', '', isDanger);
 const uiPrompt = (title, text, defaultVal) => buildUIModal(title, text, 'prompt', defaultVal);
 
+// --- NEW: TOAST NOTIFICATIONS ---
+function showToast(message, type = "success") {
+    const toast = document.getElementById('toastBox');
+    toast.className = 'toast-notification ' + type;
+    toast.innerHTML = `<div style="display: flex; gap: 10px; align-items: center;">
+                        <span style="font-size: 16px;">${type === 'success' ? '✅' : '❌'}</span>
+                        <span>${escapeHtml(message)}</span>
+                       </div>`;
+    toast.style.display = 'block';
+    toast.style.opacity = '1';
+    
+    if (window.toastTimer) clearTimeout(window.toastTimer);
+    window.toastTimer = setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => { toast.style.display = 'none'; }, 300);
+    }, 3000);
+}
 // ==========================================
 // MOBILE APP TAB SWITCHING
 // ==========================================
@@ -220,7 +237,7 @@ function logoutUser() {
 
     document.getElementById('dashboardContainer').style.display = 'none';
     
-    // 🔥 THE FIX: Change this to 'flex' so the login layout doesn't break!
+    //  THE FIX: Change this to 'flex' so the login layout doesn't break!
     document.getElementById('loginContainer').style.display = 'flex'; 
     document.getElementById('step2').style.display = 'none';
     document.getElementById('step1').style.display = 'block';
@@ -384,21 +401,28 @@ async function loadConversationList(autoSelect = false) {
 async function renameChat(conversationId, currentTitle) {
     const cleanTitle = currentTitle === 'New conversation' ? '' : currentTitle;
     const newTitle = await uiPrompt("Rename Chat", "Enter a new name for this chat (leave blank to auto-generate):", cleanTitle);
-    if (newTitle === false) return; // User clicked cancel
+    if (newTitle === false || newTitle.trim() === cleanTitle) return; // User canceled or didn't change it
     
+    const finalTitle = newTitle.trim() || "New conversation";
+
+    //  OPTIMISTIC UPDATE: Change the UI instantly
+    const chat = globalConversations.find(c => c.id === conversationId);
+    if (chat) chat.title = finalTitle;
+    if (conversationId === currentConversationId) document.getElementById('chatSubtitle').innerText = `Workspace (${finalTitle})`;
+    renderConversations();
+
     try {
         const res = await fetch(`/api/web/conversations/${conversationId}/title`, { 
-            method: 'PUT', 
-            headers: { 
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` 
-            }, 
-            body: JSON.stringify({ title: newTitle }) 
+            method: 'PUT', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` }, 
+            body: JSON.stringify({ title: finalTitle }) 
         });
         const data = await res.json();
-        if (data.success) { await loadConversationList(false); } 
-        else await uiAlert("Error", "Failed to rename chat.");
-    } catch (e) { console.error("Rename error:", e); }
+        if (!data.success) throw new Error("Rename failed");
+        showToast("Chat renamed!");
+    } catch (e) { 
+        showToast("Failed to rename chat on server.", "error");
+        await loadConversationList(false); // Revert UI if server fails
+    }
 }
 
 async function switchChat(conversationId) {
@@ -457,24 +481,29 @@ async function switchChat(conversationId) {
 async function deleteChat(conversationId) {
     const confirmed = await uiConfirm("Delete Chat", "Are you sure you want to permanently delete this conversation?", true);
     if (!confirmed) return;
+
+    //  OPTIMISTIC UPDATE: Remove from UI instantly
+    globalConversations = globalConversations.filter(c => c.id !== conversationId);
+    renderConversations();
+    
+    if (conversationId === currentConversationId) {
+        currentConversationId = null;
+        document.getElementById('chatMessages').innerHTML = "";
+        showEmptyState();
+        document.getElementById('chatSubtitle').innerText = "Workspace (New Conversation)";
+    }
+
     try {
         const res = await fetch("/api/web/conversations/" + conversationId, {
-            method: 'DELETE', 
-            headers: { 
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` 
-            }
+            method: 'DELETE', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` }
         });
         const data = await res.json();
-        if (data.success) {
-            if (conversationId === currentConversationId) {
-                currentConversationId = null;
-                document.getElementById('chatMessages').innerHTML = "";
-                showEmptyState();
-            }
-            await loadConversationList(currentConversationId === null);
-        }
-    } catch (e) { console.error("Delete chat error:", e); }
+        if (!data.success) throw new Error("Delete failed");
+        showToast("Chat deleted.");
+    } catch (e) { 
+        showToast("Failed to delete chat.", "error");
+        await loadConversationList(currentConversationId === null); // Revert UI if server fails
+    }
 }
 
 
@@ -815,45 +844,52 @@ function closeAllDropdowns() {
 }
 
 async function renameDocument(docId, oldFullName) {
-    // Splits the name from the extension so the user doesn't accidentally delete it!
     const extIdx = oldFullName.lastIndexOf('.');
     const baseName = extIdx > 0 ? oldFullName.substring(0, extIdx) : oldFullName;
     const ext = extIdx > 0 ? oldFullName.substring(extIdx) : '';
 
     const newBaseName = await uiPrompt("Rename Document", "Enter a new name for this file:", baseName);
     if (!newBaseName || newBaseName.trim() === baseName) return;
+    const finalName = newBaseName.trim() + ext; 
     
-    const finalName = newBaseName.trim() + ext; // Re-attaches the extension perfectly
+    // 🔥 OPTIMISTIC UPDATE
+    const docEl = document.querySelector(`#menu-${docId}`).closest('.doc-row').querySelector('.doc-name');
+    if (docEl) docEl.innerText = finalName;
+    closeAllDropdowns();
     
     try {
         const res = await fetch(`/api/documents/${docId}/name`, { 
-            method: 'PUT', 
-            headers: { 
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` 
-            }, 
+            method: 'PUT', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` }, 
             body: JSON.stringify({ newName: finalName }) 
         });
         const data = await res.json();
-        if (data.success) loadUserDocuments();
-        else await uiAlert("Error", "Failed to rename document.");
-    } catch (e) { console.error("Rename doc error:", e); }
+        if (!data.success) throw new Error("Rename failed");
+        showToast("Document renamed!");
+    } catch (e) { 
+        showToast("Failed to rename document.", "error");
+        loadUserDocuments(); // Revert UI if server fails
+    }
 }
 
 async function deleteDocument(docId) {
     const confirmed = await uiConfirm("Delete Document", "Are you sure? This will delete the document and wipe it from David's memory.", true);
     if (!confirmed) return;
+
+    // 🔥 OPTIMISTIC UPDATE
+    const docRow = document.querySelector(`#menu-${docId}`).closest('.doc-row');
+    if (docRow) docRow.remove();
+
     try {
        const res = await fetch("/api/documents/" + docId, { 
-            method: 'DELETE', 
-            headers: { 
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` 
-            } 
+            method: 'DELETE', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` } 
         });
         const data = await res.json();
-        if (data.success) loadUserDocuments();
-    } catch (e) { console.error("Delete doc error:", e); }
+        if (!data.success) throw new Error("Delete failed");
+        showToast("Document deleted.");
+    } catch (e) { 
+        showToast("Failed to delete document.", "error");
+        loadUserDocuments(); // Revert UI if server fails
+    }
 }
 
 async function loadUserDocuments() {
@@ -1072,9 +1108,8 @@ async function saveProfileSettings() {
 function copyMessageText(btn, encodedText) {
     const text = decodeURIComponent(encodedText);
     navigator.clipboard.writeText(text).then(() => {
-        btn.innerHTML = "✅ Copied!";
-        setTimeout(() => { btn.innerHTML = "📋 Copy"; }, 2000);
-    }).catch(err => console.error("Copy failed", err));
+        showToast("Copied to clipboard!");
+    }).catch(err => showToast("Copy failed", "error"));
 }
 
 
@@ -1103,18 +1138,17 @@ async function uploadDocument() {
         });
         const data = await res.json();
         if (data.success) {
-            status.innerText = "✅ Saved and Memorized";
-            status.style.color = "#4CAF50";
+            showToast("Document saved and memorized!");
+            status.innerText = "";
             fileInput.value = "";
             loadUserDocuments();
-            setTimeout(() => { status.innerText = ""; }, 3000);
         } else { 
-            status.innerText = "❌ " + data.error; 
-            status.style.color = "#ff4c4c"; 
+            showToast(data.error, "error");
+            status.innerText = "";
         }
     } catch (e) { 
-        status.innerText = "❌ Failed."; 
-        status.style.color = "#ff4c4c"; 
+        showToast("Failed to upload.", "error");
+        status.innerText = "";
     }
     btn.disabled = false;
     btn.innerText = "Upload Document";
