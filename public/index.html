@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>David Beatty AI</title>
+    <title>Director Compass</title>
+    <link rel="icon" type="image/jpeg" href="/avatar.jpg">
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/intl-tel-input/17.0.8/css/intlTelInput.css" />
     <link rel="stylesheet" href="/style.css">
@@ -14,22 +15,30 @@
 
 <div id="loginContainer" class="modern-login-layout">
     <div class="login-sidebar">
-        <div class="login-header">
+       <a href="https://www.boardchair.com/" class="login-header" style="text-decoration: none; color: inherit; cursor: pointer;">
             <img src="/avatar.jpg" alt="David Beatty" class="login-avatar">
             <div class="login-brand-container">
                 <span class="brand-text">Director Compass</span>
                 <span class="brand-subtext">Powered by David Beatty C.M., O.B.E., F.ICD, CFA</span>
             </div>
-        </div>
+        </a>
         
         <div class="form-wrapper">
             <h1 class="auth-title">Sign In</h1>
             <p class="auth-subtitle">Access your always available board advisor.</p>
 
             <div id="loginAreaForm">
-                <div id="step1">
+              <div id="step1">
                     <label class="auth-label" for="phoneInput">Secure Phone Login</label>
                     <input type="tel" id="phoneInput" class="auth-input" />
+                    
+                    <div class="checkbox-container">
+                        <input type="checkbox" id="disclaimerCheck">
+                        <label for="disclaimerCheck">
+                            I have read and agree to the <a href="https://directorscompass.boardchair.com/disclaimer" target="_blank">Disclaimer & Terms</a>.
+                        </label>
+                    </div>
+
                     <button class="btn auth-button" onclick="sendCode()">Get Secure Code to Your Phone</button>
                 </div>
                 <div id="step2" style="display: none;">
@@ -40,10 +49,6 @@
             </div>
         </div>
 
-        <div class="disclaimer-footer">
-            By logging in, you agree to our <a href="https://directorscompass.boardchair.com/disclaimer" target="_blank">Disclaimer</a><br>
-            <span>Last Updated: July 19, 2024</span>
-        </div>
     </div>
 
     <div class="feature-showcase">

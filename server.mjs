@@ -54,7 +54,7 @@ let activeEventsCache = [];
 // Max 3 requests per IP every 15 minutes
 const otpLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, 
-  max: 3, 
+  max: 5, 
   message: { error: "Too many login attempts. Please wait 15 minutes." }
 });
 

@@ -150,6 +150,13 @@ async function sendCode() {
     const btn = document.querySelector('#step1 .btn');
     if (btn.disabled) return; // 🛑 CRITICAL: Stops the Enter key from double-firing
     
+    // --- NEW: MANDATORY CHECKBOX VALIDATION ---
+    const disclaimerCheck = document.getElementById('disclaimerCheck');
+    if (disclaimerCheck && !disclaimerCheck.checked) {
+        await uiAlert("Required", "You must agree to the Disclaimer & Terms before logging in.");
+        return;
+    }
+    
     userPhone = phoneInput.getNumber();
     if (!userPhone) { await uiAlert("Invalid Number", "Please enter a valid phone number."); return; }
     

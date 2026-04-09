@@ -40,7 +40,7 @@ input.auth-input:focus { outline: none; border-color: #B99784 !important; backgr
 /* Specific fixes for the flag dropdown */
 .iti { width: 100%; margin-bottom: 25px; }
 
-/* 🔥 THE FIX: This forces ONLY the phone input to start 90px from the left */
+/*  THE FIX: This forces ONLY the phone input to start 90px from the left */
 .iti input.auth-input { padding-left: 90px !important; }
 
 .iti__selected-flag { padding: 0 16px !important; border-radius: 8px 0 0 8px; background: transparent !important; }
@@ -51,10 +51,27 @@ input.auth-input:focus { outline: none; border-color: #B99784 !important; backgr
 button.auth-button { background-color: #B99784; color: #fff; border: none; padding: 14px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 16px; width: 100%; transition: 0.2s; margin-top: 10px; }
 button.auth-button:hover { background-color: #AA8877; transform: translateY(-1px); }
 
-/* Disclaimer */
-.disclaimer-footer { font-size: 12px; color: rgba(255,255,255,0.5); line-height: 1.6; }
-.disclaimer-footer a { color: #B99784; text-decoration: none; }
-.disclaimer-footer a:hover { text-decoration: underline; }
+/* Custom Login Checkbox */
+.checkbox-container { display: flex; align-items: flex-start; gap: 12px; margin: 20px 0; }
+.checkbox-container input[type="checkbox"] { 
+    appearance: none; -webkit-appearance: none; 
+    width: 20px; height: 20px; 
+    border: 2px solid rgba(255,255,255,0.3); border-radius: 4px; 
+    background: rgba(255,255,255,0.05); cursor: pointer; 
+    position: relative; transition: 0.2s; flex-shrink: 0; margin-top: 0px;
+}
+.checkbox-container input[type="checkbox"]:checked { 
+    background: #B99784; border-color: #B99784; 
+}
+.checkbox-container input[type="checkbox"]:checked::after {
+    content: '✔'; position: absolute; top: 50%; left: 50%; 
+    transform: translate(-50%, -50%); color: white; font-size: 13px;
+}
+.checkbox-container label { 
+    font-size: 13px; color: rgba(255,255,255,0.7); line-height: 1.5; cursor: pointer; user-select: none;
+}
+.checkbox-container a { color: #B99784; text-decoration: none; font-weight: 600; transition: 0.2s; }
+.checkbox-container a:hover { color: #fff; text-decoration: underline; }
 
 /* RIGHT SHOWCASE PANE (Light - 65% width) */
 .feature-showcase { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px; background: radial-gradient(circle at top right, #ffffff, #f0f2f5); }
