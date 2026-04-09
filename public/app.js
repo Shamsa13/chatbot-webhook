@@ -108,6 +108,14 @@ function switchMobileTab(event, tabClass) {
 // Automatically set 'Chat' as default mobile tab AND check for saved login session
 window.addEventListener('DOMContentLoaded', () => {
 
+    // --- NEW: Force clear cached form inputs on reload/back-button ---
+    const phoneEl = document.getElementById('phoneInput');
+    if (phoneEl) phoneEl.value = "";
+    const codeEl = document.getElementById('codeInput');
+    if (codeEl) codeEl.value = "";
+    const checkEl = document.getElementById('disclaimerCheck');
+    if (checkEl) checkEl.checked = false;
+
     // Allow hitting 'Enter' to submit the Phone Number AND the 6-digit PIN
     document.getElementById('phoneInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendCode(); } });
     document.getElementById('codeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); verifyCode(); } });
@@ -253,7 +261,13 @@ function logoutUser() {
     document.getElementById('loginContainer').style.display = 'flex'; 
     document.getElementById('step2').style.display = 'none';
     document.getElementById('step1').style.display = 'block';
+    
+    // --- NEW: Wipe all inputs clean on logout ---
     document.getElementById('codeInput').value = "";
+    document.getElementById('phoneInput').value = ""; 
+    const disclaimer = document.getElementById('disclaimerCheck');
+    if (disclaimer) disclaimer.checked = false; 
+
     document.querySelector('#step1 .btn').innerText = "Get Secure Code to Your Phone";
     document.querySelector('#step2 .btn').innerText = "Login to Portal";
     document.getElementById('chatMessages').innerHTML = "";
