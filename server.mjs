@@ -203,7 +203,7 @@ async function sendToSlack(message) {
     await fetch(SLACK_WEBHOOK_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: `🚨 *David AI Error Alert* 🚨\n${message}` })
+      body: JSON.stringify({ text: `🚨 *Director Compass Error Alert* 🚨\n${message}` })
     });
   } catch (e) {
     console.error("Slack webhook failed:", e.message);
@@ -702,8 +702,9 @@ async function processSmsIntent(userId, userText) {
   }
 }
 
-async function checkAndSendVCard(userId, rawPhone) {
-  console.log(`[vCard Tracer] 1. Started check for: ${rawPhone}`);
+// NEW: Sends a standalone welcome SMS ONLY if their first interaction is a Voice Call
+async function sendCallWelcomeSMS(userId, rawPhone) {
+  console.log(`[Welcome SMS Tracer] 1. Started check for: ${rawPhone}`);
   try {
     const { data: user, error } = await supabase.from("users").select("vcard_sent").eq("id", userId).single();
     if (error && error.code !== 'PGRST116') return;
@@ -715,13 +716,13 @@ async function checkAndSendVCard(userId, rawPhone) {
         const outboundPhone = rawPhone; 
         const fromNumber = isWhatsApp ? `whatsapp:${process.env.TWILIO_PHONE_NUMBER}` : process.env.TWILIO_PHONE_NUMBER;
         
-        const introMsg = "Hi, it's David Beatty AI! Tap this link below to instantly save my contact card and photo to your phone:\n\nhttps://dtxebwectbvnksuxpclc.supabase.co/storage/v1/object/public/assets/Board%20Governance%20AI.vcf";
+        const introMsg = "Hi, Welcome to your Director Compass. I’m an AI of David Beatty’s voice built so you can personally leverage his 50 years of governance expertise and become a boardroom leader. I’m always available by phone or chat. Save this number and try it out by giving me a call.";
         await twilioClient.messages.create({ body: introMsg, from: fromNumber, to: outboundPhone });
         await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
       }
     }
   } catch (err) {
-    console.error("[vCard Tracer] ⚠️ CRASH:", err.message);
+    console.error("[Welcome SMS Tracer] ⚠️ CRASH:", err.message);
   }
 }
 
@@ -880,14 +881,14 @@ app.post("/twilio/sms", async (req, res) => {
       throw new Error("messages insert failed: " + inErr.message);
     }
 
-    if (!isWA) checkAndSendVCard(userId, rawFrom).catch(e => console.error("vCard error:", e));
+    
 
     // We added getRecentConversationSummaries to the Promise array
     const [cfg, memorySummary, history, { data: userDb }, ragContext, recentSummaries] = await Promise.all([
       getBotConfig(),
       getUserMemorySummary(userId),
       getRecentUserMessages(userId, 12),
-      supabase.from("users").select("full_name, email, event_pitch_counts").eq("id", userId).single(),
+      supabase.from("users").select("full_name, email, event_pitch_counts, vcard_sent").eq("id", userId).single(),
       searchKnowledgeBase(body),
       getRecentConversationSummaries(userId, 5) // <-- ADDED HERE
     ]);
@@ -902,7 +903,15 @@ app.post("/twilio/sms", async (req, res) => {
       : `CRITICAL RULE: The user DOES NOT have an email on file. If they ask for a transcript or document, YOU MUST reply: "I'd be happy to send that! What is the best email address to send it to?"`;
 
     // We inject recentSummaries into the profileContext so David actually reads them
-    const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}.\n\nRECENT CONVERSATIONS:\n${recentSummaries}\n\n${smsTranscriptRule}`;
+    let firstTimeSmsRule = "";
+    if (!userDb?.vcard_sent) {
+        firstTimeSmsRule = `\n\nCRITICAL RULE: This is the user's FIRST TIME texting you. You MUST seamlessly blend this concept into your response: "Hi, I’m your Director Compass ai assistant. I’m an AI of David Beatty’s voice built so you can personally leverage his 50 years of governance expertise and become a boardroom leader. I’m always available by phone or chat. Save this number and try it out by giving me a call." Do NOT be robotic about it—answer their question naturally, but ensure those key introductory points are warmly included.`;
+
+        // Mark it as sent so he never introduces himself again!
+        supabase.from("users").update({ vcard_sent: true }).eq("id", userId).catch(e => console.error("Flag update error:", e));
+    }
+
+    const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}.\n\nRECENT CONVERSATIONS:\n${recentSummaries}\n\n${smsTranscriptRule}${firstTimeSmsRule}`;
 
     
     const formattedHistoryForOpenAI = history.map(h => ({ role: h.role, content: `(${h.channel}) ${h.content}` }));
@@ -1001,9 +1010,9 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
     if (hasName && memorySummary) {
       greeting = `Welcome back, ${name}. Shall we continue where we left off?`;
     } else if (hasName && !memorySummary) {
-      greeting = `Hi ${name}! I'm David AI. How can I help you with your board decisions today?`;
+      greeting = `Hi ${name}! I'm your Director Compass. How can I help you with your board decisions today?`;
     } else {
-      greeting = "Hi! I'm David AI. Before we dive into your board decisions, what can I call you?";
+      greeting = "Hi! I'm your Director Compass. Before we dive into your board decisions, what can I call you?";
     }
 
     const userPitchCounts = userRecord?.event_pitch_counts || {};
@@ -1114,7 +1123,7 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
     const userId = await getOrCreateUser(phone);
     console.log("👤 User ID:", userId);
 
-    checkAndSendVCard(userId, phone).catch(e => console.error("vCard error", e));
+    sendCallWelcomeSMS(userId, phone).catch(e => console.error("Welcome SMS error", e));
 
     const oldSummary = await getUserMemorySummary(userId);
     // Update compressed memory facts
@@ -1223,19 +1232,40 @@ updateMemorySummary({
             const hasEmail = isValidData(latestUser?.email) && latestUser?.email.includes('@');
             const firstName = hasName ? latestUser.full_name.split(' ')[0] : "";
 
+// Build dynamic, human-like arrays so David doesn't repeat himself
+            const optsNameEmail = [
+                `Hi ${firstName}, great chat. Want me to email you the transcript? Just reply 'Yes'.`,
+                `${firstName}, would you like a copy of our transcript sent to your email? Reply 'Yes' if so!`,
+                `Enjoyed our call, ${firstName}. Reply 'Yes' and I'll shoot the transcript over to your email.`
+            ];
+            const optsNameNoEmail = [
+                `Hi ${firstName}, great chat. What email address should I send the transcript to?`,
+                `${firstName}, I've got your transcript ready. What's the best email to send it to?`,
+                `Enjoyed the call, ${firstName}. Where should I email your transcript?`
+            ];
+            const optsNoNameEmail = [
+                `Great chat. Want me to email the transcript to ${latestUser.email}? Just reply 'Yes'.`,
+                `Would you like a copy of our transcript sent to ${latestUser.email}? Reply 'Yes' if so!`,
+                `I've got your transcript ready. Reply 'Yes' and I'll send it to ${latestUser.email}.`
+            ];
+            const optsNoNameNoEmail = [
+                `Great chat. If you want a copy of the transcript, just reply with your name and email!`,
+                `I have your transcript ready. Reply with your name and email if you'd like me to send it over.`,
+                `Thanks for the call. If you need the transcript, just text me your name and email address.`
+            ];
+
+            const pickRandom = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
            let textMessage;
             if (hasName && hasEmail) {
-              textMessage = `Hi ${firstName}! It's David AI. Would you like me to email you the transcript from our recent call? Just reply 'Yes'.`;
+              textMessage = pickRandom(optsNameEmail);
             } else if (hasName && !hasEmail) {
-              textMessage = `Hi ${firstName}! It's David AI. I'd love to send you the transcript from our call. What's the best email address to send it to?`;
+              textMessage = pickRandom(optsNameNoEmail);
             } else if (!hasName && hasEmail) {
-              textMessage = `Hi! It's David AI. Would you like me to email you the transcript from our recent call to ${latestUser.email}? Just reply 'Yes'.`;
+              textMessage = pickRandom(optsNoNameEmail);
             } else {
-              textMessage = `Hi! It's David AI. Thanks for the chat. If you'd like me to email you a copy of our call transcript, just reply with your name and email address!`;
+              textMessage = pickRandom(optsNoNameNoEmail);
             }
-
-            // Add the portal upsell to whatever message was chosen
-            textMessage += " You can also view this full transcript and continue our conversation as a chat in your personal web portal!";
 
             await twilioClient.messages.create({ body: textMessage, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
             const smsConversationId = await getOrCreateConversation(userId, "sms");
@@ -1281,7 +1311,7 @@ app.post("/api/auth/send-code", otpLimiter, async (req, res) => {
       const outboundPhone = cleanPhone.startsWith("+") ? cleanPhone : "+" + cleanPhone;
       
       await twilioClient.messages.create({
-        body: `Your David Beatty AI web login code is: ${otpCode}. It expires in 10 minutes.`,
+        body: `${otpCode} is your Director Compass web login code. It expires in 10 minutes. You can also engage with me here by calling this number and speaking with David Beatty’s avatar. Give me a call.`,
         from: process.env.TWILIO_PHONE_NUMBER,
         to: outboundPhone
       });
@@ -1346,14 +1376,12 @@ async function triggerWebWelcomeSMS(userId, phone, name) {
       const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
       const firstName = (name && name !== 'null') ? name.split(' ')[0] : "there";
       
-      const msg1 = `Hi ${firstName}, it's David AI! I saw you were just using the web portal. Did you know you can also text or call this exact number anytime? My memory is shared across all platforms, so we can always pick up right where we left off.`;
-      const msg2 = `Tap the link below to save my contact card to your phone:\n\nhttps://dtxebwectbvnksuxpclc.supabase.co/storage/v1/object/public/assets/Board%20Governance%20AI.vcf`;
+      const msg1 = `Hi ${firstName}, it's your Director Compass! I saw you were just using the web portal. Did you know you can also text or call this exact number anytime? My memory is shared across all platforms, so we can always pick up right where we left off. Save this number and try it out!`;
       
       await twilioClient.messages.create({ body: msg1, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
-      await twilioClient.messages.create({ body: msg2, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
       
       await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
-      console.log(`✅ Sent Web-First Welcome SMS & vCard to ${outboundPhone}`);
+      console.log(`✅ Sent Web-First Welcome SMS to ${outboundPhone}`);
     }
   } catch (e) { 
     console.error("Web Welcome SMS Error:", e.message);
