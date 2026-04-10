@@ -95,7 +95,10 @@
                     </select>
                     <button onclick="openSelectedUserProfile()" style="white-space: nowrap; background: #4caf50;">👤 View Profile</button>
                 </div>
-                <button onclick="getHistory()">📥 View Full Chat History</button>
+                <div style="display: flex; gap: 10px;">
+                    <button onclick="getHistory()">📥 View Full Chat History</button>
+                    <button onclick="adminDeleteUser()" style="background: #ff4c4c; border: 1px solid #d32f2f;">🗑️ Delete User & All Data</button>
+                </div>
                 
                 <div id="historyOutput" style="display:none; margin-top: 15px;">
                     <div style="margin-bottom: 10px; text-align: right;">
@@ -632,6 +635,39 @@
         }
     }
 
+
+    async function adminDeleteUser() {
+        const secret = document.getElementById('secretKey').value;
+        const select = document.getElementById('userSelect');
+        const userId = select.value;
+        const nameText = select.options[select.selectedIndex]?.innerText;
+
+        if (!userId) { await uiAlert("Notice", "Select a valid user first."); return; }
+
+        // Trigger the red "Danger" style modal
+        const confirmed = await uiConfirm("🚨 DANGER ZONE 🚨", `Are you ABSOLUTELY sure you want to permanently delete ${nameText}? This will wipe ALL their messages, documents, memories, and profile data from the database. This CANNOT be undone!`, true);
+        if (!confirmed) return;
+
+        try {
+            const res = await fetch('/api/admin/delete-user', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ secret, userId })
+            });
+            const data = await res.json();
+            
+            if (data.success) {
+                showStatus(data.message);
+                document.getElementById('historyOutput').style.display = 'none'; // Hide history if open
+                await loadUsers(); // Refresh the list so the user instantly vanishes
+            } else {
+                showStatus(data.error, true);
+            }
+        } catch (e) {
+            showStatus("Network error connecting to server.", true);
+        }
+    }
+    
     async function getHistory() {
         const secret = document.getElementById('secretKey').value;
         const select = document.getElementById('userSelect');

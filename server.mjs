@@ -2071,6 +2071,55 @@ app.post("/api/admin/add-user", adminLimiter, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// 🚨 FULL USER WIPE (Danger Zone)
+app.delete("/api/admin/delete-user", adminLimiter, async (req, res) => {
+  try {
+    const { secret, userId } = req.body;
+    
+    if (secret !== process.env.SUPABASE_SECRET_KEY) {
+      return res.status(401).json({ error: "Unauthorized admin access." });
+    }
+    if (!userId) return res.status(400).json({ error: "Missing User ID." });
+
+    console.log(`🚨 ADMIN ACTION: Initiating full wipe for User ID: ${userId}`);
+
+    // 1. Get all conversation IDs to clear messages
+    const { data: convos } = await supabase.from("conversations").select("id").eq("user_id", userId);
+    const convoIds = (convos || []).map(c => c.id);
+
+    // 2. Waterfall Delete (Bottom-up to prevent Foreign Key blocks)
+    
+    // A. Delete messages inside conversations
+    if (convoIds.length > 0) {
+        await supabase.from("messages").delete().in("conversation_id", convoIds);
+    }
+
+    // B. Delete all relational data pointing to user_id
+    // (We wrap these in Promise.all so they process simultaneously for speed)
+    await Promise.all([
+        supabase.from("conversation_summaries").delete().eq("user_id", userId),
+        supabase.from("user_document_chunks").delete().eq("user_id", userId),
+        supabase.from("user_documents").delete().eq("user_id", userId),
+        supabase.from("error_logs").delete().eq("user_id", userId),
+        supabase.from("call_sessions").delete().eq("user_id", userId) // Based on your screenshot
+    ]);
+
+    // C. Delete the conversations themselves
+    await supabase.from("conversations").delete().eq("user_id", userId);
+
+    // D. Finally, delete the core User record
+    const { error: userErr } = await supabase.from("users").delete().eq("id", userId);
+    
+    if (userErr) throw userErr;
+
+    console.log(`✅ Full wipe successful for User ID: ${userId}`);
+    res.json({ success: true, message: "User and all associated data completely deleted." });
+
+  } catch (err) {
+    console.error("❌ Delete User Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Broadcast bulk SMS messages
 app.post("/api/admin/send-bulk-sms", async (req, res) => {
