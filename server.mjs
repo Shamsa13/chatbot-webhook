@@ -47,6 +47,7 @@ const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 //   THE EVENT RAM CACHE
 let activeEventsCache = [];
+const processedTranscripts = new Set(); // 🛑 Anti-Duplicate Lock
 
 // --- 🛡️ RATE LIMITERS ---
 
@@ -1097,11 +1098,22 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
   console.log("🔔 POST-CALL WEBHOOK HIT AT:", new Date().toISOString());
   console.log("═══════════════════════════════════════════");
 
-  res.status(200).json({ ok: true, received: true });
-
   try {
     const body = req.body || {};
     const data = body.data || body;
+    const transcriptId = data?.conversation_id || body?.conversation_id;
+
+    // 🛑 ANTI-DUPLICATE SHIELD: Instantly kill duplicate webhook blasts
+    if (transcriptId) {
+        if (processedTranscripts.has(transcriptId)) {
+            console.log("♻️ BLOCKED DUPLICATE WEBHOOK for transcript:", transcriptId);
+            return res.status(200).json({ ok: true, duplicate: true }); // Acknowledge so ElevenLabs stops retrying
+        }
+        processedTranscripts.add(transcriptId);
+        setTimeout(() => processedTranscripts.delete(transcriptId), 60 * 60 * 1000); // Clear from RAM after 1 hour
+    }
+
+    res.status(200).json({ ok: true, received: true });
     
     const phoneRaw = data?.metadata?.caller_id || data?.user_id || data?.caller_id || data?.phone_number || data?.from || body?.caller_id || body?.callerId || body?.from || body?.From || data?.call?.from || data?.conversation_initiation_metadata?.caller_id || "";
     const phone = normalizeFrom(String(phoneRaw).trim());
@@ -1169,12 +1181,14 @@ updateMemorySummary({
         }
     }
 
-    // 🏷️ 5. Auto-generate a title for this specific call
+    // 🏷️ 5. Auto-generate a title & topic for this specific call
+    let callTopic = "our recent conversation"; // Fallback in case OpenAI is slow
     openai.chat.completions.create({
         model: "gpt-4o-mini",
-        messages: [{ role: "system", content: "Generate a short 3-to-4 word title for this phone call transcript. No quotes." }, { role: "user", content: transcriptText }]
+        messages: [{ role: "system", content: "Generate a short 2-to-5 word description of the core topic of this phone call. It must flow naturally in this sentence: 'Great chat about [YOUR OUTPUT]'. Do not use quotes or punctuation. Example outputs: the CEO succession plan, Q3 financials, the upcoming board vote." }, { role: "user", content: transcriptText }]
     }).then(async (titleResp) => {
-        const smartTitle = titleResp.choices[0].message.content.trim();
+        callTopic = titleResp.choices[0].message.content.trim().toLowerCase();
+        const smartTitle = callTopic.charAt(0).toUpperCase() + callTopic.slice(1); // Capitalizes the first letter for the UI
         await supabase.from("conversations").update({ title: smartTitle }).eq("id", callConversationId);
     }).catch(e => console.log("Call title error", e));
 
@@ -1227,46 +1241,20 @@ updateMemorySummary({
             console.log(`📨 Sending delayed transcript offer to ${outboundPhone}...`);
             const { data: latestUser } = await supabase.from("users").select("full_name, email").eq("id", userId).single();
 
-            const isValidData = (val) => val && val.toLowerCase() !== 'null' && val.toLowerCase() !== 'unknown' && val.trim() !== '';
+           const isValidData = (val) => val && val.toLowerCase() !== 'null' && val.toLowerCase() !== 'unknown' && val.trim() !== '';
             const hasName = isValidData(latestUser?.full_name);
             const hasEmail = isValidData(latestUser?.email) && latestUser?.email.includes('@');
             const firstName = hasName ? latestUser.full_name.split(' ')[0] : "";
+            
+            // Adds a comma only if they have a name saved (e.g., "Great chat about finances, John.")
+            const nameInsert = firstName ? `, ${firstName}` : ""; 
 
-// Build dynamic, human-like arrays so David doesn't repeat himself
-            const optsNameEmail = [
-                `Hi ${firstName}, great chat. Want me to email you the transcript? Just reply 'Yes'.`,
-                `${firstName}, would you like a copy of our transcript sent to your email? Reply 'Yes' if so!`,
-                `Enjoyed our call, ${firstName}. Reply 'Yes' and I'll shoot the transcript over to your email.`
-            ];
-            const optsNameNoEmail = [
-                `Hi ${firstName}, great chat. What email address should I send the transcript to?`,
-                `${firstName}, I've got your transcript ready. What's the best email to send it to?`,
-                `Enjoyed the call, ${firstName}. Where should I email your transcript?`
-            ];
-            const optsNoNameEmail = [
-                `Great chat. Want me to email the transcript to ${latestUser.email}? Just reply 'Yes'.`,
-                `Would you like a copy of our transcript sent to ${latestUser.email}? Reply 'Yes' if so!`,
-                `I've got your transcript ready. Reply 'Yes' and I'll send it to ${latestUser.email}.`
-            ];
-            const optsNoNameNoEmail = [
-                `Great chat. If you want a copy of the transcript, just reply with your name and email!`,
-                `I have your transcript ready. Reply with your name and email if you'd like me to send it over.`,
-                `Thanks for the call. If you need the transcript, just text me your name and email address.`
-            ];
-
-            const pickRandom = (arr) => arr[Math.floor(Math.random() * arr.length)];
-
-           let textMessage;
-            if (hasName && hasEmail) {
-              textMessage = pickRandom(optsNameEmail);
-            } else if (hasName && !hasEmail) {
-              textMessage = pickRandom(optsNameNoEmail);
-            } else if (!hasName && hasEmail) {
-              textMessage = pickRandom(optsNoNameEmail);
+            let textMessage;
+            if (hasEmail) {
+                textMessage = `Great chat about ${callTopic}${nameInsert}. Want me to email you the transcript? Just reply 'Yes'.`;
             } else {
-              textMessage = pickRandom(optsNoNameNoEmail);
+                textMessage = `Great chat about ${callTopic}${nameInsert}. What's the best email address to send the transcript to?`;
             }
-
             await twilioClient.messages.create({ body: textMessage, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
             const smsConversationId = await getOrCreateConversation(userId, "sms");
             await supabase.from("messages").insert({ conversation_id: smsConversationId, channel: "sms", direction: "agent", text: textMessage, provider: "twilio" });
