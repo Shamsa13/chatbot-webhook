@@ -1192,7 +1192,6 @@ updateMemorySummary({
         await supabase.from("conversations").update({ title: smartTitle }).eq("id", callConversationId);
     }).catch(e => console.log("Call title error", e));
 
-    const transcriptId = data?.conversation_id || body?.conversation_id;
     console.log("🆔 Transcript/Conversation ID:", transcriptId || "NONE");
 
     const { data: userRecord } = await supabase.from("users").select("full_name, email, transcript_data, event_pitch_counts").eq("id", userId).single();
