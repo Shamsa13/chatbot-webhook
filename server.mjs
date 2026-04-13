@@ -731,11 +731,11 @@ async function sendCallWelcomeSMS(userId, rawPhone) {
 async function smartProfileExtractor(userId, currentText, historyMsgs, currentFullName) {
   const nameKeywords = /\b(my name is|i am|i'm|im |call me|spelled|name is|change my name|nickname|this is|speaking|addressed as|preferred name|called)\b/i;
   // 🚨 THE FIX: Treat "Guest" or "Unknown" as a missing name so the AI actually tries to extract the real one
-  const isNameMissing = !currentName || 
-                         currentName.toLowerCase() === 'null' || 
-                         currentName.toLowerCase() === 'guest' || 
-                         currentName.toLowerCase() === 'unknown' || 
-                         currentName === '';
+  const isNameMissing = !currentFullName || 
+                       currentFullName.toLowerCase() === 'null' || 
+                       currentFullName.toLowerCase() === 'guest' || 
+                       currentFullName.toLowerCase() === 'unknown' || 
+                       currentFullName === '';
   const mentionedName = nameKeywords.test(currentText);
 
   if (!isNameMissing && !mentionedName) {
@@ -796,7 +796,11 @@ async function webProfileExtractor(userId, userText, currentName, currentEmail) 
 
   const hasEmailInText = emailRegex.test(userText);
   const hasNameTrigger = nameKeywords.test(userText);
-  const isNameMissing = !currentName || currentName.toLowerCase() === 'null' || currentName === '';
+  // ✅ FIX: Added 'guest' check so David knows to replace the Guest placeholder with your real name
+const isNameMissing = !currentName || 
+                       currentName.toLowerCase() === 'null' || 
+                       currentName.toLowerCase() === 'guest' || 
+                       currentName === '';
 
   // 🚨 THE FIX: If the name is missing, we ALWAYS run the AI extractor 
   // even if there are no "keywords", just in case they simply typed their name.
@@ -914,7 +918,10 @@ app.post("/twilio/sms", async (req, res) => {
         firstTimeSmsRule = `\n\nCRITICAL RULE: This is the user's FIRST TIME texting you. You MUST seamlessly blend this concept into your response: "Hi, I’m your Director Compass ai assistant. I’m an AI of David Beatty’s voice built so you can personally leverage his 50 years of governance expertise and become a boardroom leader. I’m always available by phone or chat. Save this number and try it out by giving me a call." Do NOT be robotic about it—answer their question naturally, but ensure those key introductory points are warmly included.`;
 
         // Mark it as sent so he never introduces himself again!
-        supabase.from("users").update({ vcard_sent: true }).eq("id", userId).catch(e => console.error("Flag update error:", e));
+        (async () => {
+  const { error } = await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
+  if (error) console.error("Flag update error:", error);
+})();
     } else {
         // NEW: If they HAVE texted before, strictly forbid robotic greetings
         firstTimeSmsRule = `\n\nCRITICAL BEHAVIOR RULE: DO NOT greet the user, DO NOT re-introduce yourself, and DO NOT state your purpose (e.g., "Hi, I am here to assist..."). Just naturally and directly answer their text message and continue the conversation.`;
