@@ -727,54 +727,54 @@ async function sendCallWelcomeSMS(userId, rawPhone) {
   }
 }
 
-//   SMART PROFILE EXTRACTOR for SMS/Voice
 async function smartProfileExtractor(userId, currentText, historyMsgs, currentFullName) {
-  const nameKeywords = /\b(my name is|i am|i'm|im |call me|spelled|name is|change my name|nickname|this is|speaking|addressed as|preferred name|called)\b/i;
-  // 🚨 THE FIX: Treat "Guest" or "Unknown" as a missing name so the AI actually tries to extract the real one
-  const isNameMissing = !currentFullName || 
-                       currentFullName.toLowerCase() === 'null' || 
-                       currentFullName.toLowerCase() === 'guest' || 
-                       currentFullName.toLowerCase() === 'unknown' || 
-                       currentFullName === '';
-  const mentionedName = nameKeywords.test(currentText);
+  try {  // <-- ADD THIS
+    const nameKeywords = /\b(my name is|i am|i'm|im |call me|spelled|name is|change my name|nickname|this is|speaking|addressed as|preferred name|called)\b/i;
+    const isNameMissing = !currentFullName || 
+                         currentFullName.toLowerCase() === 'null' || 
+                         currentFullName.toLowerCase() === 'guest' || 
+                         currentFullName.toLowerCase() === 'unknown' || 
+                         currentFullName === '';
+    const mentionedName = nameKeywords.test(currentText);
 
-  if (!isNameMissing && !mentionedName) {
-    console.log(`💤 Smart Extractor skipped. No name triggers found.`);
-    return; 
-  }
+    if (!isNameMissing && !mentionedName) {
+      console.log(`💤 Smart Extractor skipped. No name triggers found.`);
+      return; 
+    }
 
-  const recentContext = historyMsgs && historyMsgs.length > 0 
-      ? historyMsgs.slice(-4).map(m => `${m.role}: ${m.content}`).join("\n") 
-      : "No recent history.";
+    const recentContext = historyMsgs && historyMsgs.length > 0 
+        ? historyMsgs.slice(-4).map(m => `${m.role}: ${m.content}`).join("\n") 
+        : "No recent history.";
 
-  const prompt = `You are a highly accurate profile extraction AI.
-  Current Saved Name: "${currentFullName || 'null'}"
+    const prompt = `You are a highly accurate profile extraction AI.
+    Current Saved Name: "${currentFullName || 'null'}"
 
-  Recent Conversation Context:
-  ${recentContext}
-  
-  Input Text (Might be a short text message, or a full multi-speaker call transcript):
-  "${currentText}"
+    Recent Conversation Context:
+    ${recentContext}
+    
+    Input Text (Might be a short text message, or a full multi-speaker call transcript):
+    "${currentText}"
 
-  Task: Identify if the user stated their own name, corrected their name's spelling, or requested a new nickname.
-  
-  CRITICAL RULES:
-  1. ONLY extract the name if it is UNDENIABLY the user referring to themselves.
-  2. If reading a call transcript, look specifically at what the "USER" says.
-  3. DO NOT extract names of external people, the agent's name, or subjects being discussed.
-  4. If there is no clear, definitive name for the user, return null.
+    Task: Identify if the user stated their own name, corrected their name's spelling, or requested a new nickname.
+    
+    CRITICAL RULES:
+    1. ONLY extract the name if it is UNDENIABLY the user referring to themselves.
+    2. If reading a call transcript, look specifically at what the "USER" says.
+    3. DO NOT extract names of external people, the agent's name, or subjects being discussed.
+    4. If there is no clear, definitive name for the user, return null.
 
-  Respond STRICTLY in JSON format:
-  { "extracted_name": "The exact first name, full name, or nickname, or null" }`;
+    Respond STRICTLY in JSON format:
+    { "extracted_name": "The exact first name, full name, or nickname, or null" }`;
 
-  try {
     const resp = await openai.chat.completions.create({
       model: OPENAI_MEMORY_MODEL, 
       messages: [{ role: "system", content: prompt }],
       response_format: { type: "json_object" }
     });
 
-    const result = JSON.parse(resp.choices[0].message.content);
+    let rawContent = resp.choices[0].message.content || "{}";
+    rawContent = rawContent.replace(/```json/g, "").replace(/```/g, "").trim();
+    const result = JSON.parse(rawContent);
     console.log(`🧠 Smart Name Extractor Decided:`, result, `| Current DB Name: ${currentFullName}`);
     
     const extracted = result.extracted_name ? result.extracted_name.trim() : null;
@@ -784,8 +784,8 @@ async function smartProfileExtractor(userId, currentText, historyMsgs, currentFu
       await supabase.from("users").update({ full_name: extracted }).eq("id", userId);
       console.log(`👤 Smart Extractor: Updated user ${userId} name to: ${extracted}`);
     }
-  } catch (e) {
-    console.error("Smart Profile Extractor Error:", e);
+  } catch (e) {  // <-- ADD THIS
+    console.error("Smart Profile Extractor internal error:", e.message || e);
   }
 }
 
@@ -903,7 +903,7 @@ app.post("/twilio/sms", async (req, res) => {
       getRecentConversationSummaries(userId, 5) // <-- ADDED HERE
     ]);
 
-    smartProfileExtractor(userId, body, history, userDb?.full_name).catch(e => console.error("Extractor Error:", e));    
+    smartProfileExtractor(userId, body, history, userDb?.full_name || null).catch(e => console.error("Extractor Error:", e.message || e));  
     let pitchCounts = userDb?.event_pitch_counts || {};
     
     const hasValidSmsEmail = userDb?.email && userDb.email.toLowerCase() !== 'null' && userDb.email.trim() !== '';
@@ -918,10 +918,10 @@ app.post("/twilio/sms", async (req, res) => {
         firstTimeSmsRule = `\n\nCRITICAL RULE: This is the user's FIRST TIME texting you. You MUST seamlessly blend this concept into your response: "Hi, I’m your Director Compass ai assistant. I’m an AI of David Beatty’s voice built so you can personally leverage his 50 years of governance expertise and become a boardroom leader. I’m always available by phone or chat. Save this number and try it out by giving me a call." Do NOT be robotic about it—answer their question naturally, but ensure those key introductory points are warmly included.`;
 
         // Mark it as sent so he never introduces himself again!
-        (async () => {
-  const { error } = await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
-  if (error) console.error("Flag update error:", error);
-})();
+       // Mark it as sent so he never introduces himself again!
+      supabase.from("users").update({ vcard_sent: true }).eq("id", userId).then(({ error }) => {
+        if (error) console.error("Flag update error:", error);
+      });
     } else {
         // NEW: If they HAVE texted before, strictly forbid robotic greetings
         firstTimeSmsRule = `\n\nCRITICAL BEHAVIOR RULE: DO NOT greet the user, DO NOT re-introduce yourself, and DO NOT state your purpose (e.g., "Hi, I am here to assist..."). Just naturally and directly answer their text message and continue the conversation.`;
