@@ -1839,21 +1839,27 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
       }).catch(e => console.error("Web Intent error:", e));
     }
 
-   // Progressive Auto-Naming (Only runs on the very first user message)
-    if (webHistory.length === 1) {
-      // 🧠 FIX: Feed it both the user's question AND the bot's actual reply!
-      const miniTranscript = `User: ${message}\nAgent: ${reply}`;
+// ==========================================
+    // Progressive Auto-Naming (Runs on the 1st and 4th message)
+    // ==========================================
+    const userMsgCount = webHistory.filter(m => m.role === 'user').length;
+
+    if (userMsgCount === 1 || userMsgCount === 4) {
+      // Feed it the last few messages PLUS the bot's final reply so it understands the true topic
+      const recentContext = webHistory.slice(-5).map(m => `${m.role === 'assistant' ? 'Agent' : 'User'}: ${m.content}`).join("\n");
+      const miniTranscript = `${recentContext}\nAgent: ${reply}`;
       
       openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [{ 
           role: "system", 
-          content: "You are a specialized summarization AI. Read the short conversation below and generate a very short, 2-to-4 word title that captures the core TOPIC of the agent's answer. Do NOT just repeat the user's question. Do NOT use quotation marks, markdown, bolding, or asterisks. Return ONLY the raw text. Example: Board Governance Dispute" 
+          content: "You are a specialized summarization AI. Read the short conversation below and generate a very short, 2-to-4 word title that captures the core TOPIC of the conversation. Do NOT just repeat the user's question. Do NOT use quotation marks, markdown, bolding, or asterisks. Return ONLY the raw text. Example: Board Governance Dispute" 
         }, { role: "user", content: miniTranscript }]
       }).then(async (titleResp) => {
         // Strip out any asterisks or quotes just in case the AI disobeys
         const smartTitle = titleResp.choices[0].message.content.replace(/[*"']/g, '').trim();
         await supabase.from("conversations").update({ title: smartTitle }).eq("id", conversationId);
+        console.log(`✏️ Auto-Renamed Chat (Msg Count: ${userMsgCount}) ->`, smartTitle);
       }).catch(e => console.error("Auto-title error:", e));
     }
       
