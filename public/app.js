@@ -1423,11 +1423,15 @@ async function syncUserIdentity() {
         const data = await res.json();
         
         // Only update if a valid name is found in the database
-        if (data.success && data.profile && data.profile.full_name && data.profile.full_name !== 'null') {
-            userName = data.profile.full_name.split(' ')[0];
-            document.querySelectorAll('.login-tag-text').forEach(el => el.innerText = "Logged in as " + userName);
-            localStorage.setItem('david_userName', userName);
-            console.log("✅ UI Identity Synced:", userName);
+        // 🚨 FIX: Only update the UI if the name is NOT "Guest" and NOT "null"
+        if (data.success && data.profile && data.profile.full_name) {
+            const dbName = data.profile.full_name.toLowerCase();
+            if (dbName !== 'null' && dbName !== 'guest' && dbName !== 'unknown' && dbName !== '') {
+                userName = data.profile.full_name.split(' ')[0];
+                document.querySelectorAll('.login-tag-text').forEach(el => el.innerText = "Logged in as " + userName);
+                localStorage.setItem('david_userName', userName);
+                console.log("✅ UI Identity Synced:", userName);
+            }
         }
     } catch (e) { 
         console.log("Identity sync failed:", e); 

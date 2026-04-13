@@ -730,7 +730,12 @@ async function sendCallWelcomeSMS(userId, rawPhone) {
 //   SMART PROFILE EXTRACTOR for SMS/Voice
 async function smartProfileExtractor(userId, currentText, historyMsgs, currentFullName) {
   const nameKeywords = /\b(my name is|i am|i'm|im |call me|spelled|name is|change my name|nickname|this is|speaking|addressed as|preferred name|called)\b/i;
-  const isNameMissing = !currentFullName || currentFullName.toLowerCase() === 'null';
+  // 🚨 THE FIX: Treat "Guest" or "Unknown" as a missing name so the AI actually tries to extract the real one
+  const isNameMissing = !currentName || 
+                         currentName.toLowerCase() === 'null' || 
+                         currentName.toLowerCase() === 'guest' || 
+                         currentName.toLowerCase() === 'unknown' || 
+                         currentName === '';
   const mentionedName = nameKeywords.test(currentText);
 
   if (!isNameMissing && !mentionedName) {
@@ -801,11 +806,10 @@ async function webProfileExtractor(userId, userText, currentName, currentEmail) 
   Current saved name: "${currentName || 'null'}", Current saved email: "${currentEmail || 'null'}"
   
   RULES:
-  1. If the user provides THEIR OWN name (even if they just typed a single word like "John" in response to being asked), extract it into "full_name".
+  1. If the user provides THEIR OWN name (e.g. "I'm Shamsa" or just "Shamsa" in response to your intro), extract it into "full_name".
   2. If the user provides THEIR OWN email address, extract it into "email".
-  3. If the user is just mentioning someone else's name, return null.
-  
-  Respond STRICTLY in JSON: {"full_name": "name or null", "email": "email or null"}`;
+  3. If "full_name" is currently "Guest", you MUST extract any name provided to replace it.
+  4. Respond STRICTLY in JSON: {"full_name": "name or null", "email": "email or null"}`;
 
   try {
     const resp = await openai.chat.completions.create({
