@@ -1717,25 +1717,35 @@ app.post("/api/chat", apiLimiter, authenticateToken, async (req, res) => {
     } catch (e) { console.error("Doc processing failed:", e); }
 
    // Build system prompt
+    // Build system prompt
     const cfg = await getBotConfig();
+    
+    // 🏷️ Check if the user has a name saved in the database
+    const hasName = user.full_name && user.full_name.toLowerCase() !== 'null' && user.full_name.trim() !== '';
+
+    // 🧠 Dynamic Name Rule: Only ask if we don't know who they are yet
+    const nameRule = !hasName 
+        ? `INTRO PROTOCOL: You do not know this user's name yet. For your very first response in this specific chat, briefly introduce yourself as David Beatty's AI advisor and ask them what you should call them. Once they provide a name, acknowledge it warmly.`
+        : `INTRO PROTOCOL: You already know the user is named ${user.full_name}. DO NOT ask for their name. DO NOT re-introduce yourself. Jump straight into the advice.`;
 
     const systemPrompt = `${cfg.systemPrompt}
 
 PLATFORM: You are currently chatting with ${user.full_name || 'the user'} on the WEB chat interface. 
-FORMATTING RULE: This web interface FULLY supports rich Markdown formatting. You MUST use **bold** for headers, bullet points for lists, > blockquotes for direct document excerpts, and | tables | for comparisons to make your answers highly readable and professional.
+FORMATTING RULE: This web interface FULLY supports rich Markdown formatting. You MUST use **bold** for headers, bullet points for lists, > blockquotes for direct document excerpts, and | tables | for comparisons.
 
-STRICT DOMAIN EXPERTISE RULE: You are David Beatty, a world-class board governance advisor. You are NOT a general-purpose AI chatbot. If the user asks you to write code (like JavaScript or Python), solve math equations, or discuss topics entirely unrelated to corporate governance, business strategy, or executive leadership, you MUST politely decline and steer the conversation back to the boardroom. 
+STRICT DOMAIN EXPERTISE RULE: You are David Beatty, a world-class board governance advisor. If the user asks for code, math, or unrelated topics, politely steer them back to the boardroom.
 
-CRITICAL BEHAVIOR RULE: If there is CHAT HISTORY provided below (whether from an older web chat or a saved voice call), DO NOT greet the user again, DO NOT re-introduce yourself, and DO NOT state your purpose (e.g., "Hi, I am here to assist..."). Just naturally and directly answer the prompt and continue the conversation.
+${nameRule}
 
-CROSS-PLATFORM MEMORY (from past SMS, calls, and web chats):
+CRITICAL BEHAVIOR RULE: If there is CHAT HISTORY provided below, DO NOT greet the user again or state your purpose. Just continue the conversation naturally.
+
+CROSS-PLATFORM MEMORY:
 ${user.memory_summary || "No past memory yet."}
 
 RECENT CONVERSATION HISTORY:
 ${recentSummaries || "No recent conversations."}
 
 USER PROFILE: Name: ${user.full_name || 'Unknown'}, Email: ${user.email || 'Unknown'}
-IMPORTANT: If the user asks to update their name or email, confirm you've noted the change.
 
 ${davidContext ? "KNOWLEDGE BASE:\n" + davidContext : ""}
 ${privateDocContext}
