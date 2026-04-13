@@ -1237,30 +1237,39 @@ updateMemorySummary({
         const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
         const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
         
-        setTimeout(async () => {
+       setTimeout(async () => {
           try {
-            console.log(`📨 Sending delayed transcript offer to ${outboundPhone}...`);
-            const { data: latestUser } = await supabase.from("users").select("full_name, email").eq("id", userId).single();
+            console.log(`📨 Sending delayed transcript/welcome offer to ${outboundPhone}...`);
+            const { data: latestUser } = await supabase.from("users").select("full_name, email, vcard_sent").eq("id", userId).single();
 
-           const isValidData = (val) => val && val.toLowerCase() !== 'null' && val.toLowerCase() !== 'unknown' && val.trim() !== '';
+            const isValidData = (val) => val && val.toLowerCase() !== 'null' && val.toLowerCase() !== 'unknown' && val.trim() !== '';
             const hasName = isValidData(latestUser?.full_name);
             const hasEmail = isValidData(latestUser?.email) && latestUser?.email.includes('@');
             const firstName = hasName ? latestUser.full_name.split(' ')[0] : "";
-            
-            // Adds a comma only if they have a name saved (e.g., "Great chat about finances, John.")
             const nameInsert = firstName ? `, ${firstName}` : ""; 
 
+            // 🌟 CALL-FIRST ONBOARDING: Check if this is their first interaction ever
+            let welcomePrefix = "";
+            if (!latestUser?.vcard_sent) {
+                welcomePrefix = "Hi, Welcome to Director Compass! I’m an AI of David Beatty’s voice, and my memory is shared across phone and text. Save this number! ";
+                
+                // Mark them as onboarded so they never get an intro again
+                await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
+            }
+
+            // Blend the intro with the specific call topic!
             let textMessage;
             if (hasEmail) {
-                textMessage = `Great chat about ${callTopic}${nameInsert}. Want me to email you the transcript? Just reply 'Yes'.`;
+                textMessage = `${welcomePrefix}Great chat about ${callTopic}${nameInsert}. Want me to email you the transcript? Just reply 'Yes'.`;
             } else {
-                textMessage = `Great chat about ${callTopic}${nameInsert}. What's the best email address to send the transcript to?`;
+                textMessage = `${welcomePrefix}Great chat about ${callTopic}${nameInsert}. What's the best email address to send the transcript to?`;
             }
+            
             await twilioClient.messages.create({ body: textMessage, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
             const smsConversationId = await getOrCreateConversation(userId, "sms");
             await supabase.from("messages").insert({ conversation_id: smsConversationId, channel: "sms", direction: "agent", text: textMessage, provider: "twilio" });
             
-            console.log("✅ Transcript offer SMS sent successfully!");
+            console.log("✅ Blended Transcript/Welcome SMS sent successfully!");
           } catch (smsErr) {
             console.error("❌ Failed to send delayed SMS:", smsErr.message);
           }
@@ -1300,7 +1309,7 @@ app.post("/api/auth/send-code", otpLimiter, async (req, res) => {
       const outboundPhone = cleanPhone.startsWith("+") ? cleanPhone : "+" + cleanPhone;
       
       await twilioClient.messages.create({
-        body: `${otpCode} is your Director Compass web login code. It expires in 10 minutes. You can also engage with me here by calling this number and speaking with David Beatty’s avatar. Give me a call.`,
+        body: `${otpCode} is your Director Compass web login code. It expires in 10 minutes.`,
         from: process.env.TWILIO_PHONE_NUMBER,
         to: outboundPhone
       });
