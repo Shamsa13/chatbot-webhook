@@ -784,25 +784,26 @@ async function smartProfileExtractor(userId, currentText, historyMsgs, currentFu
   }
 }
 
-// 🌐 WEB PROFILE EXTRACTOR: Handles both name AND email updates from web chat
+// 🌐 WEB PROFILE EXTRACTOR: Updated to be more aggressive when name is missing
 async function webProfileExtractor(userId, userText, currentName, currentEmail) {
   const emailRegex = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}/;
   const nameKeywords = /\b(my name is|call me|i'm|im |change my name|nickname|name to)\b/i;
 
   const hasEmailInText = emailRegex.test(userText);
   const hasNameTrigger = nameKeywords.test(userText);
-  const isNameMissing = !currentName || currentName.toLowerCase() === 'null';
+  const isNameMissing = !currentName || currentName.toLowerCase() === 'null' || currentName === '';
 
+  // 🚨 THE FIX: If the name is missing, we ALWAYS run the AI extractor 
+  // even if there are no "keywords", just in case they simply typed their name.
   if (!hasEmailInText && !hasNameTrigger && !isNameMissing) return;
 
   const prompt = `Extract profile updates from this user message: "${userText}"
   Current saved name: "${currentName || 'null'}", Current saved email: "${currentEmail || 'null'}"
   
   RULES:
-  1. If the user provides THEIR OWN email address (e.g., "my email is x@y.com", "send it to x@y.com", "use x@y.com"), extract it into "email".
-  2. If the user asks to be called something new (e.g., "call me Dave", "my name is Sarah"), extract it into "full_name".
-  3. If the user is just mentioning someone else's name or email in discussion, return null for those fields.
-  4. Return null for any field that should NOT change.
+  1. If the user provides THEIR OWN name (even if they just typed a single word like "John" in response to being asked), extract it into "full_name".
+  2. If the user provides THEIR OWN email address, extract it into "email".
+  3. If the user is just mentioning someone else's name, return null.
   
   Respond STRICTLY in JSON: {"full_name": "name or null", "email": "email or null"}`;
 
@@ -828,7 +829,7 @@ async function webProfileExtractor(userId, userText, currentName, currentEmail) 
 
     if (Object.keys(updates).length > 0) {
       await supabase.from("users").update(updates).eq("id", userId);
-      console.log(`🌐 Web Profile Updated for ${userId}:`, updates);
+      console.log(`✅ Web Profile Auto-Saved for ${userId}:`, updates);
     }
   } catch (e) {
     console.error("Web Profile Extractor Error:", e.message);
