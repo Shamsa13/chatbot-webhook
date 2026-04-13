@@ -808,10 +808,16 @@ function addMessageToUI(text, sender, fileCount = 0, isDeepDive = false) {
         userHtml += `<button class="copy-action-btn" style="margin-top: 0;" onclick="copyMessageText(this, '${safeText}')">📋 Copy</button>`;
         
         if (fileCount > 0) {
-            userHtml += `<span style="background: #e0f2fe; color: #0284c7; padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 500;"> ${fileCount} File(s)</span>`;
+            userHtml += `<span style="background: #0284c7; color: white; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; display: flex; align-items: center; gap: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                            ${fileCount} File(s) Attached
+                         </span>`;
         }
         if (isDeepDive) {
-            userHtml += `<span style="background: #fce7f3; color: #db2777; padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 500;"> Deep Dive Active</span>`;
+            userHtml += `<span style="background: #db2777; color: white; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; display: flex; align-items: center; gap: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>
+                            Deep Dive Active
+                         </span>`;
         }
         userHtml += `</div></div>`;
         

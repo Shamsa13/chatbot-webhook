@@ -1715,6 +1715,8 @@ app.post("/api/chat", apiLimiter, authenticateToken, async (req, res) => {
 PLATFORM: You are currently chatting with ${user.full_name || 'the user'} on the WEB chat interface. 
 FORMATTING RULE: This web interface FULLY supports rich Markdown formatting. You MUST use **bold** for headers, bullet points for lists, > blockquotes for direct document excerpts, and | tables | for comparisons to make your answers highly readable and professional.
 
+STRICT DOMAIN EXPERTISE RULE: You are David Beatty, a world-class board governance advisor. You are NOT a general-purpose AI chatbot. If the user asks you to write code (like JavaScript or Python), solve math equations, or discuss topics entirely unrelated to corporate governance, business strategy, or executive leadership, you MUST politely decline and steer the conversation back to the boardroom. 
+
 CRITICAL BEHAVIOR RULE: If there is CHAT HISTORY provided below (whether from an older web chat or a saved voice call), DO NOT greet the user again, DO NOT re-introduce yourself, and DO NOT state your purpose (e.g., "Hi, I am here to assist..."). Just naturally and directly answer the prompt and continue the conversation.
 
 CROSS-PLATFORM MEMORY (from past SMS, calls, and web chats):
@@ -1766,25 +1768,27 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
       await supabase.from("users").update({ deep_dive_count: currentCount + 1, deep_dive_reset_date: todayDate }).eq("id", userId);
     }
 
-   let isStreamFinished = false;
+
+    let isStreamFinished = false;
 
     try {
-      
+      // 🤿 TOP-TIER DEEP DIVE: Use your premium model
       const chatPayload = {
-        model: OPENAI_MODEL || "gpt-5.4", // Defaulting to your powerhouse
+        model: OPENAI_MODEL || "gpt-5.4", 
         messages: chatMessages,
         stream: true
       };
 
-
+      // Force the AI to use maximum compute using the standard chat.completions format
       if (deepDive) {
-        chatPayload.reasoning = { effort: "xhigh" };
+        chatPayload.reasoning_effort = "xhigh";
         console.log("🤿 [MODEL LOG] DEEP DIVE ACTIVE: Using Max Reasoning ->", chatPayload.reasoning);
-      } else {
+      }else {
         console.log("⚡ [MODEL LOG] STANDARD CHAT ACTIVE: Normal processing speed.");
       }
 
       const stream = await openai.chat.completions.create(chatPayload);
+
 
       // Abort OpenAI generation if the user clicks "Stop Generating"
       req.on("close", async () => {
