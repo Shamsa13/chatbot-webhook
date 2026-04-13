@@ -284,6 +284,7 @@ async function initDashboard() {
     document.getElementById('chatMessages').innerHTML = '<div class="empty-state" id="emptyState"><h3>Loading...</h3></div>';
     loadUserDocuments();
     await loadConversationList(true);
+    syncUserIdentity();
 }
 
 // ==========================================
@@ -410,8 +411,17 @@ async function loadConversationList(autoSelect = false) {
         
         renderConversations();
 
-        if (autoSelect && !currentConversationId && globalConversations.length > 0) {
-            await switchChat(globalConversations[0].id);
+        // 🧠 SMART BOOT LOGIC
+        if (autoSelect && !currentConversationId) {
+            if (globalConversations.length > 0) {
+                // If they have history, open the most recent chat
+                await switchChat(globalConversations[0].id);
+            } else {
+                // 🆕 FIX: If they are a brand new user with 0 chats, 
+                // trigger a new chat instantly so they never see "Loading..."
+                console.log("✨ New user detected. Auto-starting first conversation...");
+                await startNewChat();
+            }
         }
 
         // --- NEW: Keep Workspace Header in Sync ---
@@ -768,6 +778,7 @@ async function sendMessage() {
         // Swap Stop back to Send
         sendBtn.style.display = 'block';
         stopBtn.style.display = 'none';
+        setTimeout(syncUserIdentity, 2000);
     }
 }
 
@@ -1401,5 +1412,25 @@ function setupDragAndDrop(containerSelector, overlayId) {
             uploadDocument(file); // Pass the dropped file directly to our uploader
         }
     });
+}
+
+// 🆕 Syncs the UI with your Supabase profile name
+async function syncUserIdentity() {
+    try {
+        const res = await fetch('/api/web/profile', {
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` }
+        });
+        const data = await res.json();
+        
+        // Only update if a valid name is found in the database
+        if (data.success && data.profile && data.profile.full_name && data.profile.full_name !== 'null') {
+            userName = data.profile.full_name.split(' ')[0];
+            document.querySelectorAll('.login-tag-text').forEach(el => el.innerText = "Logged in as " + userName);
+            localStorage.setItem('david_userName', userName);
+            console.log("✅ UI Identity Synced:", userName);
+        }
+    } catch (e) { 
+        console.log("Identity sync failed:", e); 
+    }
 }
 
