@@ -904,16 +904,18 @@ app.post("/twilio/sms", async (req, res) => {
       : `CRITICAL RULE: The user DOES NOT have an email on file. If they ask for a transcript or document, YOU MUST reply: "I'd be happy to send that! What is the best email address to send it to?"`;
 
     // We inject recentSummaries into the profileContext so David actually reads them
-    let firstTimeSmsRule = "";
+   let firstTimeSmsRule = "";
     if (!userDb?.vcard_sent) {
         firstTimeSmsRule = `\n\nCRITICAL RULE: This is the user's FIRST TIME texting you. You MUST seamlessly blend this concept into your response: "Hi, I’m your Director Compass ai assistant. I’m an AI of David Beatty’s voice built so you can personally leverage his 50 years of governance expertise and become a boardroom leader. I’m always available by phone or chat. Save this number and try it out by giving me a call." Do NOT be robotic about it—answer their question naturally, but ensure those key introductory points are warmly included.`;
 
         // Mark it as sent so he never introduces himself again!
         supabase.from("users").update({ vcard_sent: true }).eq("id", userId).catch(e => console.error("Flag update error:", e));
+    } else {
+        // NEW: If they HAVE texted before, strictly forbid robotic greetings
+        firstTimeSmsRule = `\n\nCRITICAL BEHAVIOR RULE: DO NOT greet the user, DO NOT re-introduce yourself, and DO NOT state your purpose (e.g., "Hi, I am here to assist..."). Just naturally and directly answer their text message and continue the conversation.`;
     }
 
     const profileContext = `User Profile Data - Name: ${userDb?.full_name || 'Unknown'}.\n\nRECENT CONVERSATIONS:\n${recentSummaries}\n\n${smsTranscriptRule}${firstTimeSmsRule}`;
-
     
     const formattedHistoryForOpenAI = history.map(h => ({ role: h.role, content: `(${h.channel}) ${h.content}` }));
     
@@ -1413,8 +1415,49 @@ app.post("/api/web/logout", authenticateToken, async (req, res) => {
 });
 
 // ==========================================
-// WEB CONVERSATION MANAGEMENT
+// 3-DAY WEB UPSELL SWEEPER
 // ==========================================
+// Runs once an hour to find users who texted/called 3 days ago but haven't used the web portal
+setInterval(async () => {
+  try {
+    // Calculate exactly 3 days ago
+    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    
+    // Look for users older than 3 days who haven't received the upsell, and have NEVER logged into the web portal
+    const { data: upsellUsers, error } = await supabase
+      .from("users")
+      .select("id, phone, full_name")
+      .eq("web_upsell_sent", false)
+      .is("last_web_login", null) 
+      .not("phone", "is", null)
+      .lt("created_at", threeDaysAgo);
+      
+    if (upsellUsers && upsellUsers.length > 0) {
+      if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
+        const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+        
+        for (const u of upsellUsers) {
+          const firstName = (u.full_name && u.full_name !== 'null') ? u.full_name.split(' ')[0] : "there";
+          
+          const msg = `Hi ${firstName}, Director Compass here! Just a quick reminder that your digital advisor also comes with a secure web portal. You can log in online to view our past voice conversations, securely upload board documents, and use the "Deep Dive" tool to analyze PDFs. Check it out anytime at www.boardchair.com`;
+          
+          const outboundPhone = u.phone.startsWith("+") ? u.phone : "+" + u.phone;
+          
+          try {
+            await twilioClient.messages.create({ body: msg, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
+            await supabase.from("users").update({ web_upsell_sent: true }).eq("id", u.id);
+            console.log(`✅ Sent 3-Day Web Upsell SMS to ${outboundPhone}`);
+          } catch (e) {
+            console.error("Upsell SMS failed for " + outboundPhone, e.message);
+            if (e.code === 21211) await supabase.from("users").update({ web_upsell_sent: true }).eq("id", u.id);
+          }
+        }
+      }
+    }
+  } catch(e) { 
+    console.error("3-Day Sweeper error:", e); 
+  }
+}, 60 * 60 * 1000); // Wakes up to check once every hour
 
 // ==========================================
 // WEB CONVERSATION MANAGEMENT
@@ -1726,11 +1769,22 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
    let isStreamFinished = false;
 
     try {
-      const stream = await openai.chat.completions.create({
-        model: OPENAI_MODEL || "gpt-4o",
+      
+      const chatPayload = {
+        model: OPENAI_MODEL || "gpt-5.4", // Defaulting to your powerhouse
         messages: chatMessages,
         stream: true
-      });
+      };
+
+
+      if (deepDive) {
+        chatPayload.reasoning = { effort: "xhigh" };
+        console.log("🤿 [MODEL LOG] DEEP DIVE ACTIVE: Using Max Reasoning ->", chatPayload.reasoning);
+      } else {
+        console.log("⚡ [MODEL LOG] STANDARD CHAT ACTIVE: Normal processing speed.");
+      }
+
+      const stream = await openai.chat.completions.create(chatPayload);
 
       // Abort OpenAI generation if the user clicks "Stop Generating"
       req.on("close", async () => {
@@ -1782,17 +1836,18 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
       }).catch(e => console.error("Web Intent error:", e));
     }
 
-    // Progressive Auto-Naming
-    if (webHistory.length === 1 || webHistory.length === 3) {
+   // Progressive Auto-Naming (Only runs on the very first user message)
+    if (webHistory.length === 1) {
       const miniTranscript = webHistory.map(m => `${m.role}: ${m.content}`).join("\n");
       openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [{ 
           role: "system", 
-          content: "You are a summarization AI. Read the short conversation below and generate a very short, 3-to-4 word title for this chat. Do NOT use quotation marks. Example: Board Governance Dispute" 
+          content: "You are a summarization AI. Read the short conversation below and generate a very short, 3-to-4 word title for this chat. Do NOT use quotation marks. Do NOT use markdown, bolding, or asterisks. Return ONLY the raw text. Example: Board Governance Dispute" 
         }, { role: "user", content: miniTranscript }]
       }).then(async (titleResp) => {
-        const smartTitle = titleResp.choices[0].message.content.trim();
+        // Strip out any asterisks just in case the AI disobeys
+        const smartTitle = titleResp.choices[0].message.content.replace(/\*/g, '').trim();
         await supabase.from("conversations").update({ title: smartTitle }).eq("id", conversationId);
       }).catch(e => console.error("Auto-title error:", e));
     }
