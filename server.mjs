@@ -1778,10 +1778,10 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
         stream: true
       };
 
-      // Safely apply max reasoning and log it clearly
+      // 🤿 FIX: Use the flat string 'reasoning_effort' to safely pass 'high'
       if (deepDive) {
-        chatPayload.reasoning = { effort: "xhigh" };
-        console.log("🤿 [MODEL LOG] DEEP DIVE ACTIVE: Max Reasoning (xhigh) triggered!");
+        chatPayload.reasoning_effort = "xhigh"; 
+        console.log("🤿 [MODEL LOG] DEEP DIVE ACTIVE: Max Reasoning (high) triggered!");
       } else {
         console.log("⚡ [MODEL LOG] STANDARD CHAT ACTIVE: Normal processing speed.");
       }
