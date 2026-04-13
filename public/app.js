@@ -4,11 +4,13 @@
 let globalUserId = "";
 let userPhone = "";
 let globalConversations = [];
+let previousConversations = []; // 🆕 Add this so the UI remembers old titles
 let currentConversationId = null;
 let userName = "Guest";
 let isLoadingChat = false;
 let chatAbortController = null;
 const botAvatar = "/avatar.jpg";
+
 
 const phoneInputField = document.querySelector("#phoneInput");
 const phoneInput = window.intlTelInput(phoneInputField, {
@@ -360,18 +362,23 @@ function renderConversations() {
         
         item.onclick = () => switchChat(c.id);
         
-        const previewText = c.preview || "New conversation";
-        const safePreview = escapeHtml(previewText);
+ // 🆕 Check if the title just changed to trigger the animation
+        const prevChat = previousConversations.find(p => p.id === c.id);
+        const isRenamed = prevChat && prevChat.preview !== c.preview;
+        const titleClass = isRenamed ? "chat-item-title chat-title-animated" : "chat-item-title";
+
+        // 🚨 FIX: Re-declare the safe variables so the UI doesn't crash!
+        const safePreview = escapeHtml(c.preview || "New conversation");
         const escapedForFunc = safePreview.replace(/'/g, "\\'").replace(/"/g, "&quot;");
-        
+
         // 📞 Add a high-visibility badge if it was a voice call!
-        const displayTitle = c.channel === 'call' 
+        const displayTitle = c.channel === 'call'
             ? `<span style="background: rgba(76, 175, 80, 0.2); color: #4caf50; padding: 2px 6px; border-radius: 4px; font-size: 10px; margin-right: 6px; font-weight: 600; letter-spacing: 0.5px; vertical-align: middle;">📞 VOICE</span><span style="vertical-align: middle;">${safePreview}</span>` 
             : safePreview;
 
         item.innerHTML = `
             <div class="chat-item-text" onclick="switchChat('${c.id}')">
-                <div class="chat-item-title">${displayTitle}</div>
+                <div class="${titleClass}">${displayTitle}</div>
                 <span class="chat-item-date">${dateStr}</span>
             </div>
             <div class="chat-actions-container">
@@ -394,7 +401,8 @@ async function loadConversationList(autoSelect = false) {
         });
         const data = await res.json();
         
-        if (data.success && data.conversations) {
+       if (data.success && data.conversations) {
+            previousConversations = [...globalConversations]; // 🆕 Save the old state
             globalConversations = data.conversations;
         } else {
             globalConversations = [];
@@ -655,9 +663,9 @@ async function sendMessage() {
             signal: chatAbortController.signal // Hooks into our Stop button!
         });
 
-        removeTyping();
+      removeTyping();
 
-        // 1. Create an empty message bubble for the Bot
+        // 1. Create message bubble with a Thinking Timer
         const msgContainer = document.getElementById('chatMessages');
         const wrapper = document.createElement('div');
         wrapper.classList.add('message-wrapper', 'wrapper-bot');
@@ -665,20 +673,37 @@ async function sendMessage() {
         wrapper.innerHTML = `
             <img src="${botAvatar}" class="avatar" alt="AI" />
             <div style="display: flex; flex-direction: column; align-items: flex-start; max-width: 100%;">
-                <div class="message msg-bot streaming-text"></div>
+                <div class="message msg-bot streaming-text">
+                    <div class="thinking-ui">
+                        <svg class="think-spinner" viewBox="0 0 50 50"><circle cx="25" cy="25" r="20" fill="none" stroke-width="5"></circle></svg>
+                        <span>Thinking... <span class="think-timer">0.0s</span></span>
+                    </div>
+                </div>
                 <button class="copy-action-btn" style="display:none;">📋 Copy Text</button>
             </div>
         `;
         msgContainer.appendChild(wrapper);
+        msgContainer.scrollTop = msgContainer.scrollHeight;
         
         const textNode = wrapper.querySelector('.streaming-text');
+        const timerNode = wrapper.querySelector('.think-timer');
         const copyBtn = wrapper.querySelector('.copy-action-btn');
         let fullReply = "";
+        
+        // Start the live stopwatch
+        let startTime = Date.now();
+        let thinkInterval = setInterval(() => {
+            if (timerNode) {
+                timerNode.innerText = ((Date.now() - startTime) / 1000).toFixed(1) + 's';
+            }
+        }, 100);
 
         // 2. Read the Stream Data
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let done = false;
+        let firstTextArrived = false;
+        let finalThinkTime = "";
 
         while (!done) {
             const { value, done: readerDone } = await reader.read();
@@ -696,10 +721,23 @@ async function sendMessage() {
                             if (data.type === 'meta' && data.conversationId) {
                                 currentConversationId = data.conversationId;
                             } else if (data.type === 'chunk') {
+                                
+                                // The moment the AI spits out its first real word, stop the timer!
+                                if (!firstTextArrived) {
+                                    firstTextArrived = true;
+                                    clearInterval(thinkInterval);
+                                    finalThinkTime = ((Date.now() - startTime) / 1000).toFixed(1);
+                                }
+                                
                                 fullReply += data.text;
-                                textNode.innerHTML = marked.parse(fullReply); // Renders Markdown in real-time!
+                                
+                                // Parse the markdown, but lock the "Thought for X.Xs" badge to the top
+                                const renderedMarkdown = marked.parse(fullReply);
+                                textNode.innerHTML = `<div class="thought-badge">Thought for ${finalThinkTime}s</div>` + renderedMarkdown;
                                 msgContainer.scrollTop = msgContainer.scrollHeight;
+                                
                             } else if (data.type === 'error') {
+                                clearInterval(thinkInterval);
                                 fullReply += "\n\n**Error:** " + data.error;
                                 textNode.innerHTML = marked.parse(fullReply);
                             }
@@ -709,11 +747,14 @@ async function sendMessage() {
             }
             if (readerDone) done = true;
         }
+        clearInterval(thinkInterval); // Failsafe cleanup
 
-        // 3. Finalize
+       // 3. Finalize
         copyBtn.style.display = 'block';
         copyBtn.onclick = function() { copyMessageText(this, encodeURIComponent(fullReply)); };
-        loadConversationList(false);
+        
+        // 🧠 FIX: Wait 1.5 seconds to let the server finish generating the title before refreshing UI
+        setTimeout(() => loadConversationList(false), 1500);
 
     } catch (error) {
         if (error.name === 'AbortError') {

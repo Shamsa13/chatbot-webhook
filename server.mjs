@@ -1772,18 +1772,17 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
     let isStreamFinished = false;
 
     try {
-      // 🤿 TOP-TIER DEEP DIVE: Use your premium model
       const chatPayload = {
         model: OPENAI_MODEL || "gpt-5.4", 
         messages: chatMessages,
         stream: true
       };
 
-      // Force the AI to use maximum compute using the standard chat.completions format
+      // Safely apply max reasoning and log it clearly
       if (deepDive) {
-        chatPayload.reasoning_effort = "xhigh";
-        console.log("🤿 [MODEL LOG] DEEP DIVE ACTIVE: Using Max Reasoning ->", chatPayload.reasoning);
-      }else {
+        chatPayload.reasoning = { effort: "xhigh" };
+        console.log("🤿 [MODEL LOG] DEEP DIVE ACTIVE: Max Reasoning (xhigh) triggered!");
+      } else {
         console.log("⚡ [MODEL LOG] STANDARD CHAT ACTIVE: Normal processing speed.");
       }
 
@@ -1842,16 +1841,18 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
 
    // Progressive Auto-Naming (Only runs on the very first user message)
     if (webHistory.length === 1) {
-      const miniTranscript = webHistory.map(m => `${m.role}: ${m.content}`).join("\n");
+      // 🧠 FIX: Feed it both the user's question AND the bot's actual reply!
+      const miniTranscript = `User: ${message}\nAgent: ${reply}`;
+      
       openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [{ 
           role: "system", 
-          content: "You are a summarization AI. Read the short conversation below and generate a very short, 3-to-4 word title for this chat. Do NOT use quotation marks. Do NOT use markdown, bolding, or asterisks. Return ONLY the raw text. Example: Board Governance Dispute" 
+          content: "You are a specialized summarization AI. Read the short conversation below and generate a very short, 2-to-4 word title that captures the core TOPIC of the agent's answer. Do NOT just repeat the user's question. Do NOT use quotation marks, markdown, bolding, or asterisks. Return ONLY the raw text. Example: Board Governance Dispute" 
         }, { role: "user", content: miniTranscript }]
       }).then(async (titleResp) => {
-        // Strip out any asterisks just in case the AI disobeys
-        const smartTitle = titleResp.choices[0].message.content.replace(/\*/g, '').trim();
+        // Strip out any asterisks or quotes just in case the AI disobeys
+        const smartTitle = titleResp.choices[0].message.content.replace(/[*"']/g, '').trim();
         await supabase.from("conversations").update({ title: smartTitle }).eq("id", conversationId);
       }).catch(e => console.error("Auto-title error:", e));
     }

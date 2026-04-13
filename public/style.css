@@ -635,3 +635,61 @@ input:checked + .slider:before { transform: translateX(18px); }
     .right-subtitle { font-family: 'Inter', sans-serif; font-size: 13px; color: #9ba4c4; margin-top: 6px; font-weight: 500; display: flex; align-items: center; text-transform: none; letter-spacing: normal; }
 }
 
+/* =========================================
+   CHAT RENAME ANIMATION
+   ========================================= */
+@keyframes renamePop {
+    0% { opacity: 0; transform: translateY(-4px); color: #b89374; }
+    100% { opacity: 1; transform: translateY(0); color: inherit; }
+}
+
+.chat-title-animated {
+    animation: renamePop 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+/* =========================================
+   THINKING INDICATOR & TIMER
+   ========================================= */
+.thinking-ui {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #888;
+    font-size: 13px;
+    font-family: 'Inter', sans-serif;
+    font-weight: 500;
+    padding: 4px;
+}
+.think-spinner {
+    animation: rotate 2s linear infinite;
+    width: 16px;
+    height: 16px;
+}
+.think-spinner circle {
+    stroke: #b89374;
+    stroke-linecap: round;
+    animation: dash 1.5s ease-in-out infinite;
+}
+.think-timer {
+    font-family: monospace;
+    font-weight: 600;
+    color: #b89374;
+}
+.thought-badge {
+    display: inline-block;
+    background: #f4f5f7;
+    color: #666;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    border: 1px solid #eaeaea;
+}
+@keyframes rotate { 100% { transform: rotate(360deg); } }
+@keyframes dash {
+    0% { stroke-dasharray: 1, 150; stroke-dashoffset: 0; }
+    50% { stroke-dasharray: 90, 150; stroke-dashoffset: -35; }
+    100% { stroke-dasharray: 90, 150; stroke-dashoffset: -124; }
+}
+
