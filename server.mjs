@@ -703,29 +703,7 @@ async function processSmsIntent(userId, userText) {
   }
 }
 
-// NEW: Sends a standalone welcome SMS ONLY if their first interaction is a Voice Call
-async function sendCallWelcomeSMS(userId, rawPhone) {
-  console.log(`[Welcome SMS Tracer] 1. Started check for: ${rawPhone}`);
-  try {
-    const { data: user, error } = await supabase.from("users").select("vcard_sent").eq("id", userId).single();
-    if (error && error.code !== 'PGRST116') return;
 
-    if (!user?.vcard_sent) {
-      if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
-        const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-        const isWhatsApp = rawPhone.startsWith("whatsapp:");
-        const outboundPhone = rawPhone; 
-        const fromNumber = isWhatsApp ? `whatsapp:${process.env.TWILIO_PHONE_NUMBER}` : process.env.TWILIO_PHONE_NUMBER;
-        
-        const introMsg = "Hi, Welcome to your Director Compass. I’m an AI of David Beatty’s voice built so you can personally leverage his 50 years of governance expertise and become a boardroom leader. I’m always available by phone or chat. Save this number and try it out by giving me a call.";
-        await twilioClient.messages.create({ body: introMsg, from: fromNumber, to: outboundPhone });
-        await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
-      }
-    }
-  } catch (err) {
-    console.error("[Welcome SMS Tracer] ⚠️ CRASH:", err.message);
-  }
-}
 
 async function smartProfileExtractor(userId, currentText, historyMsgs, currentFullName) {
   try {  // <-- ADD THIS
@@ -1149,7 +1127,7 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
     const userId = await getOrCreateUser(phone);
     console.log("👤 User ID:", userId);
 
-    sendCallWelcomeSMS(userId, phone).catch(e => console.error("Welcome SMS error", e));
+    
 
     const oldSummary = await getUserMemorySummary(userId);
     // Update compressed memory facts
@@ -1198,9 +1176,8 @@ updateMemorySummary({
     // 🏷️ 5. Auto-generate a title & topic for this specific call
     let callTopic = "our recent conversation"; // Fallback in case OpenAI is slow
     openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [{ role: "system", content: "Generate a short 2-to-5 word description of the core topic of this phone call. It must flow naturally in this sentence: 'Great chat about [YOUR OUTPUT]'. Do not use quotes or punctuation. Example outputs: the CEO succession plan, Q3 financials, the upcoming board vote." }, { role: "user", content: transcriptText }]
-    }).then(async (titleResp) => {
+    model: "gpt-4o-mini",
+    messages: [{ role: "system", content: "Generate a short 2-to-5 word topic label for this phone call. Return ONLY the topic itself — no full sentences, no 'Great chat about', no quotes, no punctuation. Examples: the CEO succession plan, Q3 financials, the upcoming board vote, director compensation." }, { role: "user", content: transcriptText }]    }).then(async (titleResp) => {
         callTopic = titleResp.choices[0].message.content.trim().toLowerCase();
         const smartTitle = callTopic.charAt(0).toUpperCase() + callTopic.slice(1); // Capitalizes the first letter for the UI
         await supabase.from("conversations").update({ title: smartTitle }).eq("id", callConversationId);
@@ -1210,7 +1187,15 @@ updateMemorySummary({
 
     const { data: userRecord } = await supabase.from("users").select("full_name, email, transcript_data, event_pitch_counts").eq("id", userId).single();
 
-    smartProfileExtractor(userId, transcriptText, [], userRecord?.full_name).catch(e => console.error(e));
+    // 🚨 THE FIX: ElevenLabs' auto-summary often deletes names. We must feed the extractor the RAW dialogue!
+    let rawCallDialogue = "";
+    const turnsForExtraction = data?.transcript || data?.messages || data?.turns || [];
+    if (Array.isArray(turnsForExtraction)) {
+        rawCallDialogue = turnsForExtraction.map(t => `${(t.role || t.speaker || "USER").toUpperCase()}: ${t.message || t.text || t.content || ""}`).join("\n");
+    }
+    const textForExtractor = rawCallDialogue || transcriptText;
+
+    smartProfileExtractor(userId, textForExtractor, [], userRecord?.full_name).catch(e => console.error(e));
 
     let transcriptDataArray = userRecord?.transcript_data || [];
     if (!Array.isArray(transcriptDataArray)) transcriptDataArray = [];
@@ -1250,42 +1235,58 @@ updateMemorySummary({
         const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
         
        setTimeout(async () => {
-          try {
-            console.log(`📨 Sending delayed transcript/welcome offer to ${outboundPhone}...`);
-            const { data: latestUser } = await supabase.from("users").select("full_name, email, vcard_sent").eq("id", userId).single();
+  try {
+    console.log(`📨 Sending delayed post-call SMS to ${outboundPhone}...`);
+    const { data: latestUser } = await supabase.from("users").select("full_name, email, vcard_sent").eq("id", userId).single();
 
-            const isValidData = (val) => val && val.toLowerCase() !== 'null' && val.toLowerCase() !== 'unknown' && val.trim() !== '';
-            const hasName = isValidData(latestUser?.full_name);
-            const hasEmail = isValidData(latestUser?.email) && latestUser?.email.includes('@');
-            const firstName = hasName ? latestUser.full_name.split(' ')[0] : "";
-            const nameInsert = firstName ? `, ${firstName}` : ""; 
+    const isValidData = (val) => val && val.toLowerCase() !== 'null' && val.toLowerCase() !== 'unknown' && val.trim() !== '';
+    const hasName = isValidData(latestUser?.full_name);
+    const hasEmail = isValidData(latestUser?.email) && latestUser?.email.includes('@');
+    const firstName = hasName ? latestUser.full_name.split(' ')[0] : "";
 
-            // 🌟 CALL-FIRST ONBOARDING: Check if this is their first interaction ever
-            let welcomePrefix = "";
-            if (!latestUser?.vcard_sent) {
-                welcomePrefix = "Hi, Welcome to Director Compass! I’m an AI of David Beatty’s voice, and my memory is shared across phone and text. Save this number! ";
-                
-                // Mark them as onboarded so they never get an intro again
-                await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
-            }
+    const smsConversationId = await getOrCreateConversation(userId, "sms");
 
-            // Blend the intro with the specific call topic!
-            let textMessage;
-            if (hasEmail) {
-                textMessage = `${welcomePrefix}Great chat about ${callTopic}${nameInsert}. Want me to email you the transcript? Just reply 'Yes'.`;
-            } else {
-                textMessage = `${welcomePrefix}Great chat about ${callTopic}${nameInsert}. What's the best email address to send the transcript to?`;
-            }
-            
-            await twilioClient.messages.create({ body: textMessage, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
-            const smsConversationId = await getOrCreateConversation(userId, "sms");
-            await supabase.from("messages").insert({ conversation_id: smsConversationId, channel: "sms", direction: "agent", text: textMessage, provider: "twilio" });
-            
-            console.log("✅ Blended Transcript/Welcome SMS sent successfully!");
-          } catch (smsErr) {
-            console.error("❌ Failed to send delayed SMS:", smsErr.message);
-          }
-        }, 120000);
+    // --- MESSAGE 1: Welcome intro (only if first-time user) ---
+    if (!latestUser?.vcard_sent) {
+      let introMsg;
+      if (hasName) {
+        introMsg = `Hi ${firstName}, I'm your Director Compass ai assistant. I'm an AI of David Beatty's voice built so you can personally leverage his 50 years of governance expertise and become a boardroom leader. I'm always available by phone or chat, so save this number and try it out by sending me a text.`;
+      } else {
+        introMsg = `Hi, I'm your Director Compass ai assistant. I'm an AI of David Beatty's voice built so you can personally leverage his 50 years of governance expertise and become a boardroom leader. I'm always available by phone or chat, so save this number and try it out by sending me a text. Before we dive in, what should I call you?`;
+      }
+
+      await twilioClient.messages.create({ body: introMsg, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
+      await supabase.from("messages").insert({ conversation_id: smsConversationId, channel: "sms", direction: "agent", text: introMsg, provider: "twilio" });
+      await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
+      console.log("✅ Call-first welcome SMS sent!");
+
+      // Small delay so the intro arrives before the transcript offer
+      await new Promise(resolve => setTimeout(resolve, 3000));
+    }
+
+    // --- MESSAGE 2: Transcript offer ---
+    // Capitalize first letter and clean up the topic
+    let cleanTopic = (callTopic || "our conversation").trim().toLowerCase();
+    // Remove any accidental "great chat about" that the AI might have baked in
+    cleanTopic = cleanTopic.replace(/^great chat about\s*/i, "").trim();
+    if (!cleanTopic) cleanTopic = "our conversation";
+
+    const nameInsert = firstName ? `, ${firstName}` : "";
+    let transcriptMsg;
+    if (hasEmail) {
+      transcriptMsg = `Great chat about ${cleanTopic}${nameInsert}. Want me to email you the transcript? Just reply 'Yes'.`;
+    } else {
+      transcriptMsg = `Great chat about ${cleanTopic}${nameInsert}. What's the best email address to send the transcript to?`;
+    }
+
+    await twilioClient.messages.create({ body: transcriptMsg, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
+    await supabase.from("messages").insert({ conversation_id: smsConversationId, channel: "sms", direction: "agent", text: transcriptMsg, provider: "twilio" });
+
+    console.log("✅ Transcript offer SMS sent!");
+  } catch (smsErr) {
+    console.error("❌ Failed to send delayed SMS:", smsErr.message);
+  }
+}, 120000);
       }
     }
 
