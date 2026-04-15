@@ -2646,7 +2646,7 @@ app.post("/api/admin/heygen-start", adminLimiter, async (req, res) => {
     const tokenPayload = JSON.stringify({ 
         mode: "FULL",
         avatar_id: avatarId,
-        llm_configuration_id: "bb2678f6-7ae2-4575-8246-2293933419aa", 
+        llm_configuration_id: "cfe8b280-690d-4f95-8c9d-3981f3195269", 
         avatar_persona: { 
             language: "en",
             voice_id: "1d8f979e-f0ef-4ac6-bac4-b94a110a5423",
