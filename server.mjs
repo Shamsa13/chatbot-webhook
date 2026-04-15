@@ -2641,10 +2641,17 @@ app.post("/api/admin/heygen-token", adminLimiter, async (req, res) => {
   try {
     const { secret, heygenKey } = req.body;
     if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
+    
     const response = await fetch("https://api.liveavatar.com/v1/sessions/token", {
       method: "POST", headers: { "x-api-key": heygenKey, "Content-Type": "application/json" }
     });
     const data = await response.json();
+    
+    // ✅ FIX: Catch HeyGen's actual error message instead of crashing
+    if (!data.data || !data.data.token) {
+        return res.status(400).json({ error: data.message || "Invalid HeyGen API Key." });
+    }
+    
     res.json({ token: data.data.token });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

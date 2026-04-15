@@ -963,9 +963,9 @@ async function showUserDeepDive(userId) {
                 body: JSON.stringify({ secret, heygenKey })
             });
             const data = await res.json();
+            
+            if (data.error) throw new Error(data.error); // ✅ FIX: Added this line to show the exact error!
             if (!data.token) throw new Error("Failed to authenticate with HeyGen");
-
-            statusEl.innerText = "Initializing SDK...";
 
    
             
