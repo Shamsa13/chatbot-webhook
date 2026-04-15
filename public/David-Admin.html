@@ -943,7 +943,7 @@ async function showUserDeepDive(userId) {
 
     let activeAvatarSession = null;
 
-    async function connectAvatarPrototype() {
+   async function connectAvatarPrototype() {
         const heygenKey = document.getElementById('heygenKeyInput').value.trim();
         const avatarId = document.getElementById('avatarIdInput').value.trim();
         const secret = document.getElementById('secretKey').value.trim();
@@ -964,10 +964,11 @@ async function showUserDeepDive(userId) {
             });
             const data = await res.json();
             
-            if (data.error) throw new Error(data.error); // ✅ FIX: Added this line to show the exact error!
+            // Show exact error if server caught one
+            if (data.error) throw new Error(data.error); 
             if (!data.token) throw new Error("Failed to authenticate with HeyGen");
 
-   
+            statusEl.innerText = "Initializing SDK...";
             
             // 2. Dynamically Import the HeyGen SDK
             const { LiveAvatarSession } = await import('https://esm.sh/@heygen/liveavatar-web-sdk');
@@ -986,11 +987,10 @@ async function showUserDeepDive(userId) {
             });
 
             // 3. Start Session & Link Context!
-            // ✅ FIX: Injected your brand new Webhook Config ID so HeyGen uses Full Mode
-await activeAvatarSession.start({ 
-    avatarId: avatarId,
-    llmConfigurationId: "bb2678f6-7ae2-4575-8246-2293933419aa"
-});
+            await activeAvatarSession.start({ 
+                avatarId: avatarId,
+                llmConfigurationId: "bb2678f6-7ae2-4575-8246-2293933419aa" // Your exact Webhook ID!
+            });
             
             const sessionId = activeAvatarSession.sessionInfo?.session_id || activeAvatarSession.sessionId;
             const userId = document.getElementById('avatarUserSelect').value;
@@ -1009,10 +1009,10 @@ await activeAvatarSession.start({
         } catch (e) {
             statusEl.innerText = "Connection Failed";
             btn.innerText = "🔌 Connect Stream";
-            uiAlert("Connection Failed", e.message);
+            uiAlert("Connection Error", e.message); // Will spit out exact failure reason
         }
     }
-
+  
     async function sendToAvatar() {
         const textInput = document.getElementById('avatarTextInput');
         const text = textInput.value.trim();

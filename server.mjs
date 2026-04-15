@@ -2642,17 +2642,30 @@ app.post("/api/admin/heygen-token", adminLimiter, async (req, res) => {
     const { secret, heygenKey } = req.body;
     if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
     
-    const response = await fetch("https://api.liveavatar.com/v1/sessions/token", {
-      method: "POST", headers: { "x-api-key": heygenKey, "Content-Type": "application/json" }
+    // Some strict API updates require an empty JSON body
+    let response = await fetch("https://api.liveavatar.com/v1/sessions/token", {
+      method: "POST", headers: { "x-api-key": heygenKey, "Content-Type": "application/json" },
+      body: JSON.stringify({})
     });
+
+    // If HeyGen renamed the endpoint URL, gracefully catch it and try the new one
+    if (response.status === 404) {
+      response = await fetch("https://api.liveavatar.com/v1/sessions/create-session-token", {
+        method: "POST", headers: { "x-api-key": heygenKey, "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+    }
+
     const data = await response.json();
     
-    // ✅ FIX: Catch HeyGen's actual error message instead of crashing
-    if (!data.data || !data.data.token) {
-        return res.status(400).json({ error: data.message || "Invalid HeyGen API Key." });
+    // Extract token regardless of how HeyGen nests their JSON
+    const sessionToken = data.data?.token || data.token;
+    
+    if (!sessionToken) {
+        return res.status(400).json({ error: data.message || JSON.stringify(data) });
     }
     
-    res.json({ token: data.data.token });
+    res.json({ token: sessionToken });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
