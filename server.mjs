@@ -2690,14 +2690,16 @@ app.post("/api/admin/link-avatar-session", adminLimiter, (req, res) => {
   res.json({ success: true });
 });
 
-// ✅ FIX: HeyGen strictly expects an OpenAI-formatted endpoint
+// ✅ FIX: HeyGen strictly expects an OpenAI-formatted endpoint, WITH STREAMING SUPPORT!
 app.post("/api/openai-proxy/chat/completions", async (req, res) => {
   try {
-    const { messages } = req.body;
+    const { messages, stream } = req.body;
     
     // Extract what the user just said to the microphone
     const userMsg = messages && messages.length > 0 ? messages[messages.length - 1].content : "";
     if (!userMsg) return res.json({ choices: [{ message: { role: "assistant", content: "" } }] });
+
+    console.log(`🗣️ HeyGen heard: "${userMsg}"`);
 
     // Feed it to your existing Supabase Knowledge Base & GPT-5.4 logic
     const cfg = await getBotConfig();
@@ -2713,8 +2715,29 @@ app.post("/api/openai-proxy/chat/completions", async (req, res) => {
     });
 
     const cleanSpeech = replyText.replace(/[*_#]/g, '').replace(/\[.*?\]/g, '').trim();
+    console.log(`🤖 David replying: "${cleanSpeech}"`);
 
-    // ✅ FIX: Return the exact JSON structure OpenAI (and HeyGen) demands
+    // ✅ FIX: If HeyGen asks for a stream, we MUST send Server-Sent Events (SSE)
+    if (stream) {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+
+        // Send the text in the exact streaming format HeyGen expects
+        const streamPayload = {
+          id: "chatcmpl-" + Date.now(),
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model: "gpt-5.4",
+          choices: [{ index: 0, delta: { content: cleanSpeech }, finish_reason: null }]
+        };
+
+        res.write(`data: ${JSON.stringify(streamPayload)}\n\n`);
+        res.write(`data: [DONE]\n\n`);
+        return res.end();
+    }
+
+    // Fallback for non-streaming requests
     res.json({
       id: "chatcmpl-" + Date.now(),
       object: "chat.completion",
@@ -2729,7 +2752,12 @@ app.post("/api/openai-proxy/chat/completions", async (req, res) => {
 
   } catch (e) {
     console.error("OpenAI Proxy Error:", e);
-    res.json({ choices: [{ message: { role: "assistant", content: "I am having trouble connecting to my brain." } }] });
+    if (req.body.stream) {
+        res.write(`data: [DONE]\n\n`);
+        res.end();
+    } else {
+        res.json({ choices: [{ message: { role: "assistant", content: "I am having trouble connecting to my brain." } }] });
+    }
   }
 });
 
