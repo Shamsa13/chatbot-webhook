@@ -986,7 +986,11 @@ async function showUserDeepDive(userId) {
             });
 
             // 3. Start Session & Link Context!
-            await activeAvatarSession.start({ avatarId: avatarId });
+            // ✅ FIX: Injected your brand new Webhook Config ID so HeyGen uses Full Mode
+await activeAvatarSession.start({ 
+    avatarId: avatarId,
+    llmConfigurationId: "bb2678f6-7ae2-4575-8246-2293933419aa"
+});
             
             const sessionId = activeAvatarSession.sessionInfo?.session_id || activeAvatarSession.sessionId;
             const userId = document.getElementById('avatarUserSelect').value;
