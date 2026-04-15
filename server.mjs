@@ -2649,7 +2649,8 @@ app.post("/api/admin/heygen-start", adminLimiter, async (req, res) => {
         llm_configuration_id: "bb2678f6-7ae2-4575-8246-2293933419aa", 
         avatar_persona: { 
             language: "en",
-            voice_id: "1d8f979e-f0ef-4ac6-bac4-b94a110a5423" // ✅ FIX: Added your specific Voice ID!
+            voice_id: "1d8f979e-f0ef-4ac6-bac4-b94a110a5423",
+            context_id: "a006a765-a108-47d5-b6d0-adaf195abdb9" // Unlocks the microphone!
         }
     });
 
