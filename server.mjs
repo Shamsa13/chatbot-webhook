@@ -2636,39 +2636,44 @@ app.put("/api/web/conversations/:id/title", authenticateToken, async (req, res) 
 // ==========================================
 const heygenSessions = new Map();
 
-// 1. Get Token (Admin UI)
-app.post("/api/admin/heygen-token", adminLimiter, async (req, res) => {
+// 1. Get Token & Start Session Automatically
+app.post("/api/admin/heygen-start", adminLimiter, async (req, res) => {
   try {
     const { secret, heygenKey, avatarId } = req.body;
     if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
     
-    // Building the exact schema required by the API docs
+    // STEP A: Generate the Token using the strict schema [cite: 1399]
     const tokenPayload = JSON.stringify({ 
         mode: "FULL",
         avatar_id: avatarId,
         llm_configuration_id: "bb2678f6-7ae2-4575-8246-2293933419aa", 
-        avatar_persona: {
-            language: "en" 
-        }
+        avatar_persona: { language: "en" }
     });
 
-    const response = await fetch("https://api.liveavatar.com/v1/sessions/token", {
-      method: "POST", 
-      headers: { "x-api-key": heygenKey, "Content-Type": "application/json" },
+    const tokenRes = await fetch("https://api.liveavatar.com/v1/sessions/token", {
+      method: "POST", headers: { "x-api-key": heygenKey, "Content-Type": "application/json" },
       body: tokenPayload
     });
+    const tokenData = await tokenRes.json();
+    const sessionToken = tokenData.data?.session_token || tokenData.session_token;
+    
+    if (!sessionToken) return res.status(400).json({ error: "Token Failed: " + JSON.stringify(tokenData) });
 
-    const data = await response.json();
+    // STEP B: Start the Session immediately on the server [cite: 1867, 1876]
+    const startRes = await fetch("https://api.liveavatar.com/v1/sessions/start", {
+      method: "POST", headers: { "Authorization": `Bearer ${sessionToken}` }
+    });
+    const startData = await startRes.json();
+
+    // Extract the LiveKit room URLs [cite: 1895]
+    const livekitUrl = startData.data?.livekit_url || startData.livekit_url;
+    const livekitToken = startData.data?.livekit_client_token || startData.livekit_client_token;
+    const sessionId = startData.data?.session_id || startData.session_id;
+
+    if (!livekitUrl || !livekitToken) return res.status(400).json({ error: "Start Failed: " + JSON.stringify(startData) });
     
-    // ✅ THE FIX: The API documentation explicitly returns 'session_token'
-    const sessionToken = data.data?.session_token || data.session_token;
-    
-    if (!sessionToken) {
-        return res.status(400).json({ error: data.message || "Failed to parse token from response." });
-    }
-    
-    // Send it back to your frontend!
-    res.json({ token: sessionToken });
+    // Send the ready-to-use URLs back to the frontend
+    res.json({ livekitUrl, livekitToken, sessionId });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

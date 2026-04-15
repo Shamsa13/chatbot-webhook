@@ -947,63 +947,39 @@ async function showUserDeepDive(userId) {
         const heygenKey = document.getElementById('heygenKeyInput').value.trim();
         const avatarId = document.getElementById('avatarIdInput').value.trim();
         const secret = document.getElementById('secretKey').value.trim();
-        const statusEl = document.getElementById('avatarStatus');
         const btn = document.getElementById('connectAvatarBtn');
 
-        if (!secret) return uiAlert("Notice", "Enter your Supabase Secret Key at the top first.");
-        if (!heygenKey || !avatarId) return uiAlert("Error", "Missing HeyGen Key or Avatar ID.");
+        if (!secret || !heygenKey || !avatarId) return uiAlert("Error", "Missing Secret, HeyGen Key, or Avatar ID.");
 
-        btn.innerText = "Connecting...";
-        statusEl.innerText = "Generating Token...";
+        btn.innerText = "Booting Server...";
 
         try {
-            // ✅ FIX: We now send the avatarId to the backend to generate the token
-            const res = await fetch('/api/admin/heygen-token', {
+            // 1. Tell backend to fully orchestrate the room
+            const res = await fetch('/api/admin/heygen-start', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ secret, heygenKey, avatarId: avatarId })
+                body: JSON.stringify({ secret, heygenKey, avatarId })
             });
             const data = await res.json();
-            
-            if (data.error) throw new Error(data.error); 
-            if (!data.token) throw new Error("Failed to authenticate with HeyGen");
 
-            statusEl.innerText = "Initializing SDK...";
-            
-            const { LiveAvatarSession } = await import('https://esm.sh/@heygen/liveavatar-web-sdk');
+            if (data.error) throw new Error(data.error);
 
-            activeAvatarSession = new LiveAvatarSession(data.token, { voiceChat: true });
-
-            activeAvatarSession.on('streamReady', (stream) => {
-                document.getElementById('avatarVideo').srcObject = stream;
-            });
-
-            activeAvatarSession.on('disconnected', () => {
-                statusEl.innerText = "Disconnected";
-                btn.innerText = "🔌 Connect Stream";
-                btn.disabled = false;
-            });
-
-            // ✅ FIX: Because the token was created with the avatar and webhook ID, we just start it!
-            await activeAvatarSession.start();
-            
-            const sessionId = activeAvatarSession.sessionInfo?.session_id || activeAvatarSession.sessionId;
+            // 2. Link the selected user so David knows who he is talking to
             const userId = document.getElementById('avatarUserSelect').value;
-            
-            if (sessionId && userId) {
+            if (data.sessionId && userId) {
                 await fetch('/api/admin/link-avatar-session', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ secret, sessionId, userId })
+                    body: JSON.stringify({ secret, sessionId: data.sessionId, userId })
                 });
             }
-            
-            statusEl.innerText = "🟢 Online & Ready to Speak";
-            btn.innerText = "Connected";
-            btn.disabled = true;
 
+            // 3. Open the bulletproof official LiveKit room in a new tab [cite: 484, 486]
+            const meetUrl = `https://meet.livekit.io/custom?liveKitUrl=${encodeURIComponent(data.livekitUrl)}&token=${data.livekitToken}`;
+            window.open(meetUrl, '_blank');
+
+            btn.innerText = "✅ Stream Opened in New Tab";
         } catch (e) {
-            statusEl.innerText = "Connection Failed";
             btn.innerText = "🔌 Connect Stream";
-            uiAlert("Connection Error", e.message); 
+            uiAlert("Connection Error", e.message);
         }
     }
   
