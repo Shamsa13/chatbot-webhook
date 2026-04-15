@@ -2642,17 +2642,23 @@ app.post("/api/admin/heygen-token", adminLimiter, async (req, res) => {
     const { secret, heygenKey } = req.body;
     if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
     
-    // Some strict API updates require an empty JSON body
+    // ✅ FIX: HeyGen now explicitly requires you to declare the mode to get a token!
+    // We send both 'session_mode' and 'mode' to safely cover their changing schema.
+    const tokenPayload = JSON.stringify({ 
+        session_mode: "FULL",
+        mode: "FULL"
+    });
+
     let response = await fetch("https://api.liveavatar.com/v1/sessions/token", {
       method: "POST", headers: { "x-api-key": heygenKey, "Content-Type": "application/json" },
-      body: JSON.stringify({})
+      body: tokenPayload
     });
 
     // If HeyGen renamed the endpoint URL, gracefully catch it and try the new one
     if (response.status === 404) {
       response = await fetch("https://api.liveavatar.com/v1/sessions/create-session-token", {
         method: "POST", headers: { "x-api-key": heygenKey, "Content-Type": "application/json" },
-        body: JSON.stringify({})
+        body: tokenPayload
       });
     }
 
@@ -2668,6 +2674,7 @@ app.post("/api/admin/heygen-token", adminLimiter, async (req, res) => {
     res.json({ token: sessionToken });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
 
 // 2. Link Session to User (Admin UI)
 app.post("/api/admin/link-avatar-session", adminLimiter, (req, res) => {
