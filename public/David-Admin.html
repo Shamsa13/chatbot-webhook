@@ -501,8 +501,8 @@
 
 
     // --- EXISTING USER LOGIC ---
+    // --- EXISTING USER LOGIC ---
     async function loadUsers() {
-        
         const secret = document.getElementById('secretKey').value.trim();
         if (!secret) { await uiAlert("Authentication", "Enter the secret key first."); return; }
         
@@ -528,6 +528,12 @@
 
                 const bulkContainer = document.getElementById('bulkUserCheckboxes');
                 bulkContainer.innerHTML = ''; 
+
+                // ✅ FIX: Avatar select initialized INSIDE the success block
+                const avatarSelect = document.getElementById('avatarUserSelect');
+                if (avatarSelect) {
+                    avatarSelect.innerHTML = '<option value="">-- Anonymous / No User --</option>';
+                }
 
                 data.users.forEach(u => {
                     const name = (u.full_name && u.full_name !== 'null') ? u.full_name : 'Unknown User';
@@ -555,6 +561,14 @@
                             </label>
                         `;
                     }
+                    
+                    // 4. ✅ FIX: Populate the Avatar Sandbox Dropdown
+                    if (avatarSelect) {
+                        const avatarOpt = document.createElement('option');
+                        avatarOpt.value = u.id;
+                        avatarOpt.innerText = `${name} (${phone})`;
+                        avatarSelect.appendChild(avatarOpt);
+                    }
                 });
 
                 document.getElementById('loginArea').style.display = 'none';
@@ -566,19 +580,6 @@
         } catch (e) {
             showStatus("Network error connecting to server.", true);
         }
-
-        // (Paste this inside loadUsers where you populate the other selects)
-                const avatarSelect = document.getElementById('avatarUserSelect');
-                if (avatarSelect) {
-                    avatarSelect.innerHTML = '<option value="">-- Anonymous / No User --</option>';
-                    data.users.forEach(u => {
-                        const name = (u.full_name && u.full_name !== 'null') ? u.full_name : 'Unknown';
-                        const opt = document.createElement('option');
-                        opt.value = u.id;
-                        opt.innerText = `${name} (${u.phone})`;
-                        avatarSelect.appendChild(opt);
-                    });
-                }
 
         btn.innerText = "Connect & Load Users";
     }
@@ -625,7 +626,7 @@
         document.querySelectorAll('.bulk-user-cb').forEach(cb => cb.checked = selectAll);
     }
 
-    async function registerHeyGenWebhook() {
+   async function registerHeyGenWebhook() {
     const key = document.getElementById('heygenKeyInput').value.trim();
     if (!key) return uiAlert("Notice", "Please enter your HeyGen API Key first.");
 
@@ -633,25 +634,39 @@
     btn.innerText = "Working...";
 
     try {
-        // Automatically grabs your current live Render URL!
         const renderUrl = window.location.origin + "/api/heygen-webhook"; 
         
+        // 1. First, we create a dummy "Secret" because HeyGen's new schema strictly requires one
+        const secretRes = await fetch("https://api.liveavatar.com/v1/secrets", {
+            method: "POST",
+            headers: { "x-api-key": key, "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+                name: "Webhook Auth", 
+                value: "director-compass" 
+            })
+        });
+        const secretData = await secretRes.json();
+        
+        // Extract the new secret's ID (or fall back to a fake UUID if they change the schema again)
+        const secretId = secretData.data?.id || secretData.id || "00000000-0000-0000-0000-000000000000";
+
+        // 2. Register the LLM Configuration using the exact fields the error asked for
         const res = await fetch("https://api.liveavatar.com/v1/llm-configurations", {
             method: "POST",
             headers: { "x-api-key": key, "Content-Type": "application/json" },
             body: JSON.stringify({ 
-                name: "Director Compass Full Mode",
+                display_name: "Director Compass Full Mode", // ✅ FIX: Renamed from 'name'
                 provider: "webhook", 
+                model_name: "custom-webhook",               // ✅ FIX: Added missing field
+                secret_id: secretId,                        // ✅ FIX: Added missing field
                 webhook_url: renderUrl 
             })
         });
         const data = await res.json();
         
-        // Account for HeyGen returning the ID in either the root or nested in a data object
         if (data.id || data.data?.id) {
             const configId = data.id || data.data.id;
             btn.innerText = "✅ Configured";
-            // Uses your custom modal to easily copy the ID!
             await uiPrompt("Webhook Registered!", "Success! Copy this LLM Configuration ID and paste it into your server.mjs file:", configId);
         } else {
             uiAlert("HeyGen Error", JSON.stringify(data));

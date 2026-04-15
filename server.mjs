@@ -2719,9 +2719,7 @@ app.post("/api/heygen-webhook", async (req, res) => {
   }
 });
 
-// ==========================================
-// START THE SERVER
-// ==========================================
+
 app.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
 });
