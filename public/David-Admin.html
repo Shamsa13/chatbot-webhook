@@ -630,42 +630,31 @@
  async function registerHeyGenWebhook() {
     const key = document.getElementById('heygenKeyInput').value.trim();
     if (!key) return uiAlert("Notice", "Please enter your HeyGen API Key first.");
-
     const btn = document.getElementById('webhookBtn');
     btn.innerText = "Working...";
 
     try {
-        const renderUrl = window.location.origin + "/api/heygen-webhook"; 
+        // ✅ FIX: Pointing to your new OpenAI-compatible proxy URL
+        const renderUrl = window.location.origin + "/api/openai-proxy"; 
         
-        // 1. Create the required Secret using the exact enum they demanded
         const secretRes = await fetch("https://api.liveavatar.com/v1/secrets", {
-            method: "POST",
-            headers: { "x-api-key": key, "Content-Type": "application/json" },
+            method: "POST", headers: { "x-api-key": key, "Content-Type": "application/json" },
             body: JSON.stringify({ 
-                secret_name: "Director Compass Auth",  
-                secret_value: "sk-dummy-key-for-webhook-bypass", // Looks like an OpenAI key just in case they check formatting
-                secret_type: "OPENAI_API_KEY"          // ✅ FIX: Exactly what the error asked for
+                secret_name: "Director Compass Proxy Auth",  
+                secret_value: "sk-dummy-key", 
+                secret_type: "OPENAI_API_KEY"          
             })
         });
         const secretData = await secretRes.json();
-        
         const secretId = secretData.data?.id || secretData.id;
-        
-        if (!secretId) {
-            btn.innerText = "🔗 Setup Webhook";
-            return uiAlert("Secret Creation Failed", JSON.stringify(secretData));
-        }
 
-        // 2. Register the LLM Configuration 
         const res = await fetch("https://api.liveavatar.com/v1/llm-configurations", {
-            method: "POST",
-            headers: { "x-api-key": key, "Content-Type": "application/json" },
+            method: "POST", headers: { "x-api-key": key, "Content-Type": "application/json" },
             body: JSON.stringify({ 
-                display_name: "Director Compass Full Mode", 
-                provider: "webhook", 
-                model_name: "webhook",               
+                display_name: "Director Compass OpenAI Proxy", 
+                model_name: "gpt-5.4",               
                 secret_id: secretId,                       
-                webhook_url: renderUrl 
+                base_url: renderUrl // ✅ FIX: Using base_url instead of webhook_url
             })
         });
         const data = await res.json();
@@ -673,15 +662,12 @@
         if (data.id || data.data?.id) {
             const configId = data.id || data.data.id;
             btn.innerText = "✅ Configured";
-            await uiPrompt("Webhook Registered!", "Success! Copy this LLM Configuration ID and paste it into your server.mjs file:", configId);
+            await uiPrompt("Proxy Registered!", "Success! Copy this NEW ID into server.mjs:", configId);
         } else {
-            uiAlert("Config Creation Failed", JSON.stringify(data));
+            uiAlert("Config Failed", JSON.stringify(data));
             btn.innerText = "🔗 Setup Webhook";
         }
-    } catch (e) {
-        uiAlert("Network Error", e.message);
-        btn.innerText = "🔗 Setup Webhook";
-    }
+    } catch (e) { uiAlert("Error", e.message); }
 }
 
     async function sendBulkSms() {

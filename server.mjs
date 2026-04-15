@@ -2690,65 +2690,46 @@ app.post("/api/admin/link-avatar-session", adminLimiter, (req, res) => {
   res.json({ success: true });
 });
 
-// 3. The Public Webhook (HeyGen's servers hit this directly)
-app.post("/api/heygen-webhook", async (req, res) => {
+// ✅ FIX: HeyGen strictly expects an OpenAI-formatted endpoint
+app.post("/api/openai-proxy/chat/completions", async (req, res) => {
   try {
-    const { session_id, text, message } = req.body;
-    const userMsg = text || message || "";
+    const { messages } = req.body;
     
-    // Look up the user context we linked seconds ago
-    const sessionData = heygenSessions.get(session_id);
-    const userId = sessionData?.userId;
-    const isFirstTurn = sessionData?.isFirstTurn;
-    if (sessionData) sessionData.isFirstTurn = false; 
+    // Extract what the user just said to the microphone
+    const userMsg = messages && messages.length > 0 ? messages[messages.length - 1].content : "";
+    if (!userMsg) return res.json({ choices: [{ message: { role: "assistant", content: "" } }] });
 
-    let profileContext = "User: Anonymous Prototype Tester";
-    let memorySummary = "";
-    let greeting = "Hi! I'm your Director Compass. How can I help you today?";
-
-    // SECURE READ-ONLY DB FETCH
-    if (userId) {
-      const { data: user } = await supabase.from("users").select("full_name, memory_summary").eq("id", userId).single();
-      if (user) {
-        profileContext = `User Profile Data - Name: ${user.full_name || 'Unknown'}.`;
-        memorySummary = user.memory_summary || "";
-        
-        // Dynamic Introduction Logic (Mimicking Phone Call)
-        const hasName = user.full_name && user.full_name.toLowerCase() !== 'null';
-        const name = hasName ? user.full_name.split(' ')[0] : "";
-        if (hasName && memorySummary) {
-          greeting = `Welcome back, ${name}. Shall we continue where we left off?`;
-        } else if (hasName) {
-          greeting = `Hi ${name}! I'm your Director Compass. How can I help you today?`;
-        } else {
-          greeting = "Hi! I'm your Director Compass. Before we dive in, what should I call you?";
-        }
-      }
-    }
-
-    // If HeyGen just sent an initial connection ping, return the greeting!
-    if (!userMsg && isFirstTurn) return res.json({ text: greeting });
-    if (!userMsg) return res.json({ text: "" });
-
-    // Call GPT-5.4 + Knowledge Base (No history saved!)
+    // Feed it to your existing Supabase Knowledge Base & GPT-5.4 logic
     const cfg = await getBotConfig();
     const kbContext = await searchKnowledgeBase(userMsg);
 
     const replyText = await callModel({
-      systemPrompt: cfg.systemPrompt + "\n\nCRITICAL: Keep your answers very short and conversational since this will be spoken aloud by a video avatar.",
-      profileContext: profileContext,
+      systemPrompt: cfg.systemPrompt + "\n\nCRITICAL: Keep your answers very short and conversational for video.",
+      profileContext: "User: Live Video Caller",
       ragContext: kbContext,
-      memorySummary: memorySummary,
+      memorySummary: "",
       history: [],
       userText: userMsg
     });
 
     const cleanSpeech = replyText.replace(/[*_#]/g, '').replace(/\[.*?\]/g, '').trim();
-    res.json({ text: cleanSpeech });
+
+    // ✅ FIX: Return the exact JSON structure OpenAI (and HeyGen) demands
+    res.json({
+      id: "chatcmpl-" + Date.now(),
+      object: "chat.completion",
+      created: Math.floor(Date.now() / 1000),
+      model: "gpt-5.4",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: cleanSpeech },
+        finish_reason: "stop"
+      }]
+    });
 
   } catch (e) {
-    console.error("Webhook Error:", e);
-    res.json({ text: "I'm sorry, my server connection was interrupted." });
+    console.error("OpenAI Proxy Error:", e);
+    res.json({ choices: [{ message: { role: "assistant", content: "I am having trouble connecting to my brain." } }] });
   }
 });
 
