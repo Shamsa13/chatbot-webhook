@@ -2639,17 +2639,16 @@ const heygenSessions = new Map();
 // 1. Get Token (Admin UI)
 app.post("/api/admin/heygen-token", adminLimiter, async (req, res) => {
   try {
-    // We now accept avatarId from the frontend so we can build the strict schema
     const { secret, heygenKey, avatarId } = req.body;
     if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
     
-    // ✅ FIX: Building the exact schema required by Page 18 & 32 of the docs
+    // Building the exact schema required by the API docs
     const tokenPayload = JSON.stringify({ 
         mode: "FULL",
         avatar_id: avatarId,
-        llm_configuration_id: "bb2678f6-7ae2-4575-8246-2293933419aa", // Your Webhook ID is locked in here
+        llm_configuration_id: "bb2678f6-7ae2-4575-8246-2293933419aa", 
         avatar_persona: {
-            language: "en" // Satisfies the required avatar_persona object
+            language: "en" 
         }
     });
 
@@ -2660,12 +2659,15 @@ app.post("/api/admin/heygen-token", adminLimiter, async (req, res) => {
     });
 
     const data = await response.json();
-    const sessionToken = data.data?.token || data.token;
+    
+    // ✅ THE FIX: The API documentation explicitly returns 'session_token'
+    const sessionToken = data.data?.session_token || data.session_token;
     
     if (!sessionToken) {
-        return res.status(400).json({ error: data.message || JSON.stringify(data) });
+        return res.status(400).json({ error: data.message || "Failed to parse token from response." });
     }
     
+    // Send it back to your frontend!
     res.json({ token: sessionToken });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
