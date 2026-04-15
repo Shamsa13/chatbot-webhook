@@ -2632,25 +2632,37 @@ app.put("/api/web/conversations/:id/title", authenticateToken, async (req, res) 
 });
 
 // ==========================================
-// LIVE AVATAR PROTOTYPE (FULL MODE CUSTOM LLM)
+// LIVE AVATAR PROTOTYPE (FULL MODE)
 // ==========================================
+
+// 1. The memory map that links the video stream to your Supabase User
 const heygenSessions = new Map();
 
-// 1. Get Token & Start Session Automatically
+// 2. Endpoint to lock in the Target User from your Admin dropdown
+app.post("/api/admin/link-avatar-session", adminLimiter, (req, res) => {
+  const { secret, sessionId, userId } = req.body;
+  if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
+  
+  if (sessionId && userId) {
+      heygenSessions.set(sessionId, { userId });
+      console.log(`🔗 Successfully Linked HeyGen Stream [${sessionId}] to Supabase User [${userId}]`);
+  }
+  res.json({ success: true });
+});
+
+// 3. Endpoint to Orchestrate the Room
 app.post("/api/admin/heygen-start", adminLimiter, async (req, res) => {
   try {
     const { secret, heygenKey, avatarId } = req.body;
     if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
     
-   // STEP A: Generate the Token using the strict schema
     const tokenPayload = JSON.stringify({ 
         mode: "FULL",
         avatar_id: avatarId,
-        llm_configuration_id: "cfe8b280-690d-4f95-8c9d-3981f3195269", 
+        llm_configuration_id: "bb2678f6-7ae2-4575-8246-2293933419aa", 
         avatar_persona: { 
             language: "en",
-            voice_id: "1d8f979e-f0ef-4ac6-bac4-b94a110a5423",
-            context_id: "a006a765-a108-47d5-b6d0-adaf195abdb9" // Unlocks the microphone!
+            voice_id: "1d8f979e-f0ef-4ac6-bac4-b94a110a5423" 
         }
     });
 
@@ -2663,77 +2675,63 @@ app.post("/api/admin/heygen-start", adminLimiter, async (req, res) => {
     
     if (!sessionToken) return res.status(400).json({ error: "Token Failed: " + JSON.stringify(tokenData) });
 
-    // STEP B: Start the Session immediately on the server [cite: 1867, 1876]
     const startRes = await fetch("https://api.liveavatar.com/v1/sessions/start", {
       method: "POST", headers: { "Authorization": `Bearer ${sessionToken}` }
     });
     const startData = await startRes.json();
 
-    // Extract the LiveKit room URLs [cite: 1895]
     const livekitUrl = startData.data?.livekit_url || startData.livekit_url;
     const livekitToken = startData.data?.livekit_client_token || startData.livekit_client_token;
     const sessionId = startData.data?.session_id || startData.session_id;
 
     if (!livekitUrl || !livekitToken) return res.status(400).json({ error: "Start Failed: " + JSON.stringify(startData) });
     
-    // Send the ready-to-use URLs back to the frontend
     res.json({ livekitUrl, livekitToken, sessionId });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-
-// 2. Link Session to User (Admin UI)
-app.post("/api/admin/link-avatar-session", adminLimiter, (req, res) => {
-  const { secret, sessionId, userId } = req.body;
-  if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
-  if (sessionId) heygenSessions.set(sessionId, { userId, isFirstTurn: true });
-  res.json({ success: true });
-});
-
-// ✅ FIX: Fully wired OpenAI Proxy with History and Supabase Memory
+// 4. The OpenAI Proxy Brain
 app.post("/api/openai-proxy/chat/completions", async (req, res) => {
   try {
-    // HeyGen passes the session_id so we can look up who is talking!
-    const { messages, stream, session_id } = req.body;
+    const { messages, stream, session_id, user } = req.body;
     
-    // Extract what the user just said
     const userMsg = messages && messages.length > 0 ? messages[messages.length - 1].content : "";
     if (!userMsg) return res.json({ choices: [{ message: { role: "assistant", content: "" } }] });
 
     console.log(`🗣️ HeyGen heard: "${userMsg}"`);
 
-    // ✅ FIX 1: Extract the past conversation so he stops repeating his greeting!
     const pastHistory = messages.slice(0, -1).map(m => ({
         role: m.role === "assistant" || m.role === "system" ? "assistant" : "user",
         content: m.content
     }));
 
-    // ✅ FIX 2: Look up the user's Supabase memory using the session ID
-    let profileContext = "User: Live Video Caller";
+    // Identify the user based on HeyGen's payload
+    let profileContext = "User: Anonymous Video Caller";
     let memorySummary = "";
+    
+    // Check multiple spots just in case HeyGen hides the session ID
+    const activeSessionId = session_id || req.headers['x-session-id'] || user || null;
 
-    if (session_id && typeof heygenSessions !== 'undefined') {
-        const sessionData = heygenSessions.get(session_id);
-        if (sessionData && sessionData.userId) {
-            const { data: user } = await supabase.from("users").select("full_name, memory_summary").eq("id", sessionData.userId).single();
-            if (user) {
-                profileContext = `User Profile Data - Name: ${user.full_name || 'Unknown'}.`;
-                memorySummary = user.memory_summary || "";
-            }
+    if (activeSessionId && heygenSessions.has(activeSessionId)) {
+        const sessionData = heygenSessions.get(activeSessionId);
+        const { data: dbUser } = await supabase.from("users").select("full_name, memory_summary").eq("id", sessionData.userId).single();
+        if (dbUser) {
+            profileContext = `User Profile Data - Name: ${dbUser.full_name || 'Unknown'}.`;
+            memorySummary = dbUser.memory_summary || "";
+            console.log(`👤 Memory Loaded for: ${dbUser.full_name}`);
         }
+    } else {
+        console.log(`⚠️ Warning: Could not link session. Payload keys:`, Object.keys(req.body));
     }
 
-    // Fetch dynamic knowledge
     const cfg = await getBotConfig();
     const kbContext = await searchKnowledgeBase(userMsg);
 
-    // Apply strict rules so he behaves naturally on video
-    let instruction = "\n\nCRITICAL: Keep your answers very short and conversational for video.";
+    let instruction = "\n\nCRITICAL: Keep your answers very short and conversational for video. Do not use markdown like asterisks.";
     if (pastHistory.length > 0) {
-        instruction += " THIS IS AN ONGOING CONVERSATION. DO NOT introduce yourself or say 'Hi, I am here to assist you' again. Just answer the question directly.";
+        instruction += " THIS IS AN ONGOING CONVERSATION. DO NOT introduce yourself or say 'Hi, I am here to assist you' again. Just answer directly.";
     }
 
-    // Call GPT-5.4 with full memory and history
     const replyText = await callModel({
       systemPrompt: cfg.systemPrompt + instruction,
       profileContext: profileContext,
@@ -2744,9 +2742,7 @@ app.post("/api/openai-proxy/chat/completions", async (req, res) => {
     });
 
     const cleanSpeech = replyText.replace(/[*_#]/g, '').replace(/\[.*?\]/g, '').trim();
-    console.log(`🤖 David replying: "${cleanSpeech}"`);
 
-    // Stream the response back to HeyGen
     if (stream) {
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
@@ -2770,25 +2766,19 @@ app.post("/api/openai-proxy/chat/completions", async (req, res) => {
       object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
       model: "gpt-5.4",
-      choices: [{
-        index: 0,
-        message: { role: "assistant", content: cleanSpeech },
-        finish_reason: "stop"
-      }]
+      choices: [{ index: 0, message: { role: "assistant", content: cleanSpeech }, finish_reason: "stop" }]
     });
 
   } catch (e) {
     console.error("OpenAI Proxy Error:", e);
-    if (req.body.stream) {
-        res.write(`data: [DONE]\n\n`);
-        res.end();
-    } else {
-        res.json({ choices: [{ message: { role: "assistant", content: "I am having trouble connecting to my brain." } }] });
-    }
+    if (req.body?.stream) { res.write(`data: [DONE]\n\n`); res.end(); } 
+    else { res.json({ choices: [{ message: { role: "assistant", content: "Error." } }] }); }
   }
 });
 
-
+// ==========================================
+// START THE SERVER
+// ==========================================
 app.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
 });
