@@ -274,6 +274,7 @@
     }
     const uiAlert = (title, text) => buildUIModal(title, text, 'alert');
     const uiConfirm = (title, text, isDanger) => buildUIModal(title, text, 'confirm', '', isDanger);
+    const uiPrompt = (title, text, defaultVal) => buildUIModal(title, text, 'prompt', defaultVal);
     
    function showStatus(msg, isError = false, detailsHtml = "") {
         const box = document.getElementById('statusBox');
