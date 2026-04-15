@@ -2642,12 +2642,15 @@ app.post("/api/admin/heygen-start", adminLimiter, async (req, res) => {
     const { secret, heygenKey, avatarId } = req.body;
     if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
     
-    // STEP A: Generate the Token using the strict schema [cite: 1399]
+   // STEP A: Generate the Token using the strict schema
     const tokenPayload = JSON.stringify({ 
         mode: "FULL",
         avatar_id: avatarId,
         llm_configuration_id: "bb2678f6-7ae2-4575-8246-2293933419aa", 
-        avatar_persona: { language: "en" }
+        avatar_persona: { 
+            language: "en",
+            voice_id: "1d8f979e-f0ef-4ac6-bac4-b94a110a5423" // ✅ FIX: Added your specific Voice ID!
+        }
     });
 
     const tokenRes = await fetch("https://api.liveavatar.com/v1/sessions/token", {
