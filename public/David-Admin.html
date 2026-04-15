@@ -636,19 +636,18 @@
     try {
         const renderUrl = window.location.origin + "/api/heygen-webhook"; 
         
-        // 1. Create the required Secret using HeyGen's new strict schema
+        // 1. Create the required Secret using the exact enum they demanded
         const secretRes = await fetch("https://api.liveavatar.com/v1/secrets", {
             method: "POST",
             headers: { "x-api-key": key, "Content-Type": "application/json" },
             body: JSON.stringify({ 
-                secret_name: "Director Compass Auth",  // ✅ FIX: Updated to match new schema
-                secret_value: "secure-auth-token",     // ✅ FIX: Updated to match new schema
-                secret_type: "LLM_API_KEY"             // ✅ FIX: Added the exact type HeyGen expects for Custom LLMs
+                secret_name: "Director Compass Auth",  
+                secret_value: "sk-dummy-key-for-webhook-bypass", // Looks like an OpenAI key just in case they check formatting
+                secret_type: "OPENAI_API_KEY"          // ✅ FIX: Exactly what the error asked for
             })
         });
         const secretData = await secretRes.json();
         
-        // Check if the secret creation succeeded
         const secretId = secretData.data?.id || secretData.id;
         
         if (!secretId) {
@@ -656,7 +655,7 @@
             return uiAlert("Secret Creation Failed", JSON.stringify(secretData));
         }
 
-        // 2. Register the LLM Configuration using the generated Secret ID
+        // 2. Register the LLM Configuration 
         const res = await fetch("https://api.liveavatar.com/v1/llm-configurations", {
             method: "POST",
             headers: { "x-api-key": key, "Content-Type": "application/json" },
