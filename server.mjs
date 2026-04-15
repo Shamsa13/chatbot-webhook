@@ -2632,37 +2632,26 @@ app.put("/api/web/conversations/:id/title", authenticateToken, async (req, res) 
 });
 
 // ==========================================
-// LIVE AVATAR PROTOTYPE (FULL MODE)
+// LIVE AVATAR PROTOTYPE (FULL MODE CUSTOM LLM)
 // ==========================================
-
-// 1. The memory map that links the video stream to your Supabase User
 const heygenSessions = new Map();
+let activeAvatarUserId = null; // ✅ Tracks which Supabase user the avatar is talking to
 
-// 2. Endpoint to lock in the Target User from your Admin dropdown
-app.post("/api/admin/link-avatar-session", adminLimiter, (req, res) => {
-  const { secret, sessionId, userId } = req.body;
-  if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
-  
-  if (sessionId && userId) {
-      heygenSessions.set(sessionId, { userId });
-      console.log(`🔗 Successfully Linked HeyGen Stream [${sessionId}] to Supabase User [${userId}]`);
-  }
-  res.json({ success: true });
-});
-
-// 3. Endpoint to Orchestrate the Room
+// 1. Get Token & Start Session Automatically
 app.post("/api/admin/heygen-start", adminLimiter, async (req, res) => {
   try {
     const { secret, heygenKey, avatarId } = req.body;
     if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
     
+   // STEP A: Generate the Token using the strict schema
     const tokenPayload = JSON.stringify({ 
         mode: "FULL",
         avatar_id: avatarId,
-        llm_configuration_id: "bb2678f6-7ae2-4575-8246-2293933419aa", 
+        llm_configuration_id: "cfe8b280-690d-4f95-8c9d-3981f3195269", 
         avatar_persona: { 
             language: "en",
-            voice_id: "1d8f979e-f0ef-4ac6-bac4-b94a110a5423" 
+            voice_id: "1d8f979e-f0ef-4ac6-bac4-b94a110a5423",
+            context_id: "a006a765-a108-47d5-b6d0-adaf195abdb9" // Unlocks the microphone!
         }
     });
 
@@ -2675,66 +2664,103 @@ app.post("/api/admin/heygen-start", adminLimiter, async (req, res) => {
     
     if (!sessionToken) return res.status(400).json({ error: "Token Failed: " + JSON.stringify(tokenData) });
 
+    // STEP B: Start the Session immediately on the server [cite: 1867, 1876]
     const startRes = await fetch("https://api.liveavatar.com/v1/sessions/start", {
       method: "POST", headers: { "Authorization": `Bearer ${sessionToken}` }
     });
     const startData = await startRes.json();
 
+    // Extract the LiveKit room URLs [cite: 1895]
     const livekitUrl = startData.data?.livekit_url || startData.livekit_url;
     const livekitToken = startData.data?.livekit_client_token || startData.livekit_client_token;
     const sessionId = startData.data?.session_id || startData.session_id;
 
     if (!livekitUrl || !livekitToken) return res.status(400).json({ error: "Start Failed: " + JSON.stringify(startData) });
     
+    // Send the ready-to-use URLs back to the frontend
     res.json({ livekitUrl, livekitToken, sessionId });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// 4. The OpenAI Proxy Brain
+
+// 2. Link Session to User (Admin UI)
+app.post("/api/admin/link-avatar-session", adminLimiter, (req, res) => {
+  const { secret, sessionId, userId } = req.body;
+  if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
+  
+  // ✅ FIX: Set the global variable so the proxy can find the user
+  // HeyGen does NOT pass session_id in /chat/completions requests
+  activeAvatarUserId = userId || null;
+  if (sessionId) heygenSessions.set(sessionId, { userId, isFirstTurn: true });
+  
+  console.log(`🔗 Avatar session linked to user: ${userId || 'Anonymous'}`);
+  res.json({ success: true });
+});
+
+// ✅ FIXED: OpenAI Proxy with WORKING Supabase Memory Lookup
 app.post("/api/openai-proxy/chat/completions", async (req, res) => {
   try {
-    const { messages, stream, session_id, user } = req.body;
+    const { messages, stream } = req.body;
     
     const userMsg = messages && messages.length > 0 ? messages[messages.length - 1].content : "";
     if (!userMsg) return res.json({ choices: [{ message: { role: "assistant", content: "" } }] });
 
     console.log(`🗣️ HeyGen heard: "${userMsg}"`);
 
-    const pastHistory = messages.slice(0, -1).map(m => ({
-        role: m.role === "assistant" || m.role === "system" ? "assistant" : "user",
+    // Filter out system messages from history, keep only user/assistant turns
+    const pastHistory = messages.slice(0, -1).filter(m => m.role !== 'system').map(m => ({
+        role: m.role === "assistant" ? "assistant" : "user",
         content: m.content
     }));
 
-    // Identify the user based on HeyGen's payload
-    let profileContext = "User: Anonymous Video Caller";
+    // ✅ THE FIX: Use activeAvatarUserId (set by /api/admin/link-avatar-session)
+    // HeyGen follows the standard OpenAI /chat/completions spec which does NOT 
+    // include session_id, so the old heygenSessions.get(session_id) always failed.
+    let profileContext = "User: Anonymous Live Video Caller";
     let memorySummary = "";
-    
-    // Check multiple spots just in case HeyGen hides the session ID
-    const activeSessionId = session_id || req.headers['x-session-id'] || user || null;
+    let recentSummaries = "";
 
-    if (activeSessionId && heygenSessions.has(activeSessionId)) {
-        const sessionData = heygenSessions.get(activeSessionId);
-        const { data: dbUser } = await supabase.from("users").select("full_name, memory_summary").eq("id", sessionData.userId).single();
-        if (dbUser) {
-            profileContext = `User Profile Data - Name: ${dbUser.full_name || 'Unknown'}.`;
-            memorySummary = dbUser.memory_summary || "";
-            console.log(`👤 Memory Loaded for: ${dbUser.full_name}`);
+    if (activeAvatarUserId) {
+        try {
+            const [userData, summaries] = await Promise.all([
+                supabase.from("users").select("full_name, email, memory_summary").eq("id", activeAvatarUserId).single(),
+                getRecentConversationSummaries(activeAvatarUserId, 5)
+            ]);
+            
+            if (userData.data) {
+                const user = userData.data;
+                profileContext = `User Profile Data - Name: ${user.full_name || 'Unknown'}, Email: ${user.email || 'Unknown'}.`;
+                memorySummary = user.memory_summary || "";
+                console.log(`🧠 Avatar loaded memory for ${user.full_name || 'Unknown'} (${(memorySummary || '').length} chars)`);
+            }
+            recentSummaries = summaries || "";
+        } catch (e) {
+            console.error("Avatar user lookup failed:", e.message);
         }
     } else {
-        console.log(`⚠️ Warning: Could not link session. Payload keys:`, Object.keys(req.body));
+        console.log("⚠️ No user linked to avatar session — running in anonymous mode.");
     }
 
+    // Fetch system prompt and knowledge base
     const cfg = await getBotConfig();
     const kbContext = await searchKnowledgeBase(userMsg);
 
-    let instruction = "\n\nCRITICAL: Keep your answers very short and conversational for video. Do not use markdown like asterisks.";
-    if (pastHistory.length > 0) {
-        instruction += " THIS IS AN ONGOING CONVERSATION. DO NOT introduce yourself or say 'Hi, I am here to assist you' again. Just answer directly.";
+    // Build the full profile context with conversation history
+    let fullProfileContext = profileContext;
+    if (recentSummaries) {
+        fullProfileContext += `\n\nRECENT CONVERSATION HISTORY:\n${recentSummaries}`;
     }
 
+    // Strict video behavior rules
+    let instruction = "\n\nCRITICAL: Keep your answers very short and conversational for video. Maximum 2-3 sentences unless the user asks for detail.";
+    if (pastHistory.length > 0) {
+        instruction += " THIS IS AN ONGOING CONVERSATION. DO NOT introduce yourself or greet the user again. Just answer the question directly.";
+    }
+
+    // Call your existing GPT-5.4 brain with full memory + KB + history
     const replyText = await callModel({
       systemPrompt: cfg.systemPrompt + instruction,
-      profileContext: profileContext,
+      profileContext: fullProfileContext,
       ragContext: kbContext,
       memorySummary: memorySummary,
       history: pastHistory, 
@@ -2742,43 +2768,60 @@ app.post("/api/openai-proxy/chat/completions", async (req, res) => {
     });
 
     const cleanSpeech = replyText.replace(/[*_#]/g, '').replace(/\[.*?\]/g, '').trim();
+    console.log(`🤖 David replying: "${cleanSpeech}"`);
 
+    // Stream the response back to HeyGen in proper SSE format
     if (stream) {
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
 
-        const streamPayload = {
+        // Content chunk
+        res.write(`data: ${JSON.stringify({
           id: "chatcmpl-" + Date.now(),
           object: "chat.completion.chunk",
           created: Math.floor(Date.now() / 1000),
           model: "gpt-5.4",
           choices: [{ index: 0, delta: { content: cleanSpeech }, finish_reason: null }]
-        };
+        })}\n\n`);
 
-        res.write(`data: ${JSON.stringify(streamPayload)}\n\n`);
+        // Stop signal chunk
+        res.write(`data: ${JSON.stringify({
+          id: "chatcmpl-" + Date.now(),
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model: "gpt-5.4",
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" }]
+        })}\n\n`);
+
         res.write(`data: [DONE]\n\n`);
         return res.end();
     }
 
+    // Non-streaming response
     res.json({
       id: "chatcmpl-" + Date.now(),
       object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
       model: "gpt-5.4",
-      choices: [{ index: 0, message: { role: "assistant", content: cleanSpeech }, finish_reason: "stop" }]
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: cleanSpeech },
+        finish_reason: "stop"
+      }]
     });
 
   } catch (e) {
     console.error("OpenAI Proxy Error:", e);
-    if (req.body?.stream) { res.write(`data: [DONE]\n\n`); res.end(); } 
-    else { res.json({ choices: [{ message: { role: "assistant", content: "Error." } }] }); }
+    if (req.body.stream) {
+        try { res.write(`data: [DONE]\n\n`); res.end(); } catch(_){}
+    } else {
+        res.json({ choices: [{ message: { role: "assistant", content: "I am having trouble connecting to my brain." } }] });
+    }
   }
 });
 
-// ==========================================
-// START THE SERVER
-// ==========================================
+
 app.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
 });

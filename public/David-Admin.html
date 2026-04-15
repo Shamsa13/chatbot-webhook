@@ -949,14 +949,12 @@ async function showUserDeepDive(userId) {
 
             if (data.error) throw new Error(data.error);
 
-            // 2. Link the selected user so David knows who he is talking to
+            // 2. Always tell the server which user this avatar is talking to
             const userId = document.getElementById('avatarUserSelect').value;
-            if (data.sessionId && userId) {
-                await fetch('/api/admin/link-avatar-session', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ secret, sessionId: data.sessionId, userId })
-                });
-            }
+            await fetch('/api/admin/link-avatar-session', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ secret, sessionId: data.sessionId || null, userId: userId || null })
+            });
 
             // 3. Open the bulletproof official LiveKit room in a new tab [cite: 484, 486]
             const meetUrl = `https://meet.livekit.io/custom?liveKitUrl=${encodeURIComponent(data.livekitUrl)}&token=${data.livekitToken}`;
