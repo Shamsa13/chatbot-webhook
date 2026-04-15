@@ -2690,40 +2690,68 @@ app.post("/api/admin/link-avatar-session", adminLimiter, (req, res) => {
   res.json({ success: true });
 });
 
-// ✅ FIX: HeyGen strictly expects an OpenAI-formatted endpoint, WITH STREAMING SUPPORT!
+// ✅ FIX: Fully wired OpenAI Proxy with History and Supabase Memory
 app.post("/api/openai-proxy/chat/completions", async (req, res) => {
   try {
-    const { messages, stream } = req.body;
+    // HeyGen passes the session_id so we can look up who is talking!
+    const { messages, stream, session_id } = req.body;
     
-    // Extract what the user just said to the microphone
+    // Extract what the user just said
     const userMsg = messages && messages.length > 0 ? messages[messages.length - 1].content : "";
     if (!userMsg) return res.json({ choices: [{ message: { role: "assistant", content: "" } }] });
 
     console.log(`🗣️ HeyGen heard: "${userMsg}"`);
 
-    // Feed it to your existing Supabase Knowledge Base & GPT-5.4 logic
+    // ✅ FIX 1: Extract the past conversation so he stops repeating his greeting!
+    const pastHistory = messages.slice(0, -1).map(m => ({
+        role: m.role === "assistant" || m.role === "system" ? "assistant" : "user",
+        content: m.content
+    }));
+
+    // ✅ FIX 2: Look up the user's Supabase memory using the session ID
+    let profileContext = "User: Live Video Caller";
+    let memorySummary = "";
+
+    if (session_id && typeof heygenSessions !== 'undefined') {
+        const sessionData = heygenSessions.get(session_id);
+        if (sessionData && sessionData.userId) {
+            const { data: user } = await supabase.from("users").select("full_name, memory_summary").eq("id", sessionData.userId).single();
+            if (user) {
+                profileContext = `User Profile Data - Name: ${user.full_name || 'Unknown'}.`;
+                memorySummary = user.memory_summary || "";
+            }
+        }
+    }
+
+    // Fetch dynamic knowledge
     const cfg = await getBotConfig();
     const kbContext = await searchKnowledgeBase(userMsg);
 
+    // Apply strict rules so he behaves naturally on video
+    let instruction = "\n\nCRITICAL: Keep your answers very short and conversational for video.";
+    if (pastHistory.length > 0) {
+        instruction += " THIS IS AN ONGOING CONVERSATION. DO NOT introduce yourself or say 'Hi, I am here to assist you' again. Just answer the question directly.";
+    }
+
+    // Call GPT-5.4 with full memory and history
     const replyText = await callModel({
-      systemPrompt: cfg.systemPrompt + "\n\nCRITICAL: Keep your answers very short and conversational for video.",
-      profileContext: "User: Live Video Caller",
+      systemPrompt: cfg.systemPrompt + instruction,
+      profileContext: profileContext,
       ragContext: kbContext,
-      memorySummary: "",
-      history: [],
+      memorySummary: memorySummary,
+      history: pastHistory, 
       userText: userMsg
     });
 
     const cleanSpeech = replyText.replace(/[*_#]/g, '').replace(/\[.*?\]/g, '').trim();
     console.log(`🤖 David replying: "${cleanSpeech}"`);
 
-    // ✅ FIX: If HeyGen asks for a stream, we MUST send Server-Sent Events (SSE)
+    // Stream the response back to HeyGen
     if (stream) {
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
 
-        // Send the text in the exact streaming format HeyGen expects
         const streamPayload = {
           id: "chatcmpl-" + Date.now(),
           object: "chat.completion.chunk",
@@ -2737,7 +2765,6 @@ app.post("/api/openai-proxy/chat/completions", async (req, res) => {
         return res.end();
     }
 
-    // Fallback for non-streaming requests
     res.json({
       id: "chatcmpl-" + Date.now(),
       object: "chat.completion",
