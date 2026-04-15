@@ -636,29 +636,35 @@
     try {
         const renderUrl = window.location.origin + "/api/heygen-webhook"; 
         
-        // 1. First, we create a dummy "Secret" because HeyGen's new schema strictly requires one
+        // 1. Create the required Secret first
         const secretRes = await fetch("https://api.liveavatar.com/v1/secrets", {
             method: "POST",
             headers: { "x-api-key": key, "Content-Type": "application/json" },
             body: JSON.stringify({ 
                 name: "Webhook Auth", 
-                value: "director-compass" 
+                value: "director-compass-secret" 
             })
         });
         const secretData = await secretRes.json();
         
-        // Extract the new secret's ID (or fall back to a fake UUID if they change the schema again)
-        const secretId = secretData.data?.id || secretData.id || "00000000-0000-0000-0000-000000000000";
+        // CRITICAL CHECK: Did HeyGen actually give us a Secret ID?
+        const secretId = secretData.data?.id || secretData.id;
+        
+        if (!secretId) {
+            btn.innerText = "🔗 Setup Webhook";
+            // If it failed, this will pop up exactly WHY it failed (e.g. wrong field name)
+            return uiAlert("Secret Creation Failed", JSON.stringify(secretData));
+        }
 
-        // 2. Register the LLM Configuration using the exact fields the error asked for
+        // 2. Register the LLM Configuration using the valid Secret ID
         const res = await fetch("https://api.liveavatar.com/v1/llm-configurations", {
             method: "POST",
             headers: { "x-api-key": key, "Content-Type": "application/json" },
             body: JSON.stringify({ 
-                display_name: "Director Compass Full Mode", // ✅ FIX: Renamed from 'name'
+                display_name: "Director Compass Full Mode", 
                 provider: "webhook", 
-                model_name: "custom-webhook",               // ✅ FIX: Added missing field
-                secret_id: secretId,                        // ✅ FIX: Added missing field
+                model_name: "webhook",               
+                secret_id: secretId,                       
                 webhook_url: renderUrl 
             })
         });
@@ -669,11 +675,11 @@
             btn.innerText = "✅ Configured";
             await uiPrompt("Webhook Registered!", "Success! Copy this LLM Configuration ID and paste it into your server.mjs file:", configId);
         } else {
-            uiAlert("HeyGen Error", JSON.stringify(data));
+            uiAlert("Config Creation Failed", JSON.stringify(data));
             btn.innerText = "🔗 Setup Webhook";
         }
     } catch (e) {
-        uiAlert("Network Error", "Could not connect to HeyGen.");
+        uiAlert("Network Error", e.message);
         btn.innerText = "🔗 Setup Webhook";
     }
 }
