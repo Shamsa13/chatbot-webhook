@@ -2639,32 +2639,27 @@ const heygenSessions = new Map();
 // 1. Get Token (Admin UI)
 app.post("/api/admin/heygen-token", adminLimiter, async (req, res) => {
   try {
-    const { secret, heygenKey } = req.body;
+    // We now accept avatarId from the frontend so we can build the strict schema
+    const { secret, heygenKey, avatarId } = req.body;
     if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
     
-    // ✅ FIX: HeyGen now explicitly requires you to declare the mode to get a token!
-    // We send both 'session_mode' and 'mode' to safely cover their changing schema.
+    // ✅ FIX: Building the exact schema required by Page 18 & 32 of the docs
     const tokenPayload = JSON.stringify({ 
-        session_mode: "FULL",
-        mode: "FULL"
+        mode: "FULL",
+        avatar_id: avatarId,
+        llm_configuration_id: "bb2678f6-7ae2-4575-8246-2293933419aa", // Your Webhook ID is locked in here
+        avatar_persona: {
+            language: "en" // Satisfies the required avatar_persona object
+        }
     });
 
-    let response = await fetch("https://api.liveavatar.com/v1/sessions/token", {
-      method: "POST", headers: { "x-api-key": heygenKey, "Content-Type": "application/json" },
+    const response = await fetch("https://api.liveavatar.com/v1/sessions/token", {
+      method: "POST", 
+      headers: { "x-api-key": heygenKey, "Content-Type": "application/json" },
       body: tokenPayload
     });
 
-    // If HeyGen renamed the endpoint URL, gracefully catch it and try the new one
-    if (response.status === 404) {
-      response = await fetch("https://api.liveavatar.com/v1/sessions/create-session-token", {
-        method: "POST", headers: { "x-api-key": heygenKey, "Content-Type": "application/json" },
-        body: tokenPayload
-      });
-    }
-
     const data = await response.json();
-    
-    // Extract token regardless of how HeyGen nests their JSON
     const sessionToken = data.data?.token || data.token;
     
     if (!sessionToken) {

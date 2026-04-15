@@ -957,23 +957,20 @@ async function showUserDeepDive(userId) {
         statusEl.innerText = "Generating Token...";
 
         try {
-            // 1. Get Token from Server
+            // ✅ FIX: We now send the avatarId to the backend to generate the token
             const res = await fetch('/api/admin/heygen-token', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ secret, heygenKey })
+                body: JSON.stringify({ secret, heygenKey, avatarId: avatarId })
             });
             const data = await res.json();
             
-            // Show exact error if server caught one
             if (data.error) throw new Error(data.error); 
             if (!data.token) throw new Error("Failed to authenticate with HeyGen");
 
             statusEl.innerText = "Initializing SDK...";
             
-            // 2. Dynamically Import the HeyGen SDK
             const { LiveAvatarSession } = await import('https://esm.sh/@heygen/liveavatar-web-sdk');
 
-            // 🚨 ENABLE NATIVE MIC: voiceChat set to true!
             activeAvatarSession = new LiveAvatarSession(data.token, { voiceChat: true });
 
             activeAvatarSession.on('streamReady', (stream) => {
@@ -986,11 +983,8 @@ async function showUserDeepDive(userId) {
                 btn.disabled = false;
             });
 
-            // 3. Start Session & Link Context!
-            await activeAvatarSession.start({ 
-                avatarId: avatarId,
-                llmConfigurationId: "bb2678f6-7ae2-4575-8246-2293933419aa" // Your exact Webhook ID!
-            });
+            // ✅ FIX: Because the token was created with the avatar and webhook ID, we just start it!
+            await activeAvatarSession.start();
             
             const sessionId = activeAvatarSession.sessionInfo?.session_id || activeAvatarSession.sessionId;
             const userId = document.getElementById('avatarUserSelect').value;
@@ -1009,7 +1003,7 @@ async function showUserDeepDive(userId) {
         } catch (e) {
             statusEl.innerText = "Connection Failed";
             btn.innerText = "🔌 Connect Stream";
-            uiAlert("Connection Error", e.message); // Will spit out exact failure reason
+            uiAlert("Connection Error", e.message); 
         }
     }
   
