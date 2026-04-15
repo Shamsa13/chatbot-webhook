@@ -81,6 +81,7 @@
 
     <div id="dashboardArea">
         <div class="tab-container">
+            <button id="btnTabAvatar" class="tab-btn" onclick="switchTab('avatar')">Avatar Prototype</button>
             <button id="btnTabUsers" class="tab-btn active" onclick="switchTab('users')">User Management</button>
             <button id="btnTabAnalytics" class="tab-btn" onclick="switchTab('analytics')">Usage Analytics</button>
             <button id="btnTabOutreach" class="tab-btn" onclick="switchTab('outreach')">Outreach & Invites</button>
@@ -187,6 +188,36 @@
                 <button onclick="sendBulkSms()" style="background: #2196f3;">📢 Send Broadcast to Selected</button>
             </div>
         </div>
+
+        <div id="tabAvatar" class="tab-content">
+    <div class="section">
+        <h2>Live Avatar Sandbox</h2>
+        <p style="font-size: 13px; color: #666; margin-bottom: 20px;">Test the video avatar using our existing Knowledge Base and GPT-5.4 brain without affecting production data.</p>
+        
+        <div style="display: flex; gap: 15px; margin-bottom: 20px;">
+            <div style="flex: 1;">
+                <label>HeyGen API Key</label>
+                <input type="password" id="heygenKeyInput" placeholder="Enter HeyGen Key...">
+            </div>
+            <div style="flex: 1;">
+                <label>Avatar ID</label>
+                <input type="text" id="avatarIdInput" placeholder="Enter Avatar ID...">
+            </div>
+            <button onclick="connectAvatarPrototype()" id="connectAvatarBtn" style="height: 43px; align-self: flex-end; background: #4caf50;">🔌 Connect Stream</button>
+        </div>
+
+        <div style="width: 100%; max-width: 600px; aspect-ratio: 16/9; background: #111; border-radius: 12px; overflow: hidden; margin-bottom: 20px; position: relative;">
+            <video id="avatarVideo" autoplay playsinline style="width: 100%; height: 100%; object-fit: cover;"></video>
+            <div id="avatarStatus" style="position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.6); color: white; padding: 4px 10px; border-radius: 4px; font-size: 12px;">Disconnected</div>
+        </div>
+
+        <label>Type to the Avatar</label>
+        <div style="display: flex; gap: 10px; max-width: 600px;">
+            <input type="text" id="avatarTextInput" placeholder="Ask David a question based on his knowledge base..." style="margin-bottom: 0;">
+            <button onclick="sendToAvatar()" id="sendAvatarBtn" style="background: #181d32;" disabled>Send</button>
+        </div>
+    </div>
+</div>
 
     </div>
 </div>
@@ -302,18 +333,22 @@
     function switchTab(tabName) {
         document.getElementById('btnTabUsers').classList.remove('active');
         document.getElementById('btnTabAnalytics').classList.remove('active');
-        document.getElementById('btnTabOutreach').classList.remove('active'); // Added
+        document.getElementById('btnTabOutreach').classList.remove('active');
+        document.getElementById('btnTabAvatar').classList.remove('active'); // 🆕
         
         if (tabName === 'users') document.getElementById('btnTabUsers').classList.add('active');
         if (tabName === 'analytics') document.getElementById('btnTabAnalytics').classList.add('active');
-        if (tabName === 'outreach') document.getElementById('btnTabOutreach').classList.add('active'); // Added
+        if (tabName === 'outreach') document.getElementById('btnTabOutreach').classList.add('active');
+        if (tabName === 'avatar') document.getElementById('btnTabAvatar').classList.add('active'); // 🆕
 
         document.getElementById('tabUsers').classList.remove('active');
         document.getElementById('tabAnalytics').classList.remove('active');
-        document.getElementById('tabOutreach').classList.remove('active'); // Added
+        document.getElementById('tabOutreach').classList.remove('active');
+        document.getElementById('tabAvatar').classList.remove('active'); // 🆕
         
         if (tabName === 'users') document.getElementById('tabUsers').classList.add('active');
-        if (tabName === 'outreach') document.getElementById('tabOutreach').classList.add('active'); // Added
+        if (tabName === 'outreach') document.getElementById('tabOutreach').classList.add('active');
+        if (tabName === 'avatar') document.getElementById('tabAvatar').classList.add('active'); // 🆕
         if (tabName === 'analytics') {
             document.getElementById('tabAnalytics').classList.add('active');
             fetchAnalytics();
@@ -822,6 +857,96 @@ async function showUserDeepDive(userId) {
             showStatus("Network error.", true);
         }
     }
+
+
+    let activeAvatarSession = null;
+
+    async function connectAvatarPrototype() {
+        const heygenKey = document.getElementById('heygenKeyInput').value.trim();
+        const avatarId = document.getElementById('avatarIdInput').value.trim();
+        const secret = document.getElementById('secretKey').value.trim();
+        const statusEl = document.getElementById('avatarStatus');
+        const btn = document.getElementById('connectAvatarBtn');
+
+        if (!secret) return uiAlert("Notice", "Enter your Supabase Secret Key at the top first.");
+        if (!heygenKey || !avatarId) return uiAlert("Error", "Missing HeyGen Key or Avatar ID.");
+
+        btn.innerText = "Connecting...";
+        statusEl.innerText = "Generating Token...";
+
+        try {
+            // 1. Get Token from Server
+            const res = await fetch('/api/admin/heygen-token', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ secret, heygenKey })
+            });
+            const data = await res.json();
+            if (!data.token) throw new Error("Failed to authenticate with HeyGen");
+
+            statusEl.innerText = "Initializing SDK...";
+
+            // 2. Dynamically Import the HeyGen SDK
+            const { LiveAvatarSession } = await import('https://esm.sh/@heygen/liveavatar-web-sdk');
+
+            // 3. Start the Session in Lite Mode
+            activeAvatarSession = new LiveAvatarSession(data.token, { voiceChat: false });
+
+            activeAvatarSession.on('streamReady', (stream) => {
+                document.getElementById('avatarVideo').srcObject = stream;
+            });
+
+            activeAvatarSession.on('disconnected', () => {
+                statusEl.innerText = "Disconnected";
+                document.getElementById('sendAvatarBtn').disabled = true;
+                btn.innerText = "🔌 Connect Stream";
+                btn.disabled = false;
+            });
+
+            await activeAvatarSession.start({ avatarId: avatarId });
+            
+            statusEl.innerText = "🟢 Online & Ready";
+            document.getElementById('sendAvatarBtn').disabled = false;
+            btn.innerText = "Connected";
+            btn.disabled = true;
+
+        } catch (e) {
+            statusEl.innerText = "Connection Failed";
+            btn.innerText = "🔌 Connect Stream";
+            uiAlert("Connection Failed", e.message);
+        }
+    }
+
+    async function sendToAvatar() {
+        const textInput = document.getElementById('avatarTextInput');
+        const text = textInput.value.trim();
+        const secret = document.getElementById('secretKey').value.trim();
+        
+        if (!text || !activeAvatarSession) return;
+
+        textInput.value = "";
+        document.getElementById('avatarStatus').innerText = "🟢 Thinking (GPT-5.4 + RAG)...";
+
+        try {
+            // 1. Send the text to your GPT-5.4 Brain
+            const res = await fetch('/api/admin/prototype-chat', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ secret, message: text })
+            });
+            const data = await res.json();
+            
+            if (data.success) {
+                document.getElementById('avatarStatus').innerText = "🟢 Speaking...";
+                // 2. Feed the LLM response to HeyGen to speak
+                await activeAvatarSession.repeat({ text: data.text });
+                
+                // Reset status indicator after a moment
+                setTimeout(() => document.getElementById('avatarStatus').innerText = "🟢 Online & Ready", 3000);
+            }
+        } catch (e) {
+            uiAlert("Error", "Failed to get AI response.");
+        }
+    }
+    
 </script>
 </body>
 </html>

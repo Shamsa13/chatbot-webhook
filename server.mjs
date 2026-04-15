@@ -2631,5 +2631,49 @@ app.put("/api/web/conversations/:id/title", authenticateToken, async (req, res) 
 });
 
 
+// ==========================================
+// LIVE AVATAR PROTOTYPE (ADMIN ONLY)
+// ==========================================
+app.post("/api/admin/heygen-token", adminLimiter, async (req, res) => {
+  try {
+    const { secret, heygenKey } = req.body;
+    if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
+    
+    // Request a LiveAvatar Session Token
+    const response = await fetch("https://api.liveavatar.com/v1/sessions/token", {
+      method: "POST",
+      headers: { "x-api-key": heygenKey, "Content-Type": "application/json" }
+    });
+    const data = await response.json();
+    res.json({ token: data.data.token });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/admin/prototype-chat", adminLimiter, async (req, res) => {
+  try {
+    const { secret, message } = req.body;
+    if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
+
+    // 1. Get Base Prompt & Query Knowledge Base
+    const cfg = await getBotConfig();
+    const kbContext = await searchKnowledgeBase(message);
+
+    // 2. Call GPT-5.4 (Notice: memorySummary and history are empty so it stays isolated)
+    const replyText = await callModel({
+      systemPrompt: cfg.systemPrompt + "\n\nCRITICAL: Keep your answers conversational since this will be spoken aloud by a video avatar.",
+      profileContext: "User: Admin Prototype Tester",
+      ragContext: kbContext,
+      memorySummary: "",
+      history: [],
+      userText: message
+    });
+
+    // 3. Clean out markdown formatting so the text-to-speech engine reads it naturally
+    const cleanSpeech = replyText.replace(/[*_#]/g, '').replace(/\[.*?\]/g, '').trim();
+
+    res.json({ success: true, text: cleanSpeech });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 
 app.listen(PORT, () => console.log(`Server live on ${PORT}`));
