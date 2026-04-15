@@ -2718,3 +2718,10 @@ app.post("/api/heygen-webhook", async (req, res) => {
     res.json({ text: "I'm sorry, my server connection was interrupted." });
   }
 });
+
+// ==========================================
+// START THE SERVER
+// ==========================================
+app.listen(PORT, () => {
+  console.log(`🚀 Server is running on port ${PORT}`);
+});
