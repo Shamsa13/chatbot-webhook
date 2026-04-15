@@ -192,12 +192,21 @@
         <div id="tabAvatar" class="tab-content">
     <div class="section">
         <h2>Live Avatar Sandbox</h2>
-        <p style="font-size: 13px; color: #666; margin-bottom: 20px;">Test the video avatar using our existing Knowledge Base and GPT-5.4 brain without affecting production data.</p>
+        <p style="font-size: 13px; color: #666; margin-bottom: 20px;">Test the video avatar using our existing Knowledge Base and LLM brain without affecting suoabase data.</p>
         
-        <div style="display: flex; gap: 15px; margin-bottom: 20px;">
+      <div style="display: flex; gap: 15px; margin-bottom: 20px;">
             <div style="flex: 1;">
-                <label>HeyGen API Key</label>
-                <input type="password" id="heygenKeyInput" placeholder="Enter HeyGen Key...">
+                <label>Target User (Read-Only Context)</label>
+                <select id="avatarUserSelect">
+                    <option value="">-- Anonymous / No User --</option>
+                </select>
+            </div>
+            <div style="flex: 1; display: flex; gap: 8px; align-items: flex-end;">
+                <div style="flex: 1;">
+                    <label>HeyGen API Key</label>
+                    <input type="password" id="heygenKeyInput" placeholder="Enter HeyGen Key..." style="margin-bottom: 0;">
+                </div>
+                <button id="webhookBtn" onclick="registerHeyGenWebhook()" style="height: 43px; background: #2196f3; padding: 0 15px;" title="Auto-register your server with HeyGen">🔗 Setup Webhook</button>
             </div>
             <div style="flex: 1;">
                 <label>Avatar ID</label>
@@ -557,6 +566,20 @@
         } catch (e) {
             showStatus("Network error connecting to server.", true);
         }
+
+        // (Paste this inside loadUsers where you populate the other selects)
+                const avatarSelect = document.getElementById('avatarUserSelect');
+                if (avatarSelect) {
+                    avatarSelect.innerHTML = '<option value="">-- Anonymous / No User --</option>';
+                    data.users.forEach(u => {
+                        const name = (u.full_name && u.full_name !== 'null') ? u.full_name : 'Unknown';
+                        const opt = document.createElement('option');
+                        opt.value = u.id;
+                        opt.innerText = `${name} (${u.phone})`;
+                        avatarSelect.appendChild(opt);
+                    });
+                }
+
         btn.innerText = "Connect & Load Users";
     }
 
@@ -601,6 +624,44 @@
     function toggleBulkSelection(selectAll) {
         document.querySelectorAll('.bulk-user-cb').forEach(cb => cb.checked = selectAll);
     }
+
+    async function registerHeyGenWebhook() {
+    const key = document.getElementById('heygenKeyInput').value.trim();
+    if (!key) return uiAlert("Notice", "Please enter your HeyGen API Key first.");
+
+    const btn = document.getElementById('webhookBtn');
+    btn.innerText = "Working...";
+
+    try {
+        // Automatically grabs your current live Render URL!
+        const renderUrl = window.location.origin + "/api/heygen-webhook"; 
+        
+        const res = await fetch("https://api.liveavatar.com/v1/llm-configurations", {
+            method: "POST",
+            headers: { "x-api-key": key, "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+                name: "Director Compass Full Mode",
+                provider: "webhook", 
+                webhook_url: renderUrl 
+            })
+        });
+        const data = await res.json();
+        
+        // Account for HeyGen returning the ID in either the root or nested in a data object
+        if (data.id || data.data?.id) {
+            const configId = data.id || data.data.id;
+            btn.innerText = "✅ Configured";
+            // Uses your custom modal to easily copy the ID!
+            await uiPrompt("Webhook Registered!", "Success! Copy this LLM Configuration ID and paste it into your server.mjs file:", configId);
+        } else {
+            uiAlert("HeyGen Error", JSON.stringify(data));
+            btn.innerText = "🔗 Setup Webhook";
+        }
+    } catch (e) {
+        uiAlert("Network Error", "Could not connect to HeyGen.");
+        btn.innerText = "🔗 Setup Webhook";
+    }
+}
 
     async function sendBulkSms() {
         const secret = document.getElementById('secretKey').value;
@@ -885,11 +946,13 @@ async function showUserDeepDive(userId) {
 
             statusEl.innerText = "Initializing SDK...";
 
+   
+            
             // 2. Dynamically Import the HeyGen SDK
             const { LiveAvatarSession } = await import('https://esm.sh/@heygen/liveavatar-web-sdk');
 
-            // 3. Start the Session in Lite Mode
-            activeAvatarSession = new LiveAvatarSession(data.token, { voiceChat: false });
+            // 🚨 ENABLE NATIVE MIC: voiceChat set to true!
+            activeAvatarSession = new LiveAvatarSession(data.token, { voiceChat: true });
 
             activeAvatarSession.on('streamReady', (stream) => {
                 document.getElementById('avatarVideo').srcObject = stream;
@@ -897,15 +960,24 @@ async function showUserDeepDive(userId) {
 
             activeAvatarSession.on('disconnected', () => {
                 statusEl.innerText = "Disconnected";
-                document.getElementById('sendAvatarBtn').disabled = true;
                 btn.innerText = "🔌 Connect Stream";
                 btn.disabled = false;
             });
 
+            // 3. Start Session & Link Context!
             await activeAvatarSession.start({ avatarId: avatarId });
             
-            statusEl.innerText = "🟢 Online & Ready";
-            document.getElementById('sendAvatarBtn').disabled = false;
+            const sessionId = activeAvatarSession.sessionInfo?.session_id || activeAvatarSession.sessionId;
+            const userId = document.getElementById('avatarUserSelect').value;
+            
+            if (sessionId && userId) {
+                await fetch('/api/admin/link-avatar-session', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ secret, sessionId, userId })
+                });
+            }
+            
+            statusEl.innerText = "🟢 Online & Ready to Speak";
             btn.innerText = "Connected";
             btn.disabled = true;
 
@@ -946,7 +1018,7 @@ async function showUserDeepDive(userId) {
             uiAlert("Error", "Failed to get AI response.");
         }
     }
-    
+
 </script>
 </body>
 </html>

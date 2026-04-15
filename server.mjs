@@ -24,7 +24,8 @@ app.use(cors());
 app.use(express.static('public'));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
-app.set("trust proxy", true);
+
+app.set("trust proxy", 1);
 
 const PORT = process.env.PORT || 3000;
 
@@ -2630,50 +2631,90 @@ app.put("/api/web/conversations/:id/title", authenticateToken, async (req, res) 
   }
 });
 
+// ==========================================
+// LIVE AVATAR PROTOTYPE (FULL MODE CUSTOM LLM)
+// ==========================================
+const heygenSessions = new Map();
 
-// ==========================================
-// LIVE AVATAR PROTOTYPE (ADMIN ONLY)
-// ==========================================
+// 1. Get Token (Admin UI)
 app.post("/api/admin/heygen-token", adminLimiter, async (req, res) => {
   try {
     const { secret, heygenKey } = req.body;
     if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
-    
-    // Request a LiveAvatar Session Token
     const response = await fetch("https://api.liveavatar.com/v1/sessions/token", {
-      method: "POST",
-      headers: { "x-api-key": heygenKey, "Content-Type": "application/json" }
+      method: "POST", headers: { "x-api-key": heygenKey, "Content-Type": "application/json" }
     });
     const data = await response.json();
     res.json({ token: data.data.token });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post("/api/admin/prototype-chat", adminLimiter, async (req, res) => {
-  try {
-    const { secret, message } = req.body;
-    if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
-
-    // 1. Get Base Prompt & Query Knowledge Base
-    const cfg = await getBotConfig();
-    const kbContext = await searchKnowledgeBase(message);
-
-    // 2. Call GPT-5.4 (Notice: memorySummary and history are empty so it stays isolated)
-    const replyText = await callModel({
-      systemPrompt: cfg.systemPrompt + "\n\nCRITICAL: Keep your answers conversational since this will be spoken aloud by a video avatar.",
-      profileContext: "User: Admin Prototype Tester",
-      ragContext: kbContext,
-      memorySummary: "",
-      history: [],
-      userText: message
-    });
-
-    // 3. Clean out markdown formatting so the text-to-speech engine reads it naturally
-    const cleanSpeech = replyText.replace(/[*_#]/g, '').replace(/\[.*?\]/g, '').trim();
-
-    res.json({ success: true, text: cleanSpeech });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+// 2. Link Session to User (Admin UI)
+app.post("/api/admin/link-avatar-session", adminLimiter, (req, res) => {
+  const { secret, sessionId, userId } = req.body;
+  if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
+  if (sessionId) heygenSessions.set(sessionId, { userId, isFirstTurn: true });
+  res.json({ success: true });
 });
 
+// 3. The Public Webhook (HeyGen's servers hit this directly)
+app.post("/api/heygen-webhook", async (req, res) => {
+  try {
+    const { session_id, text, message } = req.body;
+    const userMsg = text || message || "";
+    
+    // Look up the user context we linked seconds ago
+    const sessionData = heygenSessions.get(session_id);
+    const userId = sessionData?.userId;
+    const isFirstTurn = sessionData?.isFirstTurn;
+    if (sessionData) sessionData.isFirstTurn = false; 
 
-app.listen(PORT, () => console.log(`Server live on ${PORT}`));
+    let profileContext = "User: Anonymous Prototype Tester";
+    let memorySummary = "";
+    let greeting = "Hi! I'm your Director Compass. How can I help you today?";
+
+    // SECURE READ-ONLY DB FETCH
+    if (userId) {
+      const { data: user } = await supabase.from("users").select("full_name, memory_summary").eq("id", userId).single();
+      if (user) {
+        profileContext = `User Profile Data - Name: ${user.full_name || 'Unknown'}.`;
+        memorySummary = user.memory_summary || "";
+        
+        // Dynamic Introduction Logic (Mimicking Phone Call)
+        const hasName = user.full_name && user.full_name.toLowerCase() !== 'null';
+        const name = hasName ? user.full_name.split(' ')[0] : "";
+        if (hasName && memorySummary) {
+          greeting = `Welcome back, ${name}. Shall we continue where we left off?`;
+        } else if (hasName) {
+          greeting = `Hi ${name}! I'm your Director Compass. How can I help you today?`;
+        } else {
+          greeting = "Hi! I'm your Director Compass. Before we dive in, what should I call you?";
+        }
+      }
+    }
+
+    // If HeyGen just sent an initial connection ping, return the greeting!
+    if (!userMsg && isFirstTurn) return res.json({ text: greeting });
+    if (!userMsg) return res.json({ text: "" });
+
+    // Call GPT-5.4 + Knowledge Base (No history saved!)
+    const cfg = await getBotConfig();
+    const kbContext = await searchKnowledgeBase(userMsg);
+
+    const replyText = await callModel({
+      systemPrompt: cfg.systemPrompt + "\n\nCRITICAL: Keep your answers very short and conversational since this will be spoken aloud by a video avatar.",
+      profileContext: profileContext,
+      ragContext: kbContext,
+      memorySummary: memorySummary,
+      history: [],
+      userText: userMsg
+    });
+
+    const cleanSpeech = replyText.replace(/[*_#]/g, '').replace(/\[.*?\]/g, '').trim();
+    res.json({ text: cleanSpeech });
+
+  } catch (e) {
+    console.error("Webhook Error:", e);
+    res.json({ text: "I'm sorry, my server connection was interrupted." });
+  }
+});
