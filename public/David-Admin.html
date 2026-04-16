@@ -194,25 +194,14 @@
         <h2>Live Avatar Sandbox</h2>
         <p style="font-size: 13px; color: #666; margin-bottom: 20px;">Test the video avatar using our existing Knowledge Base and LLM brain without affecting suoabase data.</p>
         
-      <div style="display: flex; gap: 15px; margin-bottom: 20px;">
-            <div style="flex: 1;">
+      <div style="display: flex; gap: 15px; margin-bottom: 20px; align-items: flex-end;">
+            <div style="flex: 2;">
                 <label>Target User (Read-Only Context)</label>
-                <select id="avatarUserSelect">
+                <select id="avatarUserSelect" style="margin-bottom: 0;">
                     <option value="">-- Anonymous / No User --</option>
                 </select>
             </div>
-            <div style="flex: 1; display: flex; gap: 8px; align-items: flex-end;">
-                <div style="flex: 1;">
-                    <label>HeyGen API Key</label>
-                    <input type="password" id="heygenKeyInput" placeholder="Enter HeyGen Key..." style="margin-bottom: 0;">
-                </div>
-                <button id="webhookBtn" onclick="registerHeyGenWebhook()" style="height: 43px; background: #2196f3; padding: 0 15px;" title="Auto-register your server with HeyGen">🔗 Setup Webhook</button>
-            </div>
-            <div style="flex: 1;">
-                <label>Avatar ID</label>
-                <input type="text" id="avatarIdInput" placeholder="Enter Avatar ID...">
-            </div>
-            <button onclick="connectAvatarPrototype()" id="connectAvatarBtn" style="height: 43px; align-self: flex-end; background: #4caf50;">🔌 Connect Stream</button>
+            <button onclick="connectAvatarPrototype()" id="connectAvatarBtn" style="height: 43px; flex: 1; background: #4caf50; font-weight: 600;">🔌 Connect Stream</button>
         </div>
 
         <div style="width: 100%; max-width: 600px; aspect-ratio: 16/9; background: #111; border-radius: 12px; overflow: hidden; margin-bottom: 20px; position: relative;">
@@ -930,12 +919,10 @@ async function showUserDeepDive(userId) {
     let activeAvatarSession = null;
 
    async function connectAvatarPrototype() {
-        const heygenKey = document.getElementById('heygenKeyInput').value.trim();
-        const avatarId = document.getElementById('avatarIdInput').value.trim();
         const secret = document.getElementById('secretKey').value.trim();
         const btn = document.getElementById('connectAvatarBtn');
 
-        if (!secret || !heygenKey || !avatarId) return uiAlert("Error", "Missing Secret, HeyGen Key, or Avatar ID.");
+        if (!secret) return uiAlert("Error", "Missing Admin Secret Key.");
 
         btn.innerText = "Booting Server...";
 
@@ -943,7 +930,7 @@ async function showUserDeepDive(userId) {
             // 1. Tell backend to fully orchestrate the room
             const res = await fetch('/api/admin/heygen-start', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ secret, heygenKey, avatarId })
+                body: JSON.stringify({ secret }) // ✅ FIX: Only sending the admin secret now!
             });
             const data = await res.json();
 
@@ -961,6 +948,7 @@ async function showUserDeepDive(userId) {
             window.open(meetUrl, '_blank');
 
             btn.innerText = "✅ Stream Opened in New Tab";
+            setTimeout(() => btn.innerText = "🔌 Connect Stream", 3000); // Resets the button text after 3 seconds
         } catch (e) {
             btn.innerText = "🔌 Connect Stream";
             uiAlert("Connection Error", e.message);

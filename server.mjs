@@ -36,6 +36,8 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const GOOGLE_SCRIPT_WEBHOOK_URL = process.env.GOOGLE_SCRIPT_WEBHOOK_URL || "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.4";
 const OPENAI_MEMORY_MODEL = process.env.OPENAI_MEMORY_MODEL || "gpt-4o-mini";
+const HEYGEN_API_KEY = process.env.HEYGEN_API_KEY || "";
+const HEYGEN_AVATAR_ID = process.env.HEYGEN_AVATAR_ID || "";
 
 if (!SUPABASE_URL || !SUPABASE_SECRET_KEY) console.error("Missing SUPABASE_URL or SUPABASE_SECRET_KEY");
 if (!OPENAI_API_KEY) console.error("Missing OPENAI_API_KEY");
@@ -167,7 +169,7 @@ function scheduleSessionSummary(userId, conversationId, channel, userText, assis
       ).join("\n\n");
       
       await saveConversationSummary(userId, session.conversationId, channel, fullTranscript);
-      console.log(`✅ Session summary saved for ${key}`);
+      console.log(` Session summary saved for ${key}`);
       
       //   NEW: Only auto-close phone-based chats! Web chats stay open so the user can use their sidebar history.
       if (channel !== "web") {
@@ -596,7 +598,7 @@ async function triggerGoogleAppsScript(email, name, transcriptId, description) {
       body: JSON.stringify({ email, name, transcriptId, description })
     });
     const responseText = await response.text(); 
-    console.log("✅ Google Apps Script responded:", responseText);
+    console.log(" Google Apps Script responded:", responseText);
   } catch (err) { 
     console.error("❌ Google Script trigger failed:", err.message); 
   }
@@ -693,7 +695,7 @@ async function processSmsIntent(userId, userText) {
       const finalEmail = updates.email || user?.email;
       if (finalEmail && finalEmail.includes('@')) {
         const desc = result.transcript_description || "from our recent conversation";
-        console.log(`✅ Smart Intent: Queued transcript ${result.transcript_id_to_send} for ${finalEmail}`);
+        console.log(` Smart Intent: Queued transcript ${result.transcript_id_to_send} for ${finalEmail}`);
         return { email: finalEmail, name: updates.full_name || user?.full_name || "User", id: result.transcript_id_to_send, desc: desc };
       }
     }
@@ -775,7 +777,7 @@ async function webProfileExtractor(userId, userText, currentName, currentEmail) 
 
   const hasEmailInText = emailRegex.test(userText);
   const hasNameTrigger = nameKeywords.test(userText);
-  // ✅ FIX: Added 'guest' check so David knows to replace the Guest placeholder with your real name
+  // : Added 'guest' check so David knows to replace the Guest placeholder with your real name
 const isNameMissing = !currentName || 
                        currentName.toLowerCase() === 'null' || 
                        currentName.toLowerCase() === 'guest' || 
@@ -816,7 +818,7 @@ const isNameMissing = !currentName ||
 
     if (Object.keys(updates).length > 0) {
       await supabase.from("users").update(updates).eq("id", userId);
-      console.log(`✅ Web Profile Auto-Saved for ${userId}:`, updates);
+      console.log(` Web Profile Auto-Saved for ${userId}:`, updates);
     }
   } catch (e) {
     console.error("Web Profile Extractor Error:", e.message);
@@ -946,7 +948,7 @@ app.post("/twilio/sms", async (req, res) => {
         .trim();
 
     res.status(200).type("text/xml").send(twimlReply(cleanReplyText));
-    console.log("✅ SMS Reply sent to Twilio!");
+    console.log(" SMS Reply sent to Twilio!");
 
     (async () => {
       const { error: msgErr } = await supabase.from("messages").insert({
@@ -1078,7 +1080,7 @@ function verifyElevenLabsSignature(req, res, next) {
     if (!isValid) {
       console.error("❌ POST-CALL: HMAC signature mismatch!");
     } else {
-      console.log("✅ HMAC signature verified successfully");
+      console.log(" HMAC signature verified successfully");
     }
   } catch (e) {
     console.error("⚠️ HMAC verification error:", e.message);
@@ -1213,7 +1215,7 @@ updateMemorySummary({
       if (updateErr) {
         console.error("❌ Failed to save transcript_data:", updateErr.message);
       } else {
-        console.log("✅ Transcript saved to user record");
+        console.log(" Transcript saved to user record");
       }
 
       if (GOOGLE_SCRIPT_WEBHOOK_URL) {
@@ -1225,7 +1227,7 @@ updateMemorySummary({
             body: JSON.stringify({ action: "fetch_transcripts" }) 
           });
           const gsText = await gsResponse.text();
-          console.log(`✅ Google Script Response: ${gsText.substring(0, 200)}`);
+          console.log(` Google Script Response: ${gsText.substring(0, 200)}`);
         } catch (gsErr) {
           console.error("❌ Google Script trigger FAILED:", gsErr.message);
         }
@@ -1259,7 +1261,7 @@ updateMemorySummary({
       await twilioClient.messages.create({ body: introMsg, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
       await supabase.from("messages").insert({ conversation_id: smsConversationId, channel: "sms", direction: "agent", text: introMsg, provider: "twilio" });
       await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
-      console.log("✅ Call-first welcome SMS sent!");
+      console.log(" Call-first welcome SMS sent!");
 
       // Small delay so the intro arrives before the transcript offer
       await new Promise(resolve => setTimeout(resolve, 3000));
@@ -1283,7 +1285,7 @@ updateMemorySummary({
     await twilioClient.messages.create({ body: transcriptMsg, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
     await supabase.from("messages").insert({ conversation_id: smsConversationId, channel: "sms", direction: "agent", text: transcriptMsg, provider: "twilio" });
 
-    console.log("✅ Transcript offer SMS sent!");
+    console.log(" Transcript offer SMS sent!");
   } catch (smsErr) {
     console.error("❌ Failed to send delayed SMS:", smsErr.message);
   }
@@ -1393,7 +1395,7 @@ async function triggerWebWelcomeSMS(userId, phone, name) {
       await twilioClient.messages.create({ body: msg1, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
       
       await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
-      console.log(`✅ Sent Web-First Welcome SMS to ${outboundPhone}`);
+      console.log(` Sent Web-First Welcome SMS to ${outboundPhone}`);
     }
   } catch (e) { 
     console.error("Web Welcome SMS Error:", e.message);
@@ -1469,7 +1471,7 @@ setInterval(async () => {
           try {
             await twilioClient.messages.create({ body: msg, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
             await supabase.from("users").update({ web_upsell_sent: true }).eq("id", u.id);
-            console.log(`✅ Sent 3-Day Web Upsell SMS to ${outboundPhone}`);
+            console.log(` Sent 3-Day Web Upsell SMS to ${outboundPhone}`);
           } catch (e) {
             console.error("Upsell SMS failed for " + outboundPhone, e.message);
             if (e.code === 21211) await supabase.from("users").update({ web_upsell_sent: true }).eq("id", u.id);
@@ -2198,7 +2200,7 @@ app.delete("/api/admin/delete-user", adminLimiter, async (req, res) => {
     
     if (userErr) throw userErr;
 
-    console.log(`✅ Full wipe successful for User ID: ${userId}`);
+    console.log(` Full wipe successful for User ID: ${userId}`);
     res.json({ success: true, message: "User and all associated data completely deleted." });
 
   } catch (err) {
@@ -2635,28 +2637,29 @@ app.put("/api/web/conversations/:id/title", authenticateToken, async (req, res) 
 // LIVE AVATAR PROTOTYPE (FULL MODE CUSTOM LLM)
 // ==========================================
 const heygenSessions = new Map();
-let activeAvatarUserId = null; // ✅ Tracks which Supabase user the avatar is talking to
+let activeAvatarUserId = null; //  Tracks which Supabase user the avatar is talking to
 
 // 1. Get Token & Start Session Automatically
 app.post("/api/admin/heygen-start", adminLimiter, async (req, res) => {
   try {
-    const { secret, heygenKey, avatarId } = req.body;
+    const { secret } = req.body; // : Removed heygenKey and avatarId from frontend payload
     if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
     
-   // STEP A: Generate the Token using the strict schema
+    if (!HEYGEN_API_KEY || !HEYGEN_AVATAR_ID) return res.status(500).json({ error: "Missing HeyGen Env Variables on Render!" });
+
     const tokenPayload = JSON.stringify({ 
         mode: "FULL",
-        avatar_id: avatarId,
+        avatar_id: HEYGEN_AVATAR_ID, // : Using backend variable
         llm_configuration_id: "cfe8b280-690d-4f95-8c9d-3981f3195269", 
         avatar_persona: { 
             language: "en",
             voice_id: "1d8f979e-f0ef-4ac6-bac4-b94a110a5423",
-            context_id: "a006a765-a108-47d5-b6d0-adaf195abdb9" // Unlocks the microphone!
+            context_id: "a006a765-a108-47d5-b6d0-adaf195abdb9" 
         }
     });
 
     const tokenRes = await fetch("https://api.liveavatar.com/v1/sessions/token", {
-      method: "POST", headers: { "x-api-key": heygenKey, "Content-Type": "application/json" },
+      method: "POST", headers: { "x-api-key": HEYGEN_API_KEY, "Content-Type": "application/json" }, // : Using backend variable
       body: tokenPayload
     });
     const tokenData = await tokenRes.json();
@@ -2688,7 +2691,7 @@ app.post("/api/admin/link-avatar-session", adminLimiter, (req, res) => {
   const { secret, sessionId, userId } = req.body;
   if (secret !== process.env.SUPABASE_SECRET_KEY) return res.status(401).json({ error: "Unauthorized" });
   
-  // ✅ FIX: Set the global variable so the proxy can find the user
+  // : Set the global variable so the proxy can find the user
   // HeyGen does NOT pass session_id in /chat/completions requests
   activeAvatarUserId = userId || null;
   if (sessionId) heygenSessions.set(sessionId, { userId, isFirstTurn: true });
@@ -2697,7 +2700,7 @@ app.post("/api/admin/link-avatar-session", adminLimiter, (req, res) => {
   res.json({ success: true });
 });
 
-// ✅ FIXED: OpenAI Proxy with WORKING Supabase Memory Lookup
+// ED: OpenAI Proxy with WORKING Supabase Memory Lookup
 app.post("/api/openai-proxy/chat/completions", async (req, res) => {
   try {
     const { messages, stream } = req.body;
@@ -2713,7 +2716,7 @@ app.post("/api/openai-proxy/chat/completions", async (req, res) => {
         content: m.content
     }));
 
-    // ✅ THE FIX: Use activeAvatarUserId (set by /api/admin/link-avatar-session)
+    //  THE FIX: Use activeAvatarUserId (set by /api/admin/link-avatar-session)
     // HeyGen follows the standard OpenAI /chat/completions spec which does NOT 
     // include session_id, so the old heygenSessions.get(session_id) always failed.
     let profileContext = "User: Anonymous Live Video Caller";

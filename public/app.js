@@ -160,17 +160,26 @@ async function sendCode() {
     const btn = document.querySelector('#step1 .btn');
     if (btn.disabled) return; // 🛑 CRITICAL: Stops the Enter key from double-firing
     
-    // --- NEW: MANDATORY CHECKBOX VALIDATION ---
+    // ✅ FIX 1: Lock the button immediately BEFORE running any validation
+    btn.disabled = true; 
+    
+    // --- MANDATORY CHECKBOX VALIDATION ---
     const disclaimerCheck = document.getElementById('disclaimerCheck');
     if (disclaimerCheck && !disclaimerCheck.checked) {
+        document.getElementById('phoneInput').blur(); // ✅ FIX 2: Remove focus so "Enter" stops firing
         await uiAlert("Required", "You must agree to the Disclaimer & Terms before logging in.");
+        btn.disabled = false; // Unlock the button only after they close the alert
         return;
     }
     
     userPhone = phoneInput.getNumber();
-    if (!userPhone) { await uiAlert("Invalid Number", "Please enter a valid phone number."); return; }
+    if (!userPhone) { 
+        document.getElementById('phoneInput').blur();
+        await uiAlert("Invalid Number", "Please enter a valid phone number."); 
+        btn.disabled = false; // Unlock the button only after they close the alert
+        return; 
+    }
     
-    btn.disabled = true; // Lock the button immediately
     btn.innerText = "Sending...";
     
     try {
