@@ -55,7 +55,10 @@ app.use((req, res, next) => {
 });
 
 app.use(express.static('public'));
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ 
+  limit: '50mb',
+  verify: (req, res, buf) => { req.rawBody = buf.toString(); }
+}));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 app.set("trust proxy", 1);
@@ -1143,36 +1146,47 @@ const fullVoiceMemory = [
 function verifyElevenLabsSignature(req, res, next) {
   const secret = process.env.ELEVENLABS_WEBHOOK_SECRET;
   
-  // 🔒 MANDATORY: If the secret is not configured, the server cannot verify webhooks.
-  // Block ALL requests rather than accepting unverified transcripts.
   if (!secret) {
-    console.error("🚨 FATAL: ELEVENLABS_WEBHOOK_SECRET not configured — rejecting all post-call webhooks");
-    logError({ channel: "call", stage: "ElevenLabs HMAC Verification", message: "ELEVENLABS_WEBHOOK_SECRET environment variable is not set. All post-call webhooks are being rejected." });
-    return res.status(500).json({ error: "Server security misconfiguration. Webhook secret not set." });
+    console.error("🚨 FATAL: ELEVENLABS_WEBHOOK_SECRET not configured");
+    logError({ channel: "call", stage: "ElevenLabs HMAC Verification", message: "ELEVENLABS_WEBHOOK_SECRET is not set." });
+    return res.status(500).json({ error: "Server security misconfiguration." });
   }
 
-  // 🔒 MANDATORY: If no signature header is present, reject immediately.
-  const signature = req.headers['x-elevenlabs-signature'] || req.headers['x-webhook-signature'] || req.headers['x-signature'];
-  if (!signature) {
-    console.error("❌ POST-CALL: No signature header found. Rejecting webhook. IP:", req.ip);
-    logError({ channel: "call", stage: "ElevenLabs HMAC Verification", message: "Missing signature header — possible forgery attempt", details: { ip: req.ip, userAgent: req.headers['user-agent'] } });
+  // 1. THE FIX: Look for the exact header ElevenLabs uses (no 'x-' prefix)
+  const signatureHeader = req.headers['elevenlabs-signature'];
+  
+  if (!signatureHeader) {
+    console.error("❌ POST-CALL: No signature header found. IP:", req.ip);
+    logError({ channel: "call", stage: "ElevenLabs HMAC Verification", message: "Missing signature header", details: { ip: req.ip } });
     return res.status(401).json({ error: "Missing webhook signature." });
   }
 
-  // 🔒 VERIFY: Use timing-safe comparison to prevent timing attacks
   try {
-    const expectedSignature = crypto.createHmac('sha256', secret).update(JSON.stringify(req.body)).digest('hex');
+    // 2. THE FIX: ElevenLabs sends "t=TIMESTAMP,v0=HASH"
+    const parts = signatureHeader.split(',');
+    const timestampPart = parts.find(p => p.startsWith('t='));
+    const signaturePart = parts.find(p => p.startsWith('v0='));
+
+    if (!timestampPart || !signaturePart) {
+      return res.status(403).json({ error: "Invalid signature format." });
+    }
+
+    const timestamp = timestampPart.split('=')[1];
+    const actualSignature = signaturePart.split('=')[1];
+
+    // 3. THE FIX: ElevenLabs hashes the timestamp + "." + the raw body
+    const payloadToSign = timestamp + "." + (req.rawBody || JSON.stringify(req.body));
     
-    // Support both raw hex and "sha256=" prefixed formats
-    const signatureToCompare = signature.startsWith('sha256=') ? signature.substring(7) : signature;
-    
-    // Both buffers must be the same length for timingSafeEqual
-    const sigBuffer = Buffer.from(signatureToCompare, 'hex');
+    const expectedSignature = crypto.createHmac('sha256', secret)
+      .update(payloadToSign)
+      .digest('hex');
+
+    const sigBuffer = Buffer.from(actualSignature, 'hex');
     const expectedBuffer = Buffer.from(expectedSignature, 'hex');
-    
+
     if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
-      console.error("❌ POST-CALL: HMAC signature mismatch! Rejecting webhook. IP:", req.ip);
-      logError({ channel: "call", stage: "ElevenLabs HMAC Verification", message: "HMAC signature mismatch — possible transcript forgery attempt", details: { ip: req.ip } });
+      console.error("❌ POST-CALL: HMAC signature mismatch!");
+      logError({ channel: "call", stage: "ElevenLabs HMAC Verification", message: "HMAC signature mismatch" });
       return res.status(403).json({ error: "Invalid webhook signature." });
     }
     
@@ -1180,8 +1194,8 @@ function verifyElevenLabsSignature(req, res, next) {
     next();
     
   } catch (e) {
-    console.error("🚨 HMAC verification error:", e.message);
-    logError({ channel: "call", stage: "ElevenLabs HMAC Verification", message: "HMAC verification crashed: " + e.message });
+    console.error("🚨 HMAC error:", e.message);
+    logError({ channel: "call", stage: "ElevenLabs HMAC Verification", message: "HMAC crashed: " + e.message });
     return res.status(500).json({ error: "Signature verification failed." });
   }
 }
