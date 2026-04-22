@@ -868,7 +868,46 @@ app.get("/health", (req, res) => res.status(200).send("ok"));
 // ==========================================
 // TWILIO SMS ENDPOINT
 // ==========================================
-app.post("/twilio/sms", async (req, res) => {
+
+// 🔒 TWILIO WEBHOOK SIGNATURE VALIDATION
+function validateTwilioWebhook(req, res, next) {
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  if (!authToken) {
+    console.error("FATAL: TWILIO_AUTH_TOKEN not configured — cannot validate webhook signatures");
+    logError({ channel: "sms", stage: "Twilio Signature Validation", message: "TWILIO_AUTH_TOKEN not configured" });
+    return res.status(500).type("text/xml").send("<Response></Response>");
+  }
+
+  const twilioSignature = req.headers['x-twilio-signature'];
+  if (!twilioSignature) {
+    console.error("❌ Twilio webhook rejected: Missing X-Twilio-Signature header. IP:", req.ip);
+    logError({ channel: "sms", stage: "Twilio Signature Validation", message: "Missing X-Twilio-Signature header", details: { ip: req.ip, userAgent: req.headers['user-agent'] } });
+    return res.status(403).type("text/xml").send("<Response></Response>");
+  }
+
+  // Reconstruct the full URL that Twilio used to POST to this server
+  // The TWILIO_WEBHOOK_URL env var is optional — if set, it overrides auto-detection
+  // (Useful if the auto-detected URL doesn't match what's configured in Twilio console)
+  const webhookUrl = process.env.TWILIO_WEBHOOK_URL || `${req.protocol}://${req.get('host')}${req.originalUrl}`;
+
+  const isValid = twilio.validateRequest(
+    authToken,
+    twilioSignature,
+    webhookUrl,
+    req.body
+  );
+
+  if (!isValid) {
+    console.error("❌ Twilio webhook rejected: Invalid signature. IP:", req.ip);
+    logError({ channel: "sms", stage: "Twilio Signature Validation", message: "Invalid Twilio webhook signature — possible forgery attempt", details: { ip: req.ip, url: webhookUrl } });
+    return res.status(403).type("text/xml").send("<Response></Response>");
+  }
+
+  console.log("✅ Twilio webhook signature verified");
+  next();
+}
+
+app.post("/twilio/sms", validateTwilioWebhook, async (req, res) => {
   const rawFrom = req.body.From || ""; 
   const isWA = rawFrom.startsWith("whatsapp:"); //   NEW: Detect WhatsApp
   const currentChannel = isWA ? "wa" : "sms";   //   NEW: Dynamic channel routing
@@ -1103,27 +1142,48 @@ const fullVoiceMemory = [
 // ==========================================
 function verifyElevenLabsSignature(req, res, next) {
   const secret = process.env.ELEVENLABS_WEBHOOK_SECRET;
+  
+  // 🔒 MANDATORY: If the secret is not configured, the server cannot verify webhooks.
+  // Block ALL requests rather than accepting unverified transcripts.
   if (!secret) {
-    console.log("⚠️ No ELEVENLABS_WEBHOOK_SECRET set — skipping HMAC verification");
-    return next();
+    console.error("🚨 FATAL: ELEVENLABS_WEBHOOK_SECRET not configured — rejecting all post-call webhooks");
+    logError({ channel: "call", stage: "ElevenLabs HMAC Verification", message: "ELEVENLABS_WEBHOOK_SECRET environment variable is not set. All post-call webhooks are being rejected." });
+    return res.status(500).json({ error: "Server security misconfiguration. Webhook secret not set." });
   }
-  const signature = req.headers['x-elevenlabs-signature'] || req.headers['x-webhook-signature'] || req.headers['x-signature'] || req.headers['authorization'];
+
+  // 🔒 MANDATORY: If no signature header is present, reject immediately.
+  const signature = req.headers['x-elevenlabs-signature'] || req.headers['x-webhook-signature'] || req.headers['x-signature'];
   if (!signature) {
-    console.error("❌ POST-CALL: No signature header found.");
-    return next();
+    console.error("❌ POST-CALL: No signature header found. Rejecting webhook. IP:", req.ip);
+    logError({ channel: "call", stage: "ElevenLabs HMAC Verification", message: "Missing signature header — possible forgery attempt", details: { ip: req.ip, userAgent: req.headers['user-agent'] } });
+    return res.status(401).json({ error: "Missing webhook signature." });
   }
+
+  // 🔒 VERIFY: Use timing-safe comparison to prevent timing attacks
   try {
     const expectedSignature = crypto.createHmac('sha256', secret).update(JSON.stringify(req.body)).digest('hex');
-    const isValid = signature === expectedSignature || signature === `sha256=${expectedSignature}`;
-    if (!isValid) {
-      console.error("❌ POST-CALL: HMAC signature mismatch!");
-    } else {
-      console.log(" HMAC signature verified successfully");
+    
+    // Support both raw hex and "sha256=" prefixed formats
+    const signatureToCompare = signature.startsWith('sha256=') ? signature.substring(7) : signature;
+    
+    // Both buffers must be the same length for timingSafeEqual
+    const sigBuffer = Buffer.from(signatureToCompare, 'hex');
+    const expectedBuffer = Buffer.from(expectedSignature, 'hex');
+    
+    if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
+      console.error("❌ POST-CALL: HMAC signature mismatch! Rejecting webhook. IP:", req.ip);
+      logError({ channel: "call", stage: "ElevenLabs HMAC Verification", message: "HMAC signature mismatch — possible transcript forgery attempt", details: { ip: req.ip } });
+      return res.status(403).json({ error: "Invalid webhook signature." });
     }
+    
+    console.log("✅ ElevenLabs HMAC signature verified successfully");
+    next();
+    
   } catch (e) {
-    console.error("⚠️ HMAC verification error:", e.message);
+    console.error("🚨 HMAC verification error:", e.message);
+    logError({ channel: "call", stage: "ElevenLabs HMAC Verification", message: "HMAC verification crashed: " + e.message });
+    return res.status(500).json({ error: "Signature verification failed." });
   }
-  next();
 }
 
 app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) => {
