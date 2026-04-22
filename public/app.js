@@ -142,7 +142,7 @@ window.addEventListener('DOMContentLoaded', () => {
         localStorage.removeItem('david_last_active');
         // Do not auto-login, leave them on the Sign In screen
     } else if (savedUserId) {
-        // Valid session! Boot up the app
+        // Valid session! Boot up the app (cookie will be validated on first API call)
         globalUserId = savedUserId;
         userName = localStorage.getItem('david_userName') || "Guest";
         userPhone = localStorage.getItem('david_userPhone') || "";
@@ -152,7 +152,11 @@ window.addEventListener('DOMContentLoaded', () => {
         document.querySelectorAll('.login-tag-text').forEach(el => el.innerText = "Logged in as " + userName);
         document.getElementById('loginContainer').style.display = 'none';
         document.getElementById('dashboardContainer').style.display = 'flex';
-        initDashboard(); 
+        initDashboard().catch(() => {
+            // If initDashboard fails (cookie expired), force logout
+            console.log("Session cookie expired. Redirecting to login.");
+            logoutUser();
+        }); 
     }
 });
 
@@ -221,7 +225,7 @@ async function verifyCode() {
             localStorage.setItem('david_userId', globalUserId);
             localStorage.setItem('david_userName', userName);
             localStorage.setItem('david_userPhone', userPhone);
-            localStorage.setItem('david_jwt', data.token); 
+            // 🔒 JWT is now stored in an HttpOnly cookie by the server — NOT in localStorage
             localStorage.setItem('david_last_active', Date.now());
             localStorage.setItem('david_previous_login', data.previousLogin);
 
@@ -242,14 +246,11 @@ async function verifyCode() {
 }
 
 function logoutUser() {
-    // Notify backend of logout to instantly trigger the welcome SMS (if applicable)
+    // Notify backend of logout (cookie is sent automatically)
     if (globalUserId) {
         fetch('/api/web/logout', { 
             method: 'POST', 
-            headers: { 
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` 
-            }
+            headers: { 'Content-Type': 'application/json' }
         }).catch(e => console.error("Logout ping failed", e));
     }
 
@@ -257,11 +258,10 @@ function logoutUser() {
     userPhone = "";
     currentConversationId = null;
     
-    // --- NEW: Clear Local Storage ---
+    // --- Clear Local Storage (JWT is no longer stored here — it's in an HttpOnly cookie cleared by the server) ---
     localStorage.removeItem('david_userId');
     localStorage.removeItem('david_userName');
     localStorage.removeItem('david_userPhone');
-    localStorage.removeItem('david_jwt'); // 🔐 Destroy the VIP Pass
     localStorage.removeItem('david_last_active');
     localStorage.removeItem('david_previous_login');
     // --------------------------------
@@ -273,7 +273,7 @@ function logoutUser() {
     document.getElementById('step2').style.display = 'none';
     document.getElementById('step1').style.display = 'block';
     
-    // --- NEW: Wipe all inputs clean on logout ---
+    // --- Wipe all inputs clean on logout ---
     document.getElementById('codeInput').value = "";
     document.getElementById('phoneInput').value = ""; 
     const disclaimer = document.getElementById('disclaimerCheck');
@@ -306,10 +306,7 @@ async function startNewChat() {
     try {
         const res = await fetch('/api/web/conversations/new', {
             method: 'POST', 
-            headers: { 
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` 
-            }
+            headers: { 'Content-Type': 'application/json' }
         });
         const data = await res.json();
         if (data.success) {
@@ -405,10 +402,16 @@ function renderConversations() {
 // 🌐 LOAD CONVERSATIONS (UPDATED FOR FILTERS)
 async function loadConversationList(autoSelect = false) {
     try {
-        const res = await fetch("/api/web/conversations", { 
-            headers: { 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` },
+       const res = await fetch("/api/web/conversations", { 
             cache: "no-store" 
         });
+        
+        // 🔒 If the HttpOnly cookie expired, the server returns 401. Force logout.
+        if (res.status === 401 || res.status === 403) {
+            logoutUser();
+            return;
+        }
+        
         const data = await res.json();
         
        if (data.success && data.conversations) {
@@ -466,7 +469,7 @@ async function renameChat(conversationId, currentTitle) {
 
     try {
         const res = await fetch(`/api/web/conversations/${conversationId}/title`, { 
-            method: 'PUT', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` }, 
+            method: 'PUT', headers: { 'Content-Type': 'application/json' }, 
             body: JSON.stringify({ title: finalTitle }) 
         });
         const data = await res.json();
@@ -509,7 +512,6 @@ async function switchChat(conversationId) {
 
     try {
        const res = await fetch(`/api/web/messages?conversationId=${conversationId}`, { 
-            headers: { 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` },
             cache: "no-store" 
         });
         const data = await res.json();
@@ -548,7 +550,7 @@ async function deleteChat(conversationId) {
 
     try {
         const res = await fetch("/api/web/conversations/" + conversationId, {
-            method: 'DELETE', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` }
+            method: 'DELETE', headers: { 'Content-Type': 'application/json' }
         });
         const data = await res.json();
         if (!data.success) throw new Error("Delete failed");
@@ -670,14 +672,9 @@ async function sendMessage() {
     chatAbortController = new AbortController();
 
     try {
-        const token = localStorage.getItem('david_jwt');
-        
         const res = await fetch('/api/chat', {
             method: 'POST', 
-            headers: { 
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}` 
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message, conversationId: currentConversationId, selectedDocIds, deepDive: isDeepDive }),
             signal: chatAbortController.signal // Hooks into our Stop button!
         });
@@ -800,9 +797,7 @@ async function viewDocument(docId) {
     btn.innerText = "Loading...";
 
     try {
-        const res = await fetch(`/api/documents/${docId}/content`, {
-            headers: { 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` }
-        });
+        const res = await fetch(`/api/documents/${docId}/content`);
         const data = await res.json();
         
         if (data.success) {
@@ -952,7 +947,7 @@ async function renameDocument(docId, oldFullName) {
     
     try {
         const res = await fetch(`/api/documents/${docId}/name`, { 
-            method: 'PUT', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` }, 
+            method: 'PUT', headers: { 'Content-Type': 'application/json' }, 
             body: JSON.stringify({ newName: finalName }) 
         });
         const data = await res.json();
@@ -974,7 +969,7 @@ async function deleteDocument(docId) {
 
     try {
        const res = await fetch("/api/documents/" + docId, { 
-            method: 'DELETE', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` } 
+            method: 'DELETE', headers: { 'Content-Type': 'application/json' } 
         });
         const data = await res.json();
         if (!data.success) throw new Error("Delete failed");
@@ -989,7 +984,6 @@ async function loadUserDocuments() {
     if (!globalUserId) return;
     try {
        const res = await fetch("/api/documents", { 
-            headers: { 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` },
             cache: "no-store" 
         });
         const data = await res.json();
@@ -1127,9 +1121,7 @@ async function openProfileModal() {
     modal.classList.add('show');
 
     try {
-        const res = await fetch('/api/web/profile', {
-            headers: { 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` }
-        });
+        const res = await fetch('/api/web/profile');
         const data = await res.json();
         if (data.success) {
             nameInput.value = (data.profile.full_name && data.profile.full_name !== 'null') ? data.profile.full_name : "";
@@ -1167,12 +1159,9 @@ async function saveProfileSettings() {
     btn.disabled = true;
 
     try {
-        const res = await fetch('/api/web/profile', {
+       const res = await fetch('/api/web/profile', {
             method: 'PUT',
-            headers: { 
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('david_jwt')}`
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, email })
         });
         const data = await res.json();
@@ -1233,7 +1222,6 @@ async function uploadDocument(droppedFile = null) {
     try {
         const res = await fetch('/api/upload', { 
             method: 'POST', 
-            headers: { 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` },
             body: formData 
         });
         const data = await res.json();
@@ -1342,7 +1330,6 @@ async function toggleRecording() {
             try {
                 const res = await fetch('/api/transcribe', {
                     method: 'POST',
-                    headers: { 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` },
                     body: formData
                 });
                 const data = await res.json();
@@ -1426,9 +1413,7 @@ function setupDragAndDrop(containerSelector, overlayId) {
 // 🆕 Syncs the UI with your Supabase profile name
 async function syncUserIdentity() {
     try {
-        const res = await fetch('/api/web/profile', {
-            headers: { 'Authorization': `Bearer ${localStorage.getItem('david_jwt')}` }
-        });
+        const res = await fetch('/api/web/profile');
         const data = await res.json();
         
         // Only update if a valid name is found in the database

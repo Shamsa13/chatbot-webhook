@@ -14,13 +14,46 @@ import rateLimit from "express-rate-limit";
 import fs from "fs";     
 import os from "os";     
 import path from "path";
+import cookieParser from "cookie-parser";
 
 const JWT_SECRET = process.env.JWT_SECRET || "david-beatty-super-secret-key-change-this";
 
 const upload = multer({ storage: multer.memoryStorage() });
 
 const app = express();
-app.use(cors());
+
+app.use(cors({
+  origin: true,
+  credentials: true
+}));
+
+app.use(cookieParser());
+
+// --- SECURITY HEADERS ---
+app.use((req, res, next) => {
+  // Prevent clickjacking
+  res.setHeader('X-Frame-Options', 'DENY');
+  // Prevent MIME type sniffing
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // Enable XSS filter in older browsers
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  // Prevent referrer leakage
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  // Content Security Policy
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data:",
+    "connect-src 'self'",
+    "frame-ancestors 'none'"
+  ].join('; '));
+  // Strict Transport Security (forces HTTPS)
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+});
+
 app.use(express.static('public'));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
@@ -78,12 +111,17 @@ const adminLimiter = rateLimit({
   message: { error: "Too many admin attempts." }
 });
 
-// --- 🔐 JWT AUTH MIDDLEWARE ---
 function authenticateToken(req, res, next) {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Expects "Bearer <token>"
+  // Primary: read from HttpOnly cookie
+  let token = req.cookies?.david_token;
+  
+  // Fallback: read from Authorization header (for backwards compatibility during migration)
+  if (!token) {
+    const authHeader = req.headers['authorization'];
+    token = authHeader && authHeader.split(' ')[1];
+  }
 
-  if (!token) return res.status(401).json({ error: "Access denied. No token provided." });
+  if (!token) return res.status(401).json({ error: "Access denied. No session found." });
 
   jwt.verify(token, JWT_SECRET, (err, decoded) => {
     if (err) return res.status(403).json({ error: "Invalid or expired session. Please log in again." });
@@ -1369,8 +1407,17 @@ app.post("/api/auth/verify-code", otpLimiter, async (req, res) => {
     // 🔐 GENERATE THE JWT TOKEN (Valid for 7 days)
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
 
-    // Send the token back to the frontend along with the user info AND the previous login
-    res.json({ success: true, userId: user.id, name: user.full_name, token: token, previousLogin: previousLogin });
+    // 🔒 SET JWT AS HTTPONLY COOKIE — JavaScript cannot read this
+    res.cookie('david_token', token, {
+      httpOnly: true,                    // JavaScript cannot access this cookie
+      secure: true,                      // Only sent over HTTPS
+      sameSite: 'strict',                // Not sent with cross-site requests
+      maxAge: 7 * 24 * 60 * 60 * 1000,  // 7 days in milliseconds
+      path: '/'                          // Available on all routes
+    });
+
+    // Send user info back to the frontend (but NOT the token — it is in the cookie now)
+    res.json({ success: true, userId: user.id, name: user.full_name, previousLogin: previousLogin });
   } catch (err) {
     console.error("OTP Verify Error:", err.message);
     res.status(500).json({ error: "Verification failed." });
@@ -1427,7 +1474,6 @@ setInterval(async () => {
   } catch(e) { console.error("Inactivity sweep error:", e); }
 }, 5 * 60000); // Checks every 5 minutes
 
-// Instant Web Logout Trigger
 app.post("/api/web/logout", authenticateToken, async (req, res) => {
    try {
      const userId = req.user.userId; // 🔒 SECURE: Extracted from JWT
@@ -1435,8 +1481,18 @@ app.post("/api/web/logout", authenticateToken, async (req, res) => {
      if (user && !user.vcard_sent && user.phone) {
        await triggerWebWelcomeSMS(userId, user.phone, user.full_name);
      }
+     // 🔒 CLEAR THE HTTPONLY COOKIE — must match the same options used when setting it
+     res.clearCookie('david_token', {
+       httpOnly: true,
+       secure: true,
+       sameSite: 'strict',
+       path: '/'
+     });
      res.json({ success: true });
-   } catch(e) { res.json({ success: true }); }
+   } catch(e) { 
+     res.clearCookie('david_token', { httpOnly: true, secure: true, sameSite: 'strict', path: '/' });
+     res.json({ success: true }); 
+   }
 });
 
 // ==========================================
