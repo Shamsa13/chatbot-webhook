@@ -137,7 +137,7 @@ window.addEventListener('DOMContentLoaded', () => {
         console.log("Session expired due to inactivity.");
         localStorage.removeItem('david_userId');
         localStorage.removeItem('david_userName');
-        localStorage.removeItem('david_userPhone');
+        // david_userPhone no longer stored in localStorage
         localStorage.removeItem('david_jwt');
         localStorage.removeItem('david_last_active');
         // Do not auto-login, leave them on the Sign In screen
@@ -145,7 +145,7 @@ window.addEventListener('DOMContentLoaded', () => {
         // Valid session! Boot up the app (cookie will be validated on first API call)
         globalUserId = savedUserId;
         userName = localStorage.getItem('david_userName') || "Guest";
-        userPhone = localStorage.getItem('david_userPhone') || "";
+        // 🔒 Phone number no longer stored in localStorage for privacy
         
         localStorage.setItem('david_last_active', Date.now()); // Reset timer on fresh load
         
@@ -224,7 +224,6 @@ async function verifyCode() {
             
             localStorage.setItem('david_userId', globalUserId);
             localStorage.setItem('david_userName', userName);
-            localStorage.setItem('david_userPhone', userPhone);
             // 🔒 JWT is now stored in an HttpOnly cookie by the server — NOT in localStorage
             localStorage.setItem('david_last_active', Date.now());
             localStorage.setItem('david_previous_login', data.previousLogin);
@@ -261,7 +260,7 @@ function logoutUser() {
     // --- Clear Local Storage (JWT is no longer stored here — it's in an HttpOnly cookie cleared by the server) ---
     localStorage.removeItem('david_userId');
     localStorage.removeItem('david_userName');
-    localStorage.removeItem('david_userPhone');
+    // david_userPhone no longer stored in localStorage
     localStorage.removeItem('david_last_active');
     localStorage.removeItem('david_previous_login');
     // --------------------------------
