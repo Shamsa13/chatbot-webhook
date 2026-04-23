@@ -1646,7 +1646,7 @@ app.post("/api/auth/send-code", otpLimiter, async (req, res) => {
       const outboundPhone = cleanPhone.startsWith("+") ? cleanPhone : "+" + cleanPhone;
       
       await twilioClient.messages.create({
-        body: `${otpCode} is your Director Compass web login code. It expires in 10 minutes. Only enter this at directorcompass.com.`,
+        body: `${otpCode} is your Director Compass web login code. It expires in 10 minutes. Only enter this at compass.boardchair.com.`,
         from: process.env.TWILIO_PHONE_NUMBER,
         to: outboundPhone
       });
