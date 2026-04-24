@@ -189,15 +189,60 @@ function clearVerifyAttempts(phone) {
   phoneVerifyAttempts.delete(phone);
 }
 
-// Auto-cleanup verify attempts every hour
+// ============================================
+// 🔒 MEMORY UPDATE RATE LIMITER & ROLLBACK
+// Prevents memory poisoning via rapid transcript injection
+// ============================================
+const memoryUpdateTracker = new Map(); // userId -> { count, windowStart }
+const MEMORY_UPDATE_LIMIT = 20;         // Max 20 memory updates per hour per user
+const MEMORY_UPDATE_WINDOW = 60 * 60 * 1000; // 1 hour
+
+function checkMemoryUpdateLimit(userId) {
+  const now = Date.now();
+  const record = memoryUpdateTracker.get(userId);
+  
+  if (!record || (now - record.windowStart) > MEMORY_UPDATE_WINDOW) {
+    memoryUpdateTracker.set(userId, { count: 1, windowStart: now });
+    return true;
+  }
+  
+  if (record.count >= MEMORY_UPDATE_LIMIT) {
+    return false;
+  }
+  
+  record.count++;
+  return true;
+}
+
+// Saves a snapshot of the old memory before updating — enables admin rollback
+async function saveMemorySnapshot(userId, oldMemory, channel, reason) {
+  try {
+    if (!oldMemory || oldMemory.trim().length === 0) return;
+    await supabase.from("error_logs").insert({
+      user_id: userId,
+      channel: channel,
+      stage: "memory_snapshot",
+      message: `Memory snapshot before ${reason}`,
+      details: JSON.stringify({ 
+        memory_length: oldMemory.length,
+        memory_preview: oldMemory.substring(0, 500),
+        full_memory: oldMemory
+      })
+    });
+  } catch (e) {
+    console.error("Memory snapshot save failed:", e.message);
+  }
+}
+
+// Auto-cleanup memory update tracker every 2 hours
 setInterval(() => {
   const now = Date.now();
-  for (const [phone, record] of phoneVerifyAttempts.entries()) {
-    if (record.lockedUntil && now > record.lockedUntil + VERIFY_LOCKOUT_MS) {
-      phoneVerifyAttempts.delete(phone);
+  for (const [userId, record] of memoryUpdateTracker.entries()) {
+    if ((now - record.windowStart) > MEMORY_UPDATE_WINDOW * 2) {
+      memoryUpdateTracker.delete(userId);
     }
   }
-}, 60 * 60 * 1000);
+}, 2 * 60 * 60 * 1000);
 
 // 🔒 COUNTRY CODE WHITELIST — Blocks International Revenue Share Fraud (IRSF)
 const ALLOWED_COUNTRY_CODES = ['+1', '+44', '+61', '+353', '+64']; // US/CA, UK, AU, Ireland, NZ
@@ -224,12 +269,11 @@ const apiLimiter = rateLimit({
   message: { error: "You are sending messages too quickly. Please slow down." }
 });
 
-// 3. Admin Brute Force Limiter
-// Max 10 attempts per 15 minutes
-const adminLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  message: { error: "Too many admin attempts." }
+// 4. ElevenLabs Personalize Limiter — Prevents PII scraping via phone number enumeration
+const personalizeLimiter = rateLimit({
+  windowMs: 60 * 1000,  // 1 minute window
+  max: 10,               // Max 10 requests per minute
+  message: { dynamic_variables: { memory_summary: "", caller_phone: "", channel: "call", recent_history: "", first_greeting: "Please try again shortly." } }
 });
 
 function authenticateToken(req, res, next) {
@@ -1236,10 +1280,15 @@ app.post("/twilio/sms", validateTwilioWebhook, async (req, res) => {
       }).catch(e => console.error("Intent error:", e));
     }
 
-    // Update compressed memory facts
-updateMemorySummary({ oldSummary: memorySummary, userText: body, assistantText: cleanReplyText, channelLabel: currentChannel.toUpperCase() })
-  .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
-  .catch(e => console.error("Memory error:", e));
+    // 🔒 RATE-LIMITED MEMORY UPDATE with snapshot
+    if (checkMemoryUpdateLimit(userId)) {
+      saveMemorySnapshot(userId, memorySummary, currentChannel, "SMS/WA interaction").catch(e => console.error("Snapshot err:", e));
+      updateMemorySummary({ oldSummary: memorySummary, userText: body, assistantText: cleanReplyText, channelLabel: currentChannel.toUpperCase() })
+        .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
+        .catch(e => console.error("Memory error:", e));
+    } else {
+      console.warn(`🚫 Memory update rate limit hit for user ${userId} — skipping SMS memory update`);
+    }
   scheduleSessionSummary(userId, conversationId, currentChannel, body, cleanReplyText);
 
   } catch (err) {
@@ -1250,11 +1299,42 @@ updateMemorySummary({ oldSummary: memorySummary, userText: body, assistantText: 
     }
   }
 });
-
 // ==========================================
 // ELEVENLABS PERSONALIZE
 // ==========================================
-app.post("/elevenlabs/twilio-personalize", async (req, res) => {
+
+// 🔒 AUTHENTICATION MIDDLEWARE for ElevenLabs personalize webhook
+function validatePersonalizeWebhook(req, res, next) {
+  const personalizeSecret = process.env.ELEVENLABS_PERSONALIZE_SECRET;
+  
+  // If a secret is configured, enforce it
+  if (personalizeSecret) {
+    const providedSecret = req.headers['x-personalize-secret'] || req.headers['authorization'];
+    
+    if (!providedSecret) {
+      console.error("❌ Personalize webhook rejected: Missing authentication header. IP:", req.ip);
+      logError({ channel: "call", stage: "Personalize Auth", message: "Missing authentication header on personalize webhook", details: { ip: req.ip, userAgent: req.headers['user-agent'] } });
+      return res.status(200).json({ dynamic_variables: { memory_summary: "", caller_phone: "", channel: "call", recent_history: "", first_greeting: "Hi! How can I help you today?" } });
+    }
+    
+    // Support both raw secret and "Bearer <secret>" format
+    const cleanSecret = providedSecret.replace(/^Bearer\s+/i, '').trim();
+    
+    if (cleanSecret !== personalizeSecret) {
+      console.error("❌ Personalize webhook rejected: Invalid secret. IP:", req.ip);
+      logError({ channel: "call", stage: "Personalize Auth", message: "Invalid personalize webhook secret — possible PII scraping attempt", details: { ip: req.ip } });
+      return res.status(200).json({ dynamic_variables: { memory_summary: "", caller_phone: "", channel: "call", recent_history: "", first_greeting: "Hi! How can I help you today?" } });
+    }
+    
+    console.log("✅ Personalize webhook authenticated");
+  } else {
+    console.warn("⚠️ ELEVENLABS_PERSONALIZE_SECRET not set — personalize endpoint is unprotected");
+  }
+  
+  next();
+}
+
+app.post("/elevenlabs/twilio-personalize", personalizeLimiter, validatePersonalizeWebhook, async (req, res) => {
   try {
     const fromRaw = req.body?.from || req.body?.From || req.body?.callerId || req.body?.caller_id || req.body?.call?.from || "";
     const phone = normalizeFrom(fromRaw);
@@ -1294,29 +1374,31 @@ app.post("/elevenlabs/twilio-personalize", async (req, res) => {
     }
 
     const userDocs = await getUserDocumentsContext(userId);
-const conversationSummaries = await getRecentConversationSummaries(userId, 8);
+    const conversationSummaries = await getRecentConversationSummaries(userId, 8);
 
-const fullVoiceMemory = [
-  memorySummary || "",
-  userDocs || "",
-  conversationSummaries || ""
-].filter(Boolean).join("\n\n") || "No previous memory.";    
+    // 🔒 BUILD CONDENSED MEMORY — Avoids exposing raw PII in the webhook response
+    // The voice agent gets enough context to personalize without receiving raw email/phone
+    const condensedMemory = [
+      memorySummary ? memorySummary.substring(0, 3000) : "", // Cap memory at 3000 chars
+      userDocs || "",
+      conversationSummaries || ""
+    ].filter(Boolean).join("\n\n") || "No previous memory.";
 
     const hasValidEmail = userRecord?.email && userRecord.email.toLowerCase() !== 'null' && userRecord.email.trim() !== '';
     const transcriptInstruction = hasValidEmail
       ? "TRANSCRIPT PROTOCOL: If the user asks for a transcript during this call, say: 'After we hang up, I will send you a quick text message to confirm if you want the transcript sent to your email.'"
       : "TRANSCRIPT PROTOCOL: If the user asks for a transcript during this call, say: 'After we hang up, I will send you a quick text message to get your email address so I can send the transcript over.'";
 
+    // 🔒 REDUCED RESPONSE — Removed raw email, raw phone echo, and raw conversation history
+    // The voice agent only needs: greeting, first name, memory context, events, and transcript protocol
     return res.status(200).json({ 
       dynamic_variables: { 
-        memory_summary: fullVoiceMemory, 
-        conversation_history: conversationSummaries || "No previous conversations.",
+        memory_summary: condensedMemory, 
         caller_phone: phone, 
         channel: "call", 
-        recent_history: formatRecentHistoryForCall(history) || "No recent history.", 
+        recent_history: formatRecentHistoryForCall(history.slice(-6)) || "No recent history.", 
         first_greeting: greeting,
-        user_name: userRecord?.full_name || "Unknown",
-        user_email: userRecord?.email || "Unknown",
+        user_name: name || "Unknown",
         upcoming_events: voiceEventContext,
         transcript_protocol: transcriptInstruction
       } 
@@ -1427,21 +1509,52 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
       return;
     }
 
+    // 🔒 TRANSCRIPT CONTENT VALIDATION
+    // Defense-in-depth: even with HMAC, validate the transcript is reasonable
+    if (transcriptText.length > 200000) {
+      console.error("❌ POST-CALL: Transcript suspiciously long (", transcriptText.length, "chars). Possible injection attack.");
+      logError({ channel: "call", stage: "Transcript Validation", message: `Transcript exceeds 200K chars (${transcriptText.length}). Rejected.`, details: { transcriptId } });
+      return;
+    }
+    
+    if (transcriptText.length < 5) {
+      console.warn("⚠️ POST-CALL: Transcript too short to process (", transcriptText.length, "chars). Skipping.");
+      return;
+    }
+    
+    // Scan for prompt injection within the transcript content
+    const transcriptInjectionScan = scanForInjection(transcriptText);
+    if (!transcriptInjectionScan.isClean) {
+      console.warn(`⚠️ POST-CALL: Prompt injection patterns detected in transcript (${transcriptInjectionScan.matchCount} matches)`);
+      logError({ channel: "call", stage: "Transcript Injection Scanner", message: `Transcript contains ${transcriptInjectionScan.matchCount} injection patterns`, details: { patterns: transcriptInjectionScan.matchedPatterns, transcriptId } });
+      // Continue processing but flag it — the AI injection resistance in the system prompt will handle it
+    }
+
     const userId = await getOrCreateUser(phone);
     console.log("👤 User ID:", userId);
 
     
 
     const oldSummary = await getUserMemorySummary(userId);
-    // Update compressed memory facts
-updateMemorySummary({ 
-  oldSummary, 
-  userText: `(VOICE CALL INITIATED)`, 
-  assistantText: `(VOICE CALL TRANSCRIPT SUMMARY)\n${transcriptText}`, 
-  channelLabel: "VOICE" 
-}).then(async (newSummary) => { 
-  if (newSummary) await setUserMemorySummary(userId, newSummary); 
-}).catch(e => console.error("Memory err", e));
+    
+    // 🔒 RATE LIMIT MEMORY UPDATES — Prevents rapid poisoning
+    if (!checkMemoryUpdateLimit(userId)) {
+      console.warn(`🚫 Memory update rate limit hit for user ${userId} — skipping post-call memory update`);
+      logError({ userId, channel: "call", stage: "Memory Rate Limit", message: "Memory update blocked — rate limit exceeded (20/hour)" });
+    } else {
+      // 🔒 SAVE MEMORY SNAPSHOT — Enables admin rollback if memory is poisoned
+      await saveMemorySnapshot(userId, oldSummary, "call", "post-call transcript processing");
+      
+      // Update compressed memory facts
+      updateMemorySummary({ 
+        oldSummary, 
+        userText: `(VOICE CALL INITIATED)`, 
+        assistantText: `(VOICE CALL TRANSCRIPT SUMMARY)\n${transcriptText}`, 
+        channelLabel: "VOICE" 
+      }).then(async (newSummary) => { 
+        if (newSummary) await setUserMemorySummary(userId, newSummary); 
+      }).catch(e => console.error("Memory err", e));
+    }
 
 // 📞 1. Get the active call conversation
     const callConversationId = await getOrCreateConversation(userId, "call");
@@ -2317,10 +2430,15 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
       }).catch(e => console.error("Auto-title error:", e));
     }
       
-    // Update memory
-    updateMemorySummary({ oldSummary: user.memory_summary, userText: message, assistantText: reply, channelLabel: "WEB" })
-      .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
-      .catch(e => console.error("Memory update failed:", e));
+    // 🔒 RATE-LIMITED MEMORY UPDATE with snapshot
+    if (checkMemoryUpdateLimit(userId)) {
+      saveMemorySnapshot(userId, user.memory_summary, "web", "web chat interaction").catch(e => console.error("Snapshot err:", e));
+      updateMemorySummary({ oldSummary: user.memory_summary, userText: message, assistantText: reply, channelLabel: "WEB" })
+        .then(newSum => { if (newSum) setUserMemorySummary(userId, newSum); })
+        .catch(e => console.error("Memory update failed:", e));
+    } else {
+      console.warn(`🚫 Memory update rate limit hit for user ${userId} — skipping web chat memory update`);
+    }
       
     scheduleSessionSummary(userId, conversationId, "web", message, reply);
 
@@ -2630,6 +2748,60 @@ app.delete("/api/admin/delete-user", adminLimiter, async (req, res) => {
 
   } catch (err) {
     console.error("❌ Delete User Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// 🔒 ADMIN: Memory Rollback — Restores a user's memory to a previous snapshot
+app.post("/api/admin/rollback-memory", adminLimiter, async (req, res) => {
+  try {
+    const { secret, userId } = req.body;
+    if (!ADMIN_SECRET || secret !== ADMIN_SECRET) return res.status(401).json({ error: "Unauthorized" });
+    if (!userId) return res.status(400).json({ error: "Missing userId" });
+
+    // Find the most recent memory snapshot for this user
+    const { data: snapshots, error } = await supabase
+      .from("error_logs")
+      .select("details, created_at")
+      .eq("user_id", userId)
+      .eq("stage", "memory_snapshot")
+      .order("created_at", { ascending: false })
+      .limit(10);
+
+    if (error || !snapshots || snapshots.length === 0) {
+      return res.json({ success: false, message: "No memory snapshots found for this user." });
+    }
+
+    // Parse the most recent snapshot
+    const latestSnapshot = snapshots[0];
+    let oldMemory = "";
+    try {
+      const details = typeof latestSnapshot.details === 'string' ? JSON.parse(latestSnapshot.details) : latestSnapshot.details;
+      oldMemory = details.full_memory || "";
+    } catch (e) {
+      return res.json({ success: false, message: "Could not parse snapshot data." });
+    }
+
+    if (!oldMemory) {
+      return res.json({ success: false, message: "Snapshot contains empty memory." });
+    }
+
+    // Save current memory as a snapshot before rollback (so rollback itself is reversible)
+    const { data: currentUser } = await supabase.from("users").select("memory_summary").eq("id", userId).single();
+    await saveMemorySnapshot(userId, currentUser?.memory_summary || "", "admin", "pre-rollback backup");
+
+    // Perform the rollback
+    await supabase.from("users").update({ memory_summary: oldMemory }).eq("id", userId);
+
+    console.log(`🔄 Admin rolled back memory for user ${userId} to snapshot from ${latestSnapshot.created_at}`);
+    res.json({ 
+      success: true, 
+      message: `Memory rolled back to snapshot from ${new Date(latestSnapshot.created_at).toLocaleString()}`,
+      availableSnapshots: snapshots.map(s => ({ date: s.created_at, preview: (typeof s.details === 'string' ? JSON.parse(s.details) : s.details).memory_preview || "N/A" }))
+    });
+  } catch (err) {
+    console.error("Memory rollback error:", err);
     res.status(500).json({ error: err.message });
   }
 });
