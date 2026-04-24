@@ -269,6 +269,14 @@ const apiLimiter = rateLimit({
   message: { error: "You are sending messages too quickly. Please slow down." }
 });
 
+// 3. Admin Brute Force Limiter
+// Max 10 attempts per 15 minutes
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: "Too many admin attempts." }
+});
+
 // 4. ElevenLabs Personalize Limiter — Prevents PII scraping via phone number enumeration
 const personalizeLimiter = rateLimit({
   windowMs: 60 * 1000,  // 1 minute window
