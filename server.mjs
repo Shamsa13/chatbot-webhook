@@ -1349,21 +1349,50 @@ function extractEmailFromText(text = "") {
   return match ? match[0].toLowerCase() : null;
 }
 
+function normalizeShortReply(text = "") {
+  return sanitizeInboundText(text, 500)
+    .toLowerCase()
+    .replace(/[.!?]+$/g, "")
+    .trim();
+}
+
+function isTranscriptAffirmation(text = "") {
+  return /^(yes|yeah|yep|sure|ok|okay|please|yes please|please do|send it|do it|go ahead|absolutely)$/i.test(normalizeShortReply(text));
+}
+
+function findRecentTranscriptOffer(historyMsgs = []) {
+  return [...(historyMsgs || [])].reverse().find(m => {
+    if (m.role !== "assistant") return false;
+    const content = m.content || "";
+    return /\b(want me to email|email you|send you).{0,100}\b(transcript|call transcript)\b/i.test(content) ||
+      /\b(best email|what email|email address).{0,100}\b(transcript|call transcript)\b/i.test(content) ||
+      /\b(transcript|call transcript).{0,100}\b(best email|what email|email address)\b/i.test(content);
+  });
+}
+
+function transcriptOfferAskedForEmail(offerMsg) {
+  return /\b(best email|what email|email address)\b/i.test(offerMsg?.content || "");
+}
+
+function shouldPreflightTranscriptIntent(text = "") {
+  const clean = sanitizeInboundText(text, 500);
+  return !!extractEmailFromText(clean) ||
+    isTranscriptAffirmation(clean) ||
+    /\b(transcript|call transcript|recording|recent call)\b/i.test(clean);
+}
+
 function looksLikeTranscriptSendRequest(text, historyMsgs = []) {
   const clean = sanitizeInboundText(text, 500);
   const explicit = /\b(send|email|forward|share)\b.{0,40}\b(transcript|call transcript|recording|recent call)\b/i.test(clean) ||
     /\b(transcript|call transcript|recording)\b.{0,40}\b(send|email|forward|share)\b/i.test(clean);
   if (explicit) return true;
 
-  const lastAgent = [...(historyMsgs || [])].reverse().find(m => m.role === "assistant");
-  if (extractEmailFromText(clean) && /\b(best email|what email|email address|send.{0,40}transcript|transcript.{0,40}email)\b/i.test(lastAgent?.content || "")) {
+  const transcriptOffer = findRecentTranscriptOffer(historyMsgs);
+  if (extractEmailFromText(clean) && transcriptOffer && transcriptOfferAskedForEmail(transcriptOffer)) {
     return true;
   }
 
-  const affirmativeOnly = /^(yes|yeah|yep|sure|ok|okay|please|send it|do it|go ahead)$/i.test(clean);
-  if (!affirmativeOnly) return false;
-
-  return /\b(want me to email|email you|send you).{0,80}\b(transcript|call transcript)\b/i.test(lastAgent?.content || "");
+  return isTranscriptAffirmation(clean) && !!transcriptOffer;
 }
 
 function parseGoogleScriptResult(httpStatus, text) {
@@ -1452,12 +1481,8 @@ async function processSmsIntent(userId, userText, sourceChannel = "sms") {
   try {
     const { data: rawUser } = await supabase.from("users").select("full_name, email, transcript_data").eq("id", userId).single();
     const user = decryptUserRecord(rawUser);
-    const historyMsgs = await getRecentUserMessages(userId, 3);
+    const historyMsgs = await getRecentUserMessages(userId, 10);
     const historyText = historyMsgs.map(m => `${m.role}: ${m.content}`).join("\n");
-
-    if (!looksLikeTranscriptSendRequest(userText, historyMsgs)) {
-      return null;
-    }
 
     const transcriptArray = user?.transcript_data || [];
     let cleanTranscriptArray = [];
@@ -1477,11 +1502,47 @@ async function processSmsIntent(userId, userText, sourceChannel = "sms") {
     cleanTranscriptArray = cleanTranscriptArray.slice(0, 15).map((t, index) => {
       return { position: `${index + 1} calls back`, id: t.id, summary: t.summary };
     });
+
+    if (!looksLikeTranscriptSendRequest(userText, historyMsgs)) {
+      return null;
+    }
+
+    const currentEmail = user?.email ? user.email.trim().toLowerCase() : null;
+    const explicitEmail = extractEmailFromText(userText);
+    const recentTranscriptOffer = findRecentTranscriptOffer(historyMsgs);
+    const latestTranscript = cleanTranscriptArray[0];
+
+    if (latestTranscript && recentTranscriptOffer && (isTranscriptAffirmation(userText) || (explicitEmail && transcriptOfferAskedForEmail(recentTranscriptOffer)))) {
+      const updates = {};
+      let finalEmail = currentEmail;
+
+      if (explicitEmail && explicitEmail !== currentEmail) {
+        if (!isAllowedEmailDomain(explicitEmail)) {
+          logError({ userId, channel: sourceChannel, stage: "Email Domain Blocked", message: "Transcript send blocked by ALLOWED_EMAIL_DOMAINS.", details: { email_hash: crypto.createHash("sha256").update(explicitEmail).digest("hex") } });
+          return null;
+        }
+        updates.email = explicitEmail;
+        finalEmail = explicitEmail;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        await supabase.from("users").update(encryptUserUpdates(updates)).eq("id", userId);
+      }
+
+      if (finalEmail && finalEmail.includes('@') && isAllowedEmailDomain(finalEmail)) {
+        if (!(await checkTranscriptSendLimit(userId))) {
+          logError({ userId, channel: sourceChannel, stage: "Transcript Send Rate Limit", message: "Blocked transcript send over daily limit." });
+          return null;
+        }
+        console.log(` Smart Intent: Direct transcript confirmation queued ${latestTranscript.id} for target email.`);
+        return { email: finalEmail, name: user?.full_name || "User", id: latestTranscript.id, desc: "from our recent conversation" };
+      }
+    }
     
     const prompt = `Analyze the user's latest text message: "${userText}"
     Current DB Data: Name=${user?.full_name || 'null'}, Email=${user?.email || 'null'}
     
-    Recent Chat Context (Last 3 messages):
+    Recent Chat Context (Last 10 messages):
     ${historyText}
 
     Available Transcripts (Pre-sorted list):
@@ -1520,8 +1581,6 @@ async function processSmsIntent(userId, userText, sourceChannel = "sms") {
     }
     
     const extractedEmail = result.email ? result.email.trim().toLowerCase() : null;
-    const currentEmail = user?.email ? user.email.trim().toLowerCase() : null;
-    const explicitEmail = extractEmailFromText(userText);
 
     if (extractedEmail && extractedEmail !== 'null' && extractedEmail !== currentEmail) {
       if (explicitEmail && extractedEmail === explicitEmail && isAllowedEmailDomain(explicitEmail)) {
@@ -1894,6 +1953,32 @@ app.post("/twilio/sms", validateTwilioWebhook, async (req, res) => {
       return res.status(200).type("text/xml").send(twimlReply("SMS access is locked for this account. Please use the secure web portal to unlock it."));
     }
 
+    if (shouldPreflightTranscriptIntent(body)) {
+      const pendingTask = await processSmsIntent(userId, body, currentChannel);
+      if (pendingTask) {
+        const confirmationText = extractEmailFromText(body)
+          ? "Absolutely, I'll send the latest transcript to that email now."
+          : "Absolutely, I'll send the latest transcript now.";
+
+        res.status(200).type("text/xml").send(twimlReply(confirmationText));
+        console.log(" Transcript confirmation reply sent to Twilio.");
+
+        const { error: transcriptConfirmErr } = await supabase.from("messages").insert(prepareMessageRecord({
+          conversation_id: conversationId,
+          channel: currentChannel,
+          direction: "agent",
+          text: confirmationText,
+          provider: "openai",
+          twilio_message_sid: null
+        }));
+        if (transcriptConfirmErr) console.error("Transcript confirmation insert error:", transcriptConfirmErr);
+
+        triggerGoogleAppsScript(pendingTask.email, pendingTask.name, pendingTask.id, pendingTask.desc, { userId, channel: currentChannel });
+        incrementEmailedTranscripts(userId);
+        return;
+      }
+    }
+
     const [cfg, fullMemorySummary, history, userResponse, ragContext] = await Promise.all([
       getBotConfig(),
       getUserMemorySummary(userId),
@@ -1914,8 +1999,8 @@ app.post("/twilio/sms", validateTwilioWebhook, async (req, res) => {
     const hasValidSmsEmail = userDb?.email && userDb.email.toLowerCase() !== 'null' && userDb.email.trim() !== '';
     
     const smsTranscriptRule = hasValidSmsEmail
-      ? "CRITICAL RULE: The user already has a valid email on file. Do not say the email address over SMS. If they ask for a transcript, confirm the action without revealing the address."
-      : `CRITICAL RULE: The user DOES NOT have an email on file. If they ask for a transcript or document, YOU MUST reply: "I'd be happy to send that! What is the best email address to send it to?"`;
+      ? "CRITICAL RULE: The user already has a valid email on file. Do not say the saved email address over SMS. If they ask for a transcript, confirm the action without revealing the saved address. If they explicitly type a different email address in direct response to a transcript offer, you may say you will send it to that email, but do not claim you cannot switch email by SMS."
+      : `CRITICAL RULE: The user DOES NOT have an email on file. If they ask for a transcript or document, YOU MUST reply: "I'd be happy to send that! What is the best email address to send it to?" If they provide an email address in response, confirm that you will send it there.`;
 
     // We inject recentSummaries into the profileContext so David actually reads them
    let firstTimeSmsRule = "";
