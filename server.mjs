@@ -2400,7 +2400,7 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
           const gsResponse = await fetch(GOOGLE_SCRIPT_WEBHOOK_URL, { 
             method: "POST", 
             headers: { "Content-Type": "application/json" }, 
-            body: JSON.stringify({ action: "fetch_transcripts" }) 
+            body: JSON.stringify({ action: "fetch_transcripts", transcriptId }) 
           });
           const gsText = await gsResponse.text();
           console.log(` Google Script Response: ${gsText.substring(0, 200)}`);
