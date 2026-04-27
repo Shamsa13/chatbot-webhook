@@ -821,8 +821,19 @@ async function sendToSlack(message) {
   }
 }
 
-// 🛠️ UPGRADED: Now saves to Supabase AND pings Slack immediately
-async function logError({ phone, userId, conversationId, channel, stage, message, details }) {
+function formatAlertDetails(details) {
+  if (!details) return "None";
+  let text;
+  try {
+    text = JSON.stringify(details);
+  } catch {
+    text = String(details);
+  }
+  return text.length > 1500 ? `${text.slice(0, 1500)}... [truncated]` : text;
+}
+
+// Saves to Supabase and, by default, pings Slack for true error/security events.
+async function logError({ phone, userId, conversationId, channel, stage, message, details, notify = true }) {
   try {
     await supabase.from("error_logs").insert({
       phone: phone ? encryptField(phone) : null, user_id: userId || null, conversation_id: conversationId || null,
@@ -830,9 +841,10 @@ async function logError({ phone, userId, conversationId, channel, stage, message
       message: message || "unknown", details: details ? JSON.stringify(details) : null 
     });
 
-    // Format the alert for Slack
-    const slackMessage = `*Channel:* ${channel.toUpperCase()}\n*Stage:* ${stage}\n*Error:* ${message}\n*Details:* ${details ? JSON.stringify(details) : 'None'}`;
-    await sendToSlack(slackMessage);
+    if (notify) {
+      const slackMessage = `*Channel:* ${(channel || "unknown").toUpperCase()}\n*Stage:* ${stage || "unknown"}\n*Error:* ${message || "unknown"}\n*Details:* ${formatAlertDetails(details)}`;
+      await sendToSlack(slackMessage);
+    }
 
   } catch (e) {
     console.error("CRITICAL: error_logs insert failed", e?.message || e);
@@ -1214,6 +1226,7 @@ async function updateMemorySummary({ oldSummary, userText, assistantText, channe
     channel: channelLabel.toLowerCase(),
     stage: "memory_audit",
     message: "Memory update diff recorded.",
+    notify: false,
     details: {
       old_memory_enc: encryptField(oldSummary || ""),
       new_memory_enc: encryptField(newMemory || ""),
@@ -1363,6 +1376,7 @@ async function triggerGoogleAppsScript(email, name, transcriptId, description, a
       channel: audit.channel || "web",
       stage: "Transcript Email Webhook",
       message: "Transcript email webhook triggered.",
+      notify: false,
       details: {
         email_hash: emailHash,
         transcriptId,
