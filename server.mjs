@@ -1366,6 +1366,27 @@ function looksLikeTranscriptSendRequest(text, historyMsgs = []) {
   return /\b(want me to email|email you|send you).{0,80}\b(transcript|call transcript)\b/i.test(lastAgent?.content || "");
 }
 
+function parseGoogleScriptResult(httpStatus, text) {
+  const body = String(text || "").trim();
+  const preview = body.slice(0, 500);
+  let parsed = null;
+  try {
+    parsed = body ? JSON.parse(body) : null;
+  } catch {
+    parsed = null;
+  }
+
+  const scriptStatus = String(parsed?.status || "").toLowerCase();
+  const ok = httpStatus >= 200 && httpStatus < 300 && scriptStatus !== "error";
+  return {
+    ok,
+    statusCode: httpStatus,
+    scriptStatus: parsed?.status || null,
+    message: parsed?.message || preview || "No response body",
+    preview
+  };
+}
+
 async function triggerGoogleAppsScript(email, name, transcriptId, description, audit = {}) {
   if (!GOOGLE_SCRIPT_WEBHOOK_URL) return;
   try {
@@ -1390,8 +1411,30 @@ async function triggerGoogleAppsScript(email, name, transcriptId, description, a
     });
     const responseText = await response.text(); 
     console.log(" Google Apps Script responded:", responseText);
+    const result = parseGoogleScriptResult(response.status, responseText);
+    if (!result.ok) {
+      logError({
+        userId: audit.userId,
+        channel: audit.channel || "web",
+        stage: "Google Apps Script Transcript Email",
+        message: result.message,
+        details: {
+          statusCode: result.statusCode,
+          scriptStatus: result.scriptStatus,
+          transcriptId,
+          responsePreview: result.preview
+        }
+      });
+    }
   } catch (err) { 
     console.error("❌ Google Script trigger failed:", err.message); 
+    logError({
+      userId: audit.userId,
+      channel: audit.channel || "web",
+      stage: "Google Apps Script Transcript Email",
+      message: err.message,
+      details: { transcriptId }
+    });
   }
 }
 
@@ -2361,8 +2404,30 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
           });
           const gsText = await gsResponse.text();
           console.log(` Google Script Response: ${gsText.substring(0, 200)}`);
+          const gsResult = parseGoogleScriptResult(gsResponse.status, gsText);
+          if (!gsResult.ok) {
+            logError({
+              userId,
+              channel: "call",
+              stage: "Google Apps Script Instant Fetch",
+              message: gsResult.message,
+              details: {
+                statusCode: gsResult.statusCode,
+                scriptStatus: gsResult.scriptStatus,
+                transcriptId,
+                responsePreview: gsResult.preview
+              }
+            });
+          }
         } catch (gsErr) {
           console.error("❌ Google Script trigger FAILED:", gsErr.message);
+          logError({
+            userId,
+            channel: "call",
+            stage: "Google Apps Script Instant Fetch",
+            message: gsErr.message,
+            details: { transcriptId }
+          });
         }
       }
 
