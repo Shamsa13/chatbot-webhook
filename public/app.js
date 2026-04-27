@@ -130,10 +130,10 @@ window.addEventListener('DOMContentLoaded', () => {
   // 2. Auto-Login Check
     const savedUserId = localStorage.getItem('david_userId');
     const lastActive = localStorage.getItem('david_last_active');
-    const SIXTEEN_HOURS = 16 * 60 * 60 * 1000;
+    const TWELVE_HOURS = 12 * 60 * 60 * 1000;
 
-    // Check if the session exists BUT has been inactive for > 16 hours
-    if (savedUserId && lastActive && (Date.now() - parseInt(lastActive) > SIXTEEN_HOURS)) {
+    // Check if the session exists BUT has been inactive for > 12 hours
+    if (savedUserId && lastActive && (Date.now() - parseInt(lastActive) > TWELVE_HOURS)) {
         console.log("Session expired due to inactivity.");
         localStorage.removeItem('david_userId');
         localStorage.removeItem('david_userName');
@@ -246,12 +246,10 @@ async function verifyCode() {
 
 function logoutUser() {
     // Notify backend of logout (cookie is sent automatically)
-    if (globalUserId) {
-        fetch('/api/web/logout', { 
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' }
-        }).catch(e => console.error("Logout ping failed", e));
-    }
+    fetch('/api/web/logout', { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }
+    }).catch(e => console.error("Logout ping failed", e));
 
     globalUserId = "";
     userPhone = "";
@@ -1105,15 +1103,21 @@ async function openProfileModal() {
     const nameInput = document.getElementById('profileNameInput');
     const emailInput = document.getElementById('profileEmailInput');
     const loginDisplay = document.getElementById('lastLoginDisplay');
+    const formatSecurityTime = (value, emptyText) => {
+        if (!value || value === "null" || value === "undefined" || value === "First time logging in") return emptyText;
+        const d = new Date(value);
+        if (Number.isNaN(d.getTime())) return emptyText;
+        return d.toLocaleDateString() + " at " + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+    };
+    const renderSecurityHistory = (webLogin, lastCall) => {
+        const webText = formatSecurityTime(webLogin, "This is your first web session");
+        const callText = formatSecurityTime(lastCall, "No calls recorded yet");
+        loginDisplay.innerHTML = `<div>Last web login: ${escapeHtml(webText)}</div><div>Last call: ${escapeHtml(callText)}</div>`;
+    };
     
     // Format previous login
     const prev = localStorage.getItem('david_previous_login');
-    if (prev && prev !== "First time logging in") {
-        const d = new Date(prev);
-        loginDisplay.innerText = "Last login: " + d.toLocaleDateString() + " at " + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-    } else {
-        loginDisplay.innerText = "Last login: This is your first session!";
-    }
+    renderSecurityHistory(prev, null);
 
     nameInput.value = "Loading...";
     emailInput.value = "Loading...";
@@ -1128,20 +1132,14 @@ async function openProfileModal() {
             
             // 🕰️ Evaluate Strict Web Login Trail
             const prev = localStorage.getItem('david_previous_login');
-            if (prev && prev !== "First time logging in" && prev !== "null" && prev !== "undefined") {
-                const d = new Date(prev);
-                loginDisplay.innerText = "Last login: " + d.toLocaleDateString() + " at " + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-            } else if (data.profile.last_web_login) {
-                // Fallback to the strict Supabase web audit trail
-                const d = new Date(data.profile.last_web_login);
-                loginDisplay.innerText = "Last login: " + d.toLocaleDateString() + " at " + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-            } else {
-                loginDisplay.innerText = "Last login: This is your first web session!";
-            }
+            const webLogin = (prev && prev !== "First time logging in" && prev !== "null" && prev !== "undefined")
+                ? prev
+                : data.profile.last_web_login;
+            renderSecurityHistory(webLogin, data.profile.last_call_at);
         }
     } catch (e) {
         nameInput.value = ""; emailInput.value = "";
-        loginDisplay.innerText = "Could not load login history.";
+        loginDisplay.innerText = "Could not load account activity.";
     }
 }
 
@@ -1430,4 +1428,3 @@ async function syncUserIdentity() {
         console.log("Identity sync failed:", e); 
     }
 }
-
