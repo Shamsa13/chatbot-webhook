@@ -2743,20 +2743,8 @@ async function triggerWebWelcomeSMS(userId, phone, name) {
 // 🔒 CRON SWEEPER SAFETY CONTROLS
 // Prevents mass SMS drain from bugs or data corruption
 // ============================================
-let dailyAutoSmsCounter = { count: 0, date: new Date().toDateString() };
-const DAILY_AUTO_SMS_MAX = 100; // Maximum 100 automated SMS per day across ALL CRON jobs
 const BATCH_SIZE_LIMIT = 20;    // Maximum 20 users processed per sweep cycle
 const CIRCUIT_BREAKER_THRESHOLD = 50; // If more than 50 users match, skip and alert
-
-function checkDailyAutoSmsLimit() {
-  const today = new Date().toDateString();
-  if (dailyAutoSmsCounter.date !== today) {
-    dailyAutoSmsCounter = { count: 0, date: today };
-  }
-  if (dailyAutoSmsCounter.count >= DAILY_AUTO_SMS_MAX) return false;
-  dailyAutoSmsCounter.count++;
-  return true;
-}
 
 // Sweep for 10-sminute inactivity
 setInterval(async () => {
@@ -2775,7 +2763,7 @@ setInterval(async () => {
       // 🔒 CIRCUIT BREAKER — If too many users match, something is wrong (data bug)
       if (inactiveUsers.length > CIRCUIT_BREAKER_THRESHOLD) {
         console.error(`🚨 WELCOME SWEEPER CIRCUIT BREAKER: ${inactiveUsers.length} users matched (threshold: ${CIRCUIT_BREAKER_THRESHOLD}). Skipping to prevent mass SMS.`);
-        sendToSlack(`🚨 CRON CIRCUIT BREAKER TRIGGERED: Welcome sweeper found ${inactiveUsers.length} users. Processing skipped. Possible data corruption — vcard_sent may have been reset. Daily auto SMS count: ${dailyAutoSmsCounter.count}/${DAILY_AUTO_SMS_MAX}`);
+        sendToSlack(`🚨 CRON CIRCUIT BREAKER TRIGGERED: Welcome sweeper found ${inactiveUsers.length} users. Processing skipped. Possible data corruption — vcard_sent may have been reset.`);
         return;
       }
       
@@ -2784,12 +2772,6 @@ setInterval(async () => {
       console.log(`📋 Welcome sweeper: ${inactiveUsers.length} users matched, processing batch of ${batch.length}`);
       
       for (const u of batch) {
-        // 🔒 DAILY CAP CHECK — Stop if we hit the daily automated SMS limit
-        if (!checkDailyAutoSmsLimit()) {
-          console.warn(`🚫 Daily automated SMS cap reached (${DAILY_AUTO_SMS_MAX}). Stopping welcome sweeper.`);
-          sendToSlack(`⚠️ Daily automated SMS cap (${DAILY_AUTO_SMS_MAX}) reached. CRON sweepers paused for the day.`);
-          break;
-        }
         await triggerWebWelcomeSMS(u.id, u.phone, u.full_name);
       }
     }
@@ -2842,7 +2824,7 @@ setInterval(async () => {
       // 🔒 CIRCUIT BREAKER — If too many users match, something is wrong
       if (upsellUsers.length > CIRCUIT_BREAKER_THRESHOLD) {
         console.error(`🚨 UPSELL SWEEPER CIRCUIT BREAKER: ${upsellUsers.length} users matched (threshold: ${CIRCUIT_BREAKER_THRESHOLD}). Skipping.`);
-        sendToSlack(`🚨 CRON CIRCUIT BREAKER TRIGGERED: Upsell sweeper found ${upsellUsers.length} users. Processing skipped. Possible data corruption — web_upsell_sent may have been reset. Daily auto SMS count: ${dailyAutoSmsCounter.count}/${DAILY_AUTO_SMS_MAX}`);
+        sendToSlack(`🚨 CRON CIRCUIT BREAKER TRIGGERED: Upsell sweeper found ${upsellUsers.length} users. Processing skipped. Possible data corruption — web_upsell_sent may have been reset.`);
         return;
       }
       
@@ -2854,13 +2836,6 @@ setInterval(async () => {
         const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
         
         for (const u of batch) {
-          // 🔒 DAILY CAP CHECK — Stop if we hit the daily automated SMS limit
-          if (!checkDailyAutoSmsLimit()) {
-            console.warn(`🚫 Daily automated SMS cap reached (${DAILY_AUTO_SMS_MAX}). Stopping upsell sweeper.`);
-            sendToSlack(`⚠️ Daily automated SMS cap (${DAILY_AUTO_SMS_MAX}) reached. CRON sweepers paused for the day.`);
-            break;
-          }
-          
           const firstName = (u.full_name && u.full_name !== 'null') ? u.full_name.split(' ')[0] : "there";
           
           const msg = `Hi ${firstName}, Director Compass here! Just a quick reminder that your digital advisor also comes with a secure web portal. You can log in online to view our past voice conversations, securely upload board documents, and use the "Deep Dive" tool to analyze PDFs. Check it out anytime at www.boardchair.com`;
@@ -2870,7 +2845,7 @@ setInterval(async () => {
           try {
             await twilioClient.messages.create({ body: msg, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
             await supabase.from("users").update({ web_upsell_sent: true }).eq("id", u.id);
-            console.log(`✅ Sent 3-Day Web Upsell SMS to ${outboundPhone} (Daily count: ${dailyAutoSmsCounter.count}/${DAILY_AUTO_SMS_MAX})`);
+            console.log(`✅ Sent 3-Day Web Upsell SMS to ${outboundPhone}`);
           } catch (e) {
             console.error("Upsell SMS failed for " + outboundPhone, e.message);
             if (e.code === 21211) await supabase.from("users").update({ web_upsell_sent: true }).eq("id", u.id);
