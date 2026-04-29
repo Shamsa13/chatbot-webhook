@@ -10,6 +10,10 @@ let userName = "Guest";
 let isLoadingChat = false;
 let chatAbortController = null;
 const botAvatar = "/avatar.jpg";
+let supabaseClient = null;
+let pendingSupabaseSession = null;
+let pendingAuthLinkedPhone = false;
+let authMode = "signin";
 
 
 const phoneInputField = document.querySelector("#phoneInput");
@@ -88,6 +92,279 @@ function showToast(message, type = "success") {
         setTimeout(() => { toast.style.display = 'none'; }, 300);
     }, 3000);
 }
+
+async function initSupabaseAuth() {
+    try {
+        const res = await fetch('/api/auth/public-config');
+        const cfg = await res.json();
+        if (!cfg.success || !cfg.supabaseUrl || !cfg.supabaseAnonKey || !window.supabase) return;
+
+        supabaseClient = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {
+            auth: {
+                persistSession: true,
+                autoRefreshToken: true,
+                detectSessionInUrl: true
+            }
+        });
+
+        const params = new URLSearchParams(window.location.search);
+        if (params.has('code')) {
+            await supabaseClient.auth.exchangeCodeForSession(params.get('code'));
+            window.history.replaceState({}, document.title, window.location.pathname + (params.get('reset_password') ? '?reset_password=1' : ''));
+        }
+
+        const { data } = await supabaseClient.auth.getSession();
+        const isPasswordReset = params.get('reset_password') === '1' || window.location.hash.includes('type=recovery');
+        if (isPasswordReset && data.session) {
+            showPasswordResetStep();
+            return;
+        }
+
+        if (data.session && !localStorage.getItem('david_userId')) {
+            await beginPhoneSecondFactor(data.session);
+        }
+    } catch (e) {
+        console.error("Supabase auth init failed:", e);
+    }
+}
+
+function requireTermsAccepted() {
+    const disclaimerCheck = document.getElementById('disclaimerCheck');
+    return !disclaimerCheck || disclaimerCheck.checked;
+}
+
+function markTermsAcceptedForAuth() {
+    sessionStorage.setItem('david_terms_accepted_for_auth', 'true');
+}
+
+function hasTermsAcceptedForAuth() {
+    return sessionStorage.getItem('david_terms_accepted_for_auth') === 'true';
+}
+
+function clearTermsAcceptedForAuth() {
+    sessionStorage.removeItem('david_terms_accepted_for_auth');
+}
+
+function setAuthMode(mode) {
+    authMode = mode === "signup" ? "signup" : "signin";
+    document.getElementById('signinTab')?.classList.toggle('active', authMode === "signin");
+    document.getElementById('signupTab')?.classList.toggle('active', authMode === "signup");
+    const nameWrap = document.getElementById('authNameWrap');
+    if (nameWrap) nameWrap.style.display = authMode === "signup" ? "block" : "none";
+    const passwordInput = document.getElementById('authPasswordInput');
+    if (passwordInput) passwordInput.autocomplete = authMode === "signup" ? "new-password" : "current-password";
+    const btn = document.getElementById('authPrimaryBtn');
+    if (btn) btn.innerText = authMode === "signup" ? "Create Account" : "Sign In";
+}
+
+function getAuthRedirectUrl(extra = "") {
+    return `${window.location.origin}${window.location.pathname}${extra}`;
+}
+
+async function signInWithOAuth(provider) {
+    if (!supabaseClient) return uiAlert("Login Unavailable", "Authentication is still loading. Please try again.");
+    if (!requireTermsAccepted()) return uiAlert("Required", "You must agree to the Disclaimer & Terms before logging in.");
+    markTermsAcceptedForAuth();
+
+    const { error } = await supabaseClient.auth.signInWithOAuth({
+        provider,
+        options: { redirectTo: getAuthRedirectUrl() }
+    });
+    if (error) await uiAlert("Login Error", error.message);
+}
+
+async function submitEmailAuth() {
+    if (!supabaseClient) return uiAlert("Login Unavailable", "Authentication is still loading. Please try again.");
+    if (!requireTermsAccepted()) return uiAlert("Required", "You must agree to the Disclaimer & Terms before logging in.");
+    markTermsAcceptedForAuth();
+
+    const email = document.getElementById('authEmailInput').value.trim().toLowerCase();
+    const password = document.getElementById('authPasswordInput').value;
+    const fullName = document.getElementById('authNameInput').value.trim();
+    const btn = document.getElementById('authPrimaryBtn');
+
+    if (!email || !password) return uiAlert("Missing Info", "Enter your email and password.");
+    if (authMode === "signup" && password.length < 8) return uiAlert("Password", "Use at least 8 characters.");
+
+    btn.disabled = true;
+    btn.innerText = authMode === "signup" ? "Creating..." : "Signing in...";
+    try {
+        let result;
+        if (authMode === "signup") {
+            result = await supabaseClient.auth.signUp({
+                email,
+                password,
+                options: {
+                    data: { full_name: fullName },
+                    emailRedirectTo: getAuthRedirectUrl()
+                }
+            });
+        } else {
+            result = await supabaseClient.auth.signInWithPassword({ email, password });
+        }
+
+        if (result.error) throw result.error;
+
+        if (!result.data.session) {
+            await uiAlert("Check Your Email", "Confirm your email, then come back and sign in.");
+            return;
+        }
+
+        await beginPhoneSecondFactor(result.data.session);
+    } catch (e) {
+        await uiAlert("Login Error", e.message || "Could not sign in.");
+    } finally {
+        btn.disabled = false;
+        btn.innerText = authMode === "signup" ? "Create Account" : "Sign In";
+    }
+}
+
+async function sendPasswordReset() {
+    if (!supabaseClient) return uiAlert("Login Unavailable", "Authentication is still loading. Please try again.");
+    const email = document.getElementById('authEmailInput').value.trim().toLowerCase();
+    if (!email) return uiAlert("Email Required", "Enter your email address first.");
+
+    const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+        redirectTo: getAuthRedirectUrl("?reset_password=1")
+    });
+    if (error) return uiAlert("Reset Error", error.message);
+    await uiAlert("Check Your Email", "Use the reset link we sent to create a new password.");
+}
+
+function showPasswordResetStep() {
+    document.getElementById('step1').style.display = 'none';
+    document.getElementById('step2').style.display = 'none';
+    document.getElementById('resetPasswordStep').style.display = 'block';
+}
+
+async function completePasswordReset() {
+    if (!supabaseClient) return;
+    const password = document.getElementById('newPasswordInput').value;
+    const confirm = document.getElementById('confirmPasswordInput').value;
+    if (!password || password.length < 8) return uiAlert("Password", "Use at least 8 characters.");
+    if (password !== confirm) return uiAlert("Password", "Passwords do not match.");
+
+    const { data, error } = await supabaseClient.auth.updateUser({ password });
+    if (error) return uiAlert("Reset Error", error.message);
+    const sessionResult = await supabaseClient.auth.getSession();
+    await uiAlert("Password Updated", "Now confirm your phone number to enter the portal.");
+    await beginPhoneSecondFactor(sessionResult.data.session || data.session);
+}
+
+async function beginPhoneSecondFactor(session) {
+    pendingSupabaseSession = session;
+    pendingAuthLinkedPhone = false;
+    document.getElementById('step1').style.display = 'none';
+    document.getElementById('resetPasswordStep').style.display = 'none';
+    document.getElementById('step2').style.display = 'block';
+    document.getElementById('phoneCodeWrap').style.display = 'none';
+
+    const intro = document.getElementById('phone2faIntro');
+    const phoneWrap = document.getElementById('phone2faInputWrap');
+    const sendBtn = document.getElementById('sendPhone2faBtn');
+
+    intro.innerText = "Confirm your phone number to finish signing in.";
+    phoneWrap.style.display = 'block';
+    sendBtn.innerText = "Send Phone Code";
+
+    try {
+        const res = await fetch('/api/auth/oauth/status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ accessToken: session.access_token })
+        });
+        const data = await res.json();
+        if (data.success && data.linked) {
+            pendingAuthLinkedPhone = true;
+            intro.innerText = `For your security, enter the code sent to ${data.maskedPhone}.`;
+            phoneWrap.style.display = 'none';
+            sendBtn.innerText = "Send Code";
+        }
+    } catch (e) {
+        console.error("OAuth status check failed:", e);
+    }
+}
+
+async function sendOAuthPhoneCode() {
+    const btn = document.getElementById('sendPhone2faBtn');
+    if (!pendingSupabaseSession || btn.disabled) return;
+    if (!hasTermsAcceptedForAuth()) {
+        backToPrimaryAuth();
+        return uiAlert("Required", "You must agree to the Disclaimer & Terms before logging in.");
+    }
+
+    const phone = pendingAuthLinkedPhone ? null : phoneInput.getNumber();
+    if (!pendingAuthLinkedPhone && !phone) return uiAlert("Invalid Number", "Please enter a valid phone number.");
+
+    btn.disabled = true;
+    btn.innerText = "Sending...";
+    try {
+        const res = await fetch('/api/auth/oauth/send-phone-code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ accessToken: pendingSupabaseSession.access_token, phone })
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || "Could not send code.");
+        if (data.linked) pendingAuthLinkedPhone = true;
+        document.getElementById('phoneCodeWrap').style.display = 'block';
+        document.getElementById('codeInput').focus();
+    } catch (e) {
+        await uiAlert("Code Error", e.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerText = "Send Code";
+    }
+}
+
+async function verifyOAuthPhoneCode() {
+    const btn = document.querySelector('#phoneCodeWrap .auth-button');
+    const code = document.getElementById('codeInput').value.trim();
+    if (!pendingSupabaseSession || !code || btn.disabled) return;
+
+    const phone = pendingAuthLinkedPhone ? null : phoneInput.getNumber();
+    btn.disabled = true;
+    btn.innerText = "Verifying...";
+    try {
+        const res = await fetch('/api/auth/oauth/verify-phone-code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ accessToken: pendingSupabaseSession.access_token, phone, code })
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || "Verification failed.");
+        completeAppLogin(data);
+    } catch (e) {
+        await uiAlert("Verification Error", e.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerText = "Enter Portal";
+    }
+}
+
+function completeAppLogin(data) {
+    globalUserId = data.userId;
+    userName = (data.name && data.name.toLowerCase() !== "null") ? data.name.split(' ')[0] : "Guest";
+    localStorage.setItem('david_userId', globalUserId);
+    localStorage.setItem('david_userName', userName);
+    localStorage.setItem('david_last_active', Date.now());
+    localStorage.setItem('david_previous_login', data.previousLogin);
+
+    document.querySelectorAll('.login-tag-text').forEach(el => el.innerText = "Logged in as " + userName);
+    document.getElementById('loginContainer').style.display = 'none';
+    document.getElementById('dashboardContainer').style.display = 'flex';
+    clearTermsAcceptedForAuth();
+    initDashboard();
+}
+
+function backToPrimaryAuth() {
+    pendingSupabaseSession = null;
+    pendingAuthLinkedPhone = false;
+    clearTermsAcceptedForAuth();
+    document.getElementById('step2').style.display = 'none';
+    document.getElementById('resetPasswordStep').style.display = 'none';
+    document.getElementById('step1').style.display = 'block';
+}
 // ==========================================
 // MOBILE APP TAB SWITCHING
 // ==========================================
@@ -108,7 +385,7 @@ function switchMobileTab(event, tabClass) {
 }
 
 // Automatically set 'Chat' as default mobile tab AND check for saved login session
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', async () => {
 
     // --- NEW: Force clear cached form inputs on reload/back-button ---
     const phoneEl = document.getElementById('phoneInput');
@@ -118,9 +395,14 @@ window.addEventListener('DOMContentLoaded', () => {
     const checkEl = document.getElementById('disclaimerCheck');
     if (checkEl) checkEl.checked = false;
 
-    // Allow hitting 'Enter' to submit the Phone Number AND the 6-digit PIN
-    document.getElementById('phoneInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendCode(); } });
-    document.getElementById('codeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); verifyCode(); } });
+    // Allow hitting Enter in auth fields.
+    document.getElementById('authEmailInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitEmailAuth(); } });
+    document.getElementById('authPasswordInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitEmailAuth(); } });
+    document.getElementById('phoneInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendOAuthPhoneCode(); } });
+    document.getElementById('codeInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); verifyOAuthPhoneCode(); } });
+
+    setAuthMode("signin");
+    await initSupabaseAuth();
 
     // 1. Mobile/Tablet Tab Default (Updated to 1024px)
     if (window.innerWidth <= 1024) {
@@ -160,91 +442,10 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-async function sendCode() {
-    const btn = document.querySelector('#step1 .btn');
-    if (btn.disabled) return; // 🛑 CRITICAL: Stops the Enter key from double-firing
-    
-    // ✅ FIX 1: Lock the button immediately BEFORE running any validation
-    btn.disabled = true; 
-    
-    // --- MANDATORY CHECKBOX VALIDATION ---
-    const disclaimerCheck = document.getElementById('disclaimerCheck');
-    if (disclaimerCheck && !disclaimerCheck.checked) {
-        document.getElementById('phoneInput').blur(); // ✅ FIX 2: Remove focus so "Enter" stops firing
-        await uiAlert("Required", "You must agree to the Disclaimer & Terms before logging in.");
-        btn.disabled = false; // Unlock the button only after they close the alert
-        return;
-    }
-    
-    userPhone = phoneInput.getNumber();
-    if (!userPhone) { 
-        document.getElementById('phoneInput').blur();
-        await uiAlert("Invalid Number", "Please enter a valid phone number."); 
-        btn.disabled = false; // Unlock the button only after they close the alert
-        return; 
-    }
-    
-    btn.innerText = "Sending...";
-    
-    try {
-        const res = await fetch('/api/auth/send-code', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: userPhone }) });
-        const data = await res.json();
-        if (data.success) {
-            document.getElementById('step1').style.display = 'none';
-            document.getElementById('step2').style.display = 'block';
-            document.getElementById('codeInput').focus(); // Auto-focuses the PIN box!
-        } else { 
-            await uiAlert("Error", data.error); 
-        }
-    } catch (e) { 
-        await uiAlert("Error", "Connection error."); 
-    } finally {
-        // Always reset the button state when finished
-        btn.innerText = "Get Secure Code to Your Phone";
-        btn.disabled = false;
-    }
-}
-
-async function verifyCode() {
-    const btn = document.querySelector('#step2 .btn');
-    if (btn.disabled) return; // 🛑 CRITICAL: Stops the Enter key from double-firing
-    
-    const code = document.getElementById('codeInput').value.trim();
-    if (!code) return;
-    
-    btn.disabled = true; // Lock the button immediately
-    btn.innerText = "Verifying...";
-    
-    try {
-        const res = await fetch('/api/auth/verify-code', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: userPhone, code }) });
-        const data = await res.json();
-        if (data.success) {
-            globalUserId = data.userId;
-            userName = (data.name && data.name.toLowerCase() !== "null") ? data.name.split(' ')[0] : "Guest";
-            
-            localStorage.setItem('david_userId', globalUserId);
-            localStorage.setItem('david_userName', userName);
-            // 🔒 JWT is now stored in an HttpOnly cookie by the server — NOT in localStorage
-            localStorage.setItem('david_last_active', Date.now());
-            localStorage.setItem('david_previous_login', data.previousLogin);
-
-            document.querySelectorAll('.login-tag-text').forEach(el => el.innerText = "Logged in as " + userName);
-            document.getElementById('loginContainer').style.display = 'none';
-            document.getElementById('dashboardContainer').style.display = 'flex';
-            await initDashboard();
-        } else { 
-            await uiAlert("Error", data.error); 
-        }
-    } catch (e) { 
-        await uiAlert("Error", "Connection error."); 
-    } finally {
-        // Always reset the button state when finished
-        btn.innerText = "Login to Portal"; 
-        btn.disabled = false;
-    }
-}
-
 function logoutUser() {
+    if (supabaseClient) {
+        supabaseClient.auth.signOut().catch(e => console.error("Supabase signout failed", e));
+    }
     // Notify backend of logout (cookie is sent automatically)
     fetch('/api/web/logout', { 
         method: 'POST', 
@@ -268,16 +469,21 @@ function logoutUser() {
     //  THE FIX: Change this to 'flex' so the login layout doesn't break!
     document.getElementById('loginContainer').style.display = 'flex'; 
     document.getElementById('step2').style.display = 'none';
+    document.getElementById('resetPasswordStep').style.display = 'none';
     document.getElementById('step1').style.display = 'block';
     
     // --- Wipe all inputs clean on logout ---
     document.getElementById('codeInput').value = "";
     document.getElementById('phoneInput').value = ""; 
+    document.getElementById('authPasswordInput').value = "";
+    document.getElementById('newPasswordInput').value = "";
+    document.getElementById('confirmPasswordInput').value = "";
+    document.getElementById('phoneCodeWrap').style.display = 'none';
     const disclaimer = document.getElementById('disclaimerCheck');
     if (disclaimer) disclaimer.checked = false; 
 
-    document.querySelector('#step1 .btn').innerText = "Get Secure Code to Your Phone";
-    document.querySelector('#step2 .btn').innerText = "Login to Portal";
+    document.getElementById('authPrimaryBtn').innerText = authMode === "signup" ? "Create Account" : "Sign In";
+    document.getElementById('sendPhone2faBtn').innerText = "Send Phone Code";
     document.getElementById('chatMessages').innerHTML = "";
     document.getElementById('chatList').innerHTML = "";
 }

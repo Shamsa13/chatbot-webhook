@@ -29,22 +29,62 @@
 
             <div id="loginAreaForm">
               <div id="step1">
-                    <label class="auth-label" for="phoneInput">Secure Phone Login</label>
-                    <input type="tel" id="phoneInput" class="auth-input" />
-                    
+                    <div class="auth-mode-switch" role="tablist" aria-label="Authentication mode">
+                        <button type="button" id="signinTab" class="auth-mode-btn active" onclick="setAuthMode('signin')">Sign In</button>
+                        <button type="button" id="signupTab" class="auth-mode-btn" onclick="setAuthMode('signup')">Create Account</button>
+                    </div>
+
+                    <button type="button" class="btn auth-button oauth-button" onclick="signInWithOAuth('google')">Continue with Google</button>
+                    <!-- Microsoft login is hidden until the Azure provider is configured in Supabase. -->
+                    <!--
+                    <button type="button" class="btn auth-button oauth-button secondary" onclick="signInWithOAuth('azure')">Continue with Microsoft</button>
+                    -->
+
+                    <div class="auth-divider"><span>or</span></div>
+
+                    <div id="authNameWrap" style="display:none;">
+                        <label class="auth-label" for="authNameInput">Full Name</label>
+                        <input type="text" id="authNameInput" class="auth-input" placeholder="Jane Doe" autocomplete="name" />
+                    </div>
+
+                    <label class="auth-label" for="authEmailInput">Email Address</label>
+                    <input type="email" id="authEmailInput" class="auth-input" placeholder="you@example.com" autocomplete="email" />
+
+                    <label class="auth-label" for="authPasswordInput">Password</label>
+                    <input type="password" id="authPasswordInput" class="auth-input" placeholder="Your password" autocomplete="current-password" />
+
+                    <button class="btn auth-button" id="authPrimaryBtn" onclick="submitEmailAuth()">Sign In</button>
+                    <button type="button" class="auth-link-button" onclick="sendPasswordReset()">Forgot password?</button>
+
                     <div class="checkbox-container">
                         <input type="checkbox" id="disclaimerCheck">
                         <label for="disclaimerCheck">
                             I have read and agree to the <a href="https://www.boardchair.com/director-compass-ai-disclaimer" target="_blank">Disclaimer & Terms</a>.
                         </label>
                     </div>
-
-                    <button class="btn auth-button" onclick="sendCode()">Get Secure Code to Your Phone</button>
                 </div>
                 <div id="step2" style="display: none;">
-                    <label class="auth-label" for="codeInput">Enter 6-Digit Code</label>
-                    <input type="text" id="codeInput" class="auth-input" placeholder="123456" />
-                    <button class="btn auth-button" onclick="verifyCode()">Login to Portal</button>
+                    <div id="phone2faIntro" class="auth-step-note"></div>
+                    <div id="phone2faInputWrap">
+                        <label class="auth-label" for="phoneInput">Phone Number</label>
+                        <input type="tel" id="phoneInput" class="auth-input" />
+                    </div>
+                    <button class="btn auth-button" id="sendPhone2faBtn" onclick="sendOAuthPhoneCode()">Send Phone Code</button>
+
+                    <div id="phoneCodeWrap" style="display:none;">
+                        <label class="auth-label" for="codeInput">Enter 6-Digit Code</label>
+                        <input type="text" id="codeInput" class="auth-input" placeholder="123456" inputmode="numeric" autocomplete="one-time-code" />
+                        <button class="btn auth-button" onclick="verifyOAuthPhoneCode()">Enter Portal</button>
+                    </div>
+
+                    <button type="button" class="auth-link-button" onclick="backToPrimaryAuth()">Back to sign in</button>
+                </div>
+                <div id="resetPasswordStep" style="display: none;">
+                    <label class="auth-label" for="newPasswordInput">New Password</label>
+                    <input type="password" id="newPasswordInput" class="auth-input" placeholder="New password" autocomplete="new-password" />
+                    <label class="auth-label" for="confirmPasswordInput">Confirm Password</label>
+                    <input type="password" id="confirmPasswordInput" class="auth-input" placeholder="Confirm password" autocomplete="new-password" />
+                    <button class="btn auth-button" onclick="completePasswordReset()">Update Password</button>
                 </div>
             </div>
         </div>
@@ -277,6 +317,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/intl-tel-input/17.0.8/js/intlTelInput.min.js" integrity="sha384-d6C/Dc4YGOG7kgNRXiAb9oUq4Lv6Z0thbRHYdcqihPVyj52vkKCluruqbZYTmJaK" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="/app.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/typed.js@2.0.12" integrity="sha384-NMn9+T8zIKnDUstqb5le7vdLNSyAgSU9DtEPT/b7ks9NJQpPk4Dc9b1tI8oyzimc" crossorigin="anonymous"></script>
 <script>

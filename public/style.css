@@ -23,6 +23,16 @@ h1.auth-title { font-family: 'Playfair Display', serif; font-size: 2.5rem; margi
 p.auth-subtitle { color: rgba(255,255,255,0.7); font-size: 15px; margin: 0 0 40px 0; }
 
 label.auth-label { display: block; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; color: #B99784; }
+.auth-mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 16px; padding: 4px; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; background: rgba(255,255,255,0.04); }
+.auth-mode-btn { border: none; border-radius: 6px; padding: 10px 8px; color: rgba(255,255,255,0.72); background: transparent; font-weight: 700; cursor: pointer; }
+.auth-mode-btn.active { color: #181D32; background: #fff; }
+.oauth-button { margin-top: 8px !important; background: #fff !important; color: #181D32 !important; }
+.oauth-button.secondary { background: rgba(255,255,255,0.1) !important; color: #fff !important; border: 1px solid rgba(255,255,255,0.18) !important; }
+.auth-divider { display: flex; align-items: center; gap: 12px; color: rgba(255,255,255,0.48); font-size: 12px; margin: 18px 0; text-transform: uppercase; letter-spacing: 0.5px; }
+.auth-divider::before, .auth-divider::after { content: ""; flex: 1; height: 1px; background: rgba(255,255,255,0.14); }
+.auth-link-button { display: block; width: 100%; border: none; background: transparent; color: rgba(255,255,255,0.72); font-size: 13px; font-weight: 600; cursor: pointer; margin-top: 12px; text-align: center; }
+.auth-link-button:hover { color: #fff; }
+.auth-step-note { color: rgba(255,255,255,0.78); font-size: 14px; line-height: 1.5; margin-bottom: 16px; }
 /* FORM INPUTS & FIXING INTL-TEL-INPUT OVERLAP */
 input.auth-input { 
     width: 100% !important; 
@@ -692,4 +702,3 @@ input:checked + .slider:before { transform: translateX(18px); }
     50% { stroke-dasharray: 90, 150; stroke-dashoffset: -35; }
     100% { stroke-dasharray: 90, 150; stroke-dashoffset: -124; }
 }
-

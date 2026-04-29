@@ -5,11 +5,18 @@ create extension if not exists pgcrypto;
 
 alter table public.users
   add column if not exists phone_hash text,
-  add column if not exists sms_locked_at timestamptz;
+  add column if not exists sms_locked_at timestamptz,
+  add column if not exists auth_user_id uuid,
+  add column if not exists auth_provider text,
+  add column if not exists auth_email_verified_at timestamptz;
 
 create unique index if not exists users_phone_hash_unique
   on public.users (phone_hash)
   where phone_hash is not null;
+
+create unique index if not exists users_auth_user_id_unique
+  on public.users (auth_user_id)
+  where auth_user_id is not null;
 
 create table if not exists public.session_tokens (
   id uuid primary key default gen_random_uuid(),

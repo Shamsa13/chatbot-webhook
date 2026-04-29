@@ -365,7 +365,7 @@ app.use((req, res, next) => {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com",
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data: https://cdnjs.cloudflare.com",
-    "connect-src 'self'",
+    "connect-src 'self' https://*.supabase.co",
     "frame-ancestors 'none'"
   ].join('; '));
   // Strict Transport Security (forces HTTPS)
@@ -387,6 +387,7 @@ const PORT = process.env.PORT || 3000;
 const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL || "";
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const GOOGLE_SCRIPT_WEBHOOK_URL = process.env.GOOGLE_SCRIPT_WEBHOOK_URL || "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.4";
@@ -395,10 +396,15 @@ const HEYGEN_API_KEY = process.env.HEYGEN_API_KEY || "";
 const HEYGEN_AVATAR_ID = process.env.HEYGEN_AVATAR_ID || "";
 
 if (!SUPABASE_URL || !SUPABASE_SECRET_KEY) console.error("Missing SUPABASE_URL or SUPABASE_SECRET_KEY");
+if (!SUPABASE_ANON_KEY) console.error("Missing SUPABASE_ANON_KEY — OAuth/email login will not initialize in the browser.");
 if (!OPENAI_API_KEY) console.error("Missing OPENAI_API_KEY");
 if (!ADMIN_SECRET) console.error("⚠️ WARNING: ADMIN_SECRET not set — admin endpoints will reject all requests");
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, {
+  auth: { persistSession: false }
+});
+
+const supabaseAuth = createClient(SUPABASE_URL, SUPABASE_ANON_KEY || SUPABASE_SECRET_KEY, {
   auth: { persistSession: false }
 });
 
@@ -601,6 +607,18 @@ function isMissingTableError(error) {
   return error?.code === "42P01" || /relation .* does not exist/i.test(error?.message || "");
 }
 
+function isMissingColumnError(error, columnName) {
+  const message = error?.message || "";
+  return error?.code === "42703" ||
+    message.includes(`'${columnName}'`) ||
+    new RegExp(`column .*${columnName}.* does not exist`, "i").test(message) ||
+    new RegExp(`schema cache.*${columnName}`, "i").test(message);
+}
+
+function requireAuthMigrationError() {
+  return new Error("OAuth login is not fully configured yet. Run the updated security-hardening.sql migration in Supabase first.");
+}
+
 async function storeSessionToken({ token, userId, req, expiresAt }) {
   const { error } = await supabase.from("session_tokens").insert({
     user_id: userId,
@@ -674,6 +692,101 @@ function setSessionCookie(res, token) {
     maxAge: SESSION_COOKIE_MAX_AGE_MS,
     path: "/"
   });
+}
+
+async function issueWebSession(req, res, user) {
+  const previousLogin = user?.last_web_login || "First time logging in";
+  await supabase.from("users").update({
+    otp_code: null,
+    otp_expires_at: null,
+    last_seen: new Date().toISOString(),
+    last_web_login: new Date().toISOString()
+  }).eq("id", user.id);
+
+  const expiresAtSession = new Date(Date.now() + SESSION_TOKEN_TTL_MS).toISOString();
+  const token = jwt.sign({ userId: user.id, iat_abs: Date.now() }, JWT_SECRET, { expiresIn: Math.floor(SESSION_TOKEN_TTL_MS / 1000) });
+  await storeSessionToken({ token, userId: user.id, req, expiresAt: expiresAtSession });
+  setSessionCookie(res, token);
+
+  return {
+    success: true,
+    userId: user.id,
+    name: user.full_name,
+    previousLogin
+  };
+}
+
+function getAuthUserEmail(authUser) {
+  return String(authUser?.email || authUser?.user_metadata?.email || "").trim().toLowerCase();
+}
+
+function getAuthUserName(authUser) {
+  return String(authUser?.user_metadata?.full_name || authUser?.user_metadata?.name || "").trim();
+}
+
+function getAuthProvider(authUser) {
+  return String(authUser?.app_metadata?.provider || authUser?.identities?.[0]?.provider || "email").trim();
+}
+
+async function getSupabaseAuthUser(accessToken) {
+  const token = String(accessToken || "").replace(/^Bearer\s+/i, "").trim();
+  if (!token) throw new Error("Missing Supabase auth token.");
+
+  const { data, error } = await supabaseAuth.auth.getUser(token);
+  if (error || !data?.user) {
+    throw new Error("Invalid or expired Supabase auth session.");
+  }
+  return data.user;
+}
+
+async function findUserByAuthUserId(authUserId, columns = "id, phone, full_name, email, last_web_login, auth_user_id") {
+  const { data, error } = await supabase.from("users").select(columns).eq("auth_user_id", authUserId).limit(1);
+  if (error) {
+    if (isMissingColumnError(error, "auth_user_id") || error.code === "42703") throw requireAuthMigrationError();
+    throw error;
+  }
+  return data?.[0] ? decryptUserRecord(data[0]) : null;
+}
+
+async function assertAuthUserCanUsePhone(authUserId, userId) {
+  const linkedToAuth = await findUserByAuthUserId(authUserId, "id, phone, full_name, email, last_web_login, auth_user_id");
+  if (linkedToAuth && linkedToAuth.id !== userId) {
+    throw new Error("This login is already linked to a different phone number.");
+  }
+}
+
+async function linkSupabaseAuthToUser(authUser, user) {
+  if (user.auth_user_id && user.auth_user_id !== authUser.id) {
+    throw new Error("This phone number is already linked to a different login.");
+  }
+  await assertAuthUserCanUsePhone(authUser.id, user.id);
+
+  const authEmail = getAuthUserEmail(authUser);
+  const authName = getAuthUserName(authUser);
+  const updates = {
+    auth_user_id: authUser.id,
+    auth_provider: getAuthProvider(authUser),
+    auth_email_verified_at: authUser.email_confirmed_at || authUser.confirmed_at || null
+  };
+
+  if (authEmail) updates.email = authEmail;
+  if (authName && (!user.full_name || user.full_name.toLowerCase() === "null" || user.full_name.trim() === "")) {
+    updates.full_name = authName;
+  }
+
+  const { data, error } = await supabase
+    .from("users")
+    .update(encryptUserUpdates(updates))
+    .eq("id", user.id)
+    .select("id, phone, full_name, email, last_web_login, auth_user_id")
+    .single();
+
+  if (error) {
+    if (isMissingColumnError(error, "auth_user_id") || error.code === "42703") throw requireAuthMigrationError();
+    throw error;
+  }
+
+  return decryptUserRecord(data);
 }
 
 async function authenticateToken(req, res, next) {
@@ -2590,58 +2703,108 @@ function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
+async function sendVerificationCodeToPhone(rawPhone, { hideDisallowed = false } = {}) {
+  if (!rawPhone) throw new Error("Phone number is required");
+  const cleanPhone = normalizeFrom(rawPhone);
+
+  if (!isAllowedPhoneNumber(cleanPhone)) {
+    console.warn(`🚫 OTP blocked for disallowed country code: ${maskPhone(cleanPhone)}`);
+    if (hideDisallowed) return { success: true, hiddenBlock: true, cleanPhone };
+    const err = new Error("This phone country code is not supported for SMS verification.");
+    err.status = 400;
+    throw err;
+  }
+
+  if (!checkPhoneOtpLimit(cleanPhone)) {
+    console.warn(`🚫 OTP rate limit hit for phone: ${maskPhone(cleanPhone)}`);
+    const err = new Error("Too many code requests for this number. Please try again in 1 hour.");
+    err.status = 429;
+    throw err;
+  }
+
+  if (!checkGlobalSmsLimit()) {
+    console.error("🚨 GLOBAL SMS CAP REACHED — Blocking all OTP sends");
+    sendToSlack("🚨 CRITICAL: Global SMS hourly cap (200) reached! OTP sends disabled. Possible toll fraud attack.");
+    const err = new Error("Service temporarily unavailable. Please try again later.");
+    err.status = 429;
+    throw err;
+  }
+
+  const userId = await getOrCreateUser(cleanPhone);
+  const otpCode = generateOTP();
+  const otpHash = await hashOTP(otpCode);
+  const expiresAt = new Date(Date.now() + 10 * 60000).toISOString();
+
+  const { error } = await supabase.from("users").update({ otp_code: otpHash, otp_expires_at: expiresAt }).eq("id", userId);
+  if (error) throw error;
+
+  if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
+    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    const outboundPhone = cleanPhone.startsWith("+") ? cleanPhone : "+" + cleanPhone;
+
+    await twilioClient.messages.create({
+      body: `${otpCode} is your Director Compass web login code. It expires in 10 minutes. Only enter this at compass.boardchair.com.`,
+      from: process.env.TWILIO_PHONE_NUMBER,
+      to: outboundPhone
+    });
+  }
+
+  console.log(`📲 OTP sent to ${maskPhone(cleanPhone)} (Global count: ${globalSmsCap.count}/200)`);
+  return { success: true, userId, cleanPhone, maskedPhone: maskPhone(cleanPhone) };
+}
+
+async function verifyUserPhoneCode(user, cleanPhone, code) {
+  const lockCheck = checkVerifyAttempt(cleanPhone);
+  if (!lockCheck.allowed) {
+    const err = new Error(`Too many failed attempts. Account locked for ${lockCheck.minutesLeft} more minutes.`);
+    err.status = 429;
+    throw err;
+  }
+
+  if (!user) {
+    const err = new Error("User not found.");
+    err.status = 400;
+    throw err;
+  }
+
+  if (!user.otp_code) {
+    const err = new Error("No active code. Please request a new one.");
+    err.status = 400;
+    throw err;
+  }
+
+  const otpMatches = await compareOTP(code, user.otp_code);
+  if (!otpMatches) {
+    const failureCount = recordVerifyFailure(cleanPhone);
+
+    if (failureCount >= MAX_VERIFY_FAILURES) {
+      await supabase.from("users").update({ otp_code: null, otp_expires_at: null }).eq("id", user.id);
+      const err = new Error("Too many failed attempts. Please request a new code.");
+      err.status = 429;
+      throw err;
+    }
+
+    const err = new Error(`Invalid code. ${MAX_VERIFY_FAILURES - failureCount} attempts remaining.`);
+    err.status = 400;
+    throw err;
+  }
+
+  if (new Date() > new Date(user.otp_expires_at)) {
+    const err = new Error("Code expired. Please request a new one.");
+    err.status = 400;
+    throw err;
+  }
+
+  clearVerifyAttempts(cleanPhone);
+}
+
 app.post("/api/auth/send-code", otpLimiter, async (req, res) => {
   try {
-    const rawPhone = req.body.phone;
-    if (!rawPhone) return res.status(400).json({ error: "Phone number is required" });
-    
-    const cleanPhone = normalizeFrom(rawPhone);
-    
-    // 🔒 COUNTRY CODE VALIDATION — Block premium rate / high-fraud countries
-    if (!isAllowedPhoneNumber(cleanPhone)) {
-      console.warn(`🚫 OTP blocked for disallowed country code: ${maskPhone(cleanPhone)}`);
-      // Return success to prevent phone number enumeration (attacker can't tell if blocked or sent)
-      return res.json({ success: true, message: "Verification code sent via SMS." });
-    }
-    
-    // 🔒 PER-PHONE RATE LIMIT — Prevents toll fraud from botnets rotating IPs
-    if (!checkPhoneOtpLimit(cleanPhone)) {
-      console.warn(`🚫 OTP rate limit hit for phone: ${maskPhone(cleanPhone)}`);
-      return res.status(429).json({ error: "Too many code requests for this number. Please try again in 1 hour." });
-    }
-    
-    // 🔒 GLOBAL SMS CAP — Circuit breaker stops mass draining
-    if (!checkGlobalSmsLimit()) {
-      console.error("🚨 GLOBAL SMS CAP REACHED — Blocking all OTP sends");
-      sendToSlack("🚨 CRITICAL: Global SMS hourly cap (200) reached! OTP sends disabled. Possible toll fraud attack.");
-      return res.status(429).json({ error: "Service temporarily unavailable. Please try again later." });
-    }
-    
-    const userId = await getOrCreateUser(cleanPhone);
-    
-    const otpCode = generateOTP();
-    const otpHash = await hashOTP(otpCode);
-    const expiresAt = new Date(Date.now() + 10 * 60000).toISOString();
-    
-    const { error } = await supabase.from("users").update({ otp_code: otpHash, otp_expires_at: expiresAt }).eq("id", userId);
-    if (error) throw error;
-    
-    if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
-      const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-      const outboundPhone = cleanPhone.startsWith("+") ? cleanPhone : "+" + cleanPhone;
-      
-      await twilioClient.messages.create({
-        body: `${otpCode} is your Director Compass web login code. It expires in 10 minutes. Only enter this at compass.boardchair.com.`,
-        from: process.env.TWILIO_PHONE_NUMBER,
-        to: outboundPhone
-      });
-    }
-    
-    console.log(`📲 OTP sent to ${maskPhone(cleanPhone)} (Global count: ${globalSmsCap.count}/200)`);
+    await sendVerificationCodeToPhone(req.body.phone, { hideDisallowed: true });
     res.json({ success: true, message: "Verification code sent via SMS." });
   } catch (err) {
     console.error("OTP Send Error:", err.message);
-    res.status(500).json({ error: "Failed to send verification code." });
+    res.status(err.status || 500).json({ error: err.status ? err.message : "Failed to send verification code." });
   }
 });
 
@@ -2653,59 +2816,95 @@ app.post("/api/auth/verify-code", otpLimiter, async (req, res) => {
     
     const cleanPhone = normalizeFrom(rawPhone);
     
-    // 🔒 CHECK LOCKOUT — Prevents brute force even from distributed IPs
-    const lockCheck = checkVerifyAttempt(cleanPhone);
-    if (!lockCheck.allowed) {
-      return res.status(429).json({ error: `Too many failed attempts. Account locked for ${lockCheck.minutesLeft} more minutes.` });
-    }
-    
     const user = await findUserByPhone(cleanPhone, "id, phone, otp_code, otp_expires_at, full_name, last_web_login");
-    if (!user) return res.status(400).json({ error: "User not found." });
-    
-    // 🔒 OTP already consumed (cleared after 3 failures or successful use)
-    if (!user.otp_code) {
-      return res.status(400).json({ error: "No active code. Please request a new one." });
-    }
-    
-    const otpMatches = await compareOTP(code, user.otp_code);
-    if (!otpMatches) {
-      // 🔒 RECORD FAILURE and check if we should invalidate the OTP
-      const failureCount = recordVerifyFailure(cleanPhone);
-      
-      if (failureCount >= MAX_VERIFY_FAILURES) {
-        // Invalidate the OTP in the database so it cannot be tried again
-        await supabase.from("users").update({ otp_code: null, otp_expires_at: null }).eq("id", user.id);
-        return res.status(429).json({ error: "Too many failed attempts. Please request a new code." });
-      }
-      
-      return res.status(400).json({ error: `Invalid code. ${MAX_VERIFY_FAILURES - failureCount} attempts remaining.` });
-    }
-    
-    if (new Date() > new Date(user.otp_expires_at)) {
-      return res.status(400).json({ error: "Code expired. Please request a new one." });
-    }
-    
-    // 🔒 SUCCESS — Clear failure tracking
-    clearVerifyAttempts(cleanPhone);
-    
-    const previousLogin = user.last_web_login || "First time logging in"; 
-    
-    await supabase.from("users").update({ 
-        otp_code: null, 
-        otp_expires_at: null, 
-        last_seen: new Date().toISOString(),
-        last_web_login: new Date().toISOString()
-    }).eq("id", user.id);
-    
-    const expiresAtSession = new Date(Date.now() + SESSION_TOKEN_TTL_MS).toISOString();
-    const token = jwt.sign({ userId: user.id, iat_abs: Date.now() }, JWT_SECRET, { expiresIn: Math.floor(SESSION_TOKEN_TTL_MS / 1000) });
-    await storeSessionToken({ token, userId: user.id, req, expiresAt: expiresAtSession });
-    setSessionCookie(res, token);
+    await verifyUserPhoneCode(user, cleanPhone, code);
 
-    res.json({ success: true, userId: user.id, name: user.full_name, previousLogin: previousLogin });
+    res.json(await issueWebSession(req, res, user));
   } catch (err) {
     console.error("OTP Verify Error:", err.message);
-    res.status(500).json({ error: "Verification failed." });
+    res.status(err.status || 500).json({ error: err.status ? err.message : "Verification failed." });
+  }
+});
+
+app.get("/api/auth/public-config", (req, res) => {
+  res.json({
+    success: true,
+    supabaseUrl: SUPABASE_URL,
+    supabaseAnonKey: SUPABASE_ANON_KEY,
+    oauthProviders: ["google", "azure"]
+  });
+});
+
+app.post("/api/auth/oauth/status", otpLimiter, async (req, res) => {
+  try {
+    const authUser = await getSupabaseAuthUser(req.body.accessToken);
+    const linkedUser = await findUserByAuthUserId(authUser.id, "id, phone, full_name, email, last_web_login, auth_user_id");
+
+    res.json({
+      success: true,
+      linked: !!linkedUser,
+      maskedPhone: linkedUser?.phone ? maskPhone(linkedUser.phone) : null,
+      name: linkedUser?.full_name || getAuthUserName(authUser) || "Guest",
+      email: linkedUser?.email || getAuthUserEmail(authUser)
+    });
+  } catch (err) {
+    console.error("OAuth status error:", err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/auth/oauth/send-phone-code", otpLimiter, async (req, res) => {
+  try {
+    const authUser = await getSupabaseAuthUser(req.body.accessToken);
+    const linkedUser = await findUserByAuthUserId(authUser.id, "id, phone, full_name, email, last_web_login, auth_user_id");
+
+    const targetPhone = linkedUser?.phone || normalizeFrom(req.body.phone || "");
+    if (!targetPhone) return res.status(400).json({ error: "Phone number is required for the security code." });
+
+    if (!linkedUser) {
+      const existingPhoneUser = await findUserByPhone(targetPhone, "id, phone, auth_user_id");
+      if (existingPhoneUser?.auth_user_id && existingPhoneUser.auth_user_id !== authUser.id) {
+        return res.status(409).json({ error: "This phone number is already linked to a different login." });
+      }
+    }
+
+    const sent = await sendVerificationCodeToPhone(targetPhone);
+    res.json({
+      success: true,
+      linked: !!linkedUser,
+      maskedPhone: sent.maskedPhone,
+      message: "Security code sent via SMS."
+    });
+  } catch (err) {
+    console.error("OAuth phone code error:", err.message);
+    res.status(err.status || 400).json({ error: err.message });
+  }
+});
+
+app.post("/api/auth/oauth/verify-phone-code", otpLimiter, async (req, res) => {
+  try {
+    const authUser = await getSupabaseAuthUser(req.body.accessToken);
+    const code = String(req.body.code || "").trim();
+    if (!code) return res.status(400).json({ error: "Security code is required." });
+
+    const linkedUser = await findUserByAuthUserId(authUser.id, "id, phone, full_name, email, otp_code, otp_expires_at, last_web_login, auth_user_id");
+    let user = linkedUser;
+    let cleanPhone = linkedUser?.phone || normalizeFrom(req.body.phone || "");
+
+    if (!user) {
+      if (!cleanPhone) return res.status(400).json({ error: "Phone number is required." });
+      user = await findUserByPhone(cleanPhone, "id, phone, full_name, email, otp_code, otp_expires_at, last_web_login, auth_user_id");
+    }
+
+    if (!user) return res.status(400).json({ error: "No active code. Please request a new one." });
+    cleanPhone = normalizeFrom(user.phone || cleanPhone);
+    await verifyUserPhoneCode(user, cleanPhone, code);
+
+    const linkedProfile = await linkSupabaseAuthToUser(authUser, user);
+    res.json(await issueWebSession(req, res, linkedProfile));
+  } catch (err) {
+    console.error("OAuth phone verify error:", err.message);
+    res.status(err.status || 400).json({ error: err.message });
   }
 });
 
