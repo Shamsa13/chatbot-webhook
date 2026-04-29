@@ -130,7 +130,8 @@ async function initSupabaseAuth() {
 
 function requireTermsAccepted() {
     const disclaimerCheck = document.getElementById('disclaimerCheck');
-    return !disclaimerCheck || disclaimerCheck.checked;
+    const phoneDisclaimerCheck = document.getElementById('phoneDisclaimerCheck');
+    return !disclaimerCheck || disclaimerCheck.checked || phoneDisclaimerCheck?.checked;
 }
 
 function markTermsAcceptedForAuth() {
@@ -143,6 +144,21 @@ function hasTermsAcceptedForAuth() {
 
 function clearTermsAcceptedForAuth() {
     sessionStorage.removeItem('david_terms_accepted_for_auth');
+}
+
+function ensureTermsAcceptedForAuth() {
+    if (hasTermsAcceptedForAuth()) return true;
+    if (requireTermsAccepted()) {
+        markTermsAcceptedForAuth();
+        return true;
+    }
+    return false;
+}
+
+function updatePhoneTermsVisibility() {
+    const phoneTermsWrap = document.getElementById('phoneTermsWrap');
+    if (!phoneTermsWrap) return;
+    phoneTermsWrap.style.display = hasTermsAcceptedForAuth() ? 'none' : 'flex';
 }
 
 function setAuthMode(mode) {
@@ -262,10 +278,15 @@ async function beginPhoneSecondFactor(session) {
     document.getElementById('resetPasswordStep').style.display = 'none';
     document.getElementById('step2').style.display = 'block';
     document.getElementById('phoneCodeWrap').style.display = 'none';
+    const title = document.querySelector('.auth-title');
+    if (title) title.innerText = "Verify Phone";
+    const subtitle = document.querySelector('.auth-subtitle');
+    if (subtitle) subtitle.innerText = "Use your phone number to protect your account.";
 
     const intro = document.getElementById('phone2faIntro');
     const phoneWrap = document.getElementById('phone2faInputWrap');
     const sendBtn = document.getElementById('sendPhone2faBtn');
+    updatePhoneTermsVisibility();
 
     intro.innerText = "Confirm your phone number to finish signing in.";
     phoneWrap.style.display = 'block';
@@ -292,10 +313,11 @@ async function beginPhoneSecondFactor(session) {
 async function sendOAuthPhoneCode() {
     const btn = document.getElementById('sendPhone2faBtn');
     if (!pendingSupabaseSession || btn.disabled) return;
-    if (!hasTermsAcceptedForAuth()) {
-        backToPrimaryAuth();
-        return uiAlert("Required", "You must agree to the Disclaimer & Terms before logging in.");
+    if (!ensureTermsAcceptedForAuth()) {
+        updatePhoneTermsVisibility();
+        return uiAlert("Required", "Check the Disclaimer & Terms box before requesting your phone code.");
     }
+    updatePhoneTermsVisibility();
 
     const phone = pendingAuthLinkedPhone ? null : phoneInput.getNumber();
     if (!pendingAuthLinkedPhone && !phone) return uiAlert("Invalid Number", "Please enter a valid phone number.");
@@ -368,6 +390,7 @@ function backToPrimaryAuth() {
     document.getElementById('step2').style.display = 'none';
     document.getElementById('resetPasswordStep').style.display = 'none';
     document.getElementById('step1').style.display = 'block';
+    setAuthMode(authMode);
 }
 // ==========================================
 // MOBILE APP TAB SWITCHING

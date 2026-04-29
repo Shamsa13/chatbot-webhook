@@ -69,6 +69,12 @@
                         <label class="auth-label" for="phoneInput">Phone Number</label>
                         <input type="tel" id="phoneInput" class="auth-input" />
                     </div>
+                    <div id="phoneTermsWrap" class="checkbox-container auth-phone-terms" style="display:none;">
+                        <input type="checkbox" id="phoneDisclaimerCheck">
+                        <label for="phoneDisclaimerCheck">
+                            I have read and agree to the <a href="https://www.boardchair.com/director-compass-ai-disclaimer" target="_blank">Disclaimer & Terms</a>.
+                        </label>
+                    </div>
                     <button class="btn auth-button" id="sendPhone2faBtn" onclick="sendOAuthPhoneCode()">Send Phone Code</button>
 
                     <div id="phoneCodeWrap" style="display:none;">
