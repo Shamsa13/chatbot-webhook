@@ -44,6 +44,7 @@ input.auth-input {
     color: #fff !important; 
     box-sizing: border-box; 
     transition: 0.2s; 
+    margin-bottom: 12px;
 }
 input.auth-input:focus { outline: none; border-color: #B99784 !important; background: rgba(255,255,255,0.1) !important; }
 

@@ -149,6 +149,10 @@ function setAuthMode(mode) {
     authMode = mode === "signup" ? "signup" : "signin";
     document.getElementById('signinTab')?.classList.toggle('active', authMode === "signin");
     document.getElementById('signupTab')?.classList.toggle('active', authMode === "signup");
+    const title = document.querySelector('.auth-title');
+    if (title) title.innerText = authMode === "signup" ? "Sign Up" : "Sign In";
+    const subtitle = document.querySelector('.auth-subtitle');
+    if (subtitle) subtitle.innerText = authMode === "signup" ? "Create your always available board advisor account." : "Access your always available board advisor.";
     const nameWrap = document.getElementById('authNameWrap');
     if (nameWrap) nameWrap.style.display = authMode === "signup" ? "block" : "none";
     const passwordInput = document.getElementById('authPasswordInput');
