@@ -180,6 +180,27 @@ function setAuthMode(mode) {
     if (btn) btn.innerText = authMode === "signup" ? "Create Account" : "Sign In";
 }
 
+function resetAuthStartScreen() {
+    pendingSupabaseSession = null;
+    pendingAuthLinkedPhone = false;
+    clearTermsAcceptedForAuth();
+    setAuthMode("signin");
+    document.getElementById('step1').style.display = 'block';
+    document.getElementById('step2').style.display = 'none';
+    document.getElementById('resetPasswordStep').style.display = 'none';
+    document.getElementById('phoneCodeWrap').style.display = 'none';
+    document.getElementById('sendPhone2faBtn').style.display = 'block';
+    document.getElementById('authNameInput').value = "";
+    document.getElementById('authEmailInput').value = "";
+    document.getElementById('authPasswordInput').value = "";
+    document.getElementById('phoneInput').value = "";
+    document.getElementById('codeInput').value = "";
+    const disclaimer = document.getElementById('disclaimerCheck');
+    if (disclaimer) disclaimer.checked = false;
+    const phoneDisclaimer = document.getElementById('phoneDisclaimerCheck');
+    if (phoneDisclaimer) phoneDisclaimer.checked = false;
+}
+
 function getAuthRedirectUrl(extra = "") {
     return `${window.location.origin}${window.location.pathname}${extra}`;
 }
@@ -230,6 +251,7 @@ async function submitEmailAuth() {
 
         if (!result.data.session) {
             await uiAlert("Check Your Email", "Confirm your email, then come back and sign in.");
+            resetAuthStartScreen();
             return;
         }
 
@@ -293,6 +315,7 @@ async function beginPhoneSecondFactor(session) {
 
     intro.innerText = "Confirm your phone number to finish signing in.";
     phoneWrap.style.display = 'block';
+    sendBtn.style.display = 'block';
     sendBtn.innerText = "Send Phone Code";
 
     try {
@@ -307,6 +330,9 @@ async function beginPhoneSecondFactor(session) {
             intro.innerText = `For your security, enter the code sent to ${data.maskedPhone}.`;
             phoneWrap.style.display = 'none';
             sendBtn.innerText = "Send Code";
+            if (ensureTermsAcceptedForAuth()) {
+                setTimeout(() => sendOAuthPhoneCode(), 0);
+            }
         }
     } catch (e) {
         console.error("OAuth status check failed:", e);
@@ -315,7 +341,8 @@ async function beginPhoneSecondFactor(session) {
 
 async function sendOAuthPhoneCode() {
     const btn = document.getElementById('sendPhone2faBtn');
-    if (!pendingSupabaseSession || btn.disabled) return;
+    const resendBtn = document.getElementById('resendPhoneCodeBtn');
+    if (!pendingSupabaseSession || btn.disabled || resendBtn?.disabled) return;
     if (!ensureTermsAcceptedForAuth()) {
         updatePhoneTermsVisibility();
         return uiAlert("Required", "Check the Disclaimer & Terms box before requesting your phone code.");
@@ -327,6 +354,11 @@ async function sendOAuthPhoneCode() {
 
     btn.disabled = true;
     btn.innerText = "Sending...";
+    if (resendBtn) {
+        resendBtn.disabled = true;
+        resendBtn.innerText = "Sending...";
+    }
+    let codeSent = false;
     try {
         const res = await fetch('/api/auth/oauth/send-phone-code', {
             method: 'POST',
@@ -336,13 +368,19 @@ async function sendOAuthPhoneCode() {
         const data = await res.json();
         if (!data.success) throw new Error(data.error || "Could not send code.");
         if (data.linked) pendingAuthLinkedPhone = true;
+        codeSent = true;
+        btn.style.display = 'none';
         document.getElementById('phoneCodeWrap').style.display = 'block';
         document.getElementById('codeInput').focus();
     } catch (e) {
         await uiAlert("Code Error", e.message);
     } finally {
         btn.disabled = false;
-        btn.innerText = "Send Code";
+        if (!codeSent) btn.innerText = pendingAuthLinkedPhone ? "Send Code" : "Send Phone Code";
+        if (resendBtn) {
+            resendBtn.disabled = false;
+            resendBtn.innerText = "Resend code";
+        }
     }
 }
 
@@ -393,6 +431,7 @@ function backToPrimaryAuth() {
     document.getElementById('step2').style.display = 'none';
     document.getElementById('resetPasswordStep').style.display = 'none';
     document.getElementById('step1').style.display = 'block';
+    document.getElementById('sendPhone2faBtn').style.display = 'block';
     setAuthMode(authMode);
 }
 // ==========================================
@@ -509,6 +548,7 @@ function logoutUser() {
     document.getElementById('newPasswordInput').value = "";
     document.getElementById('confirmPasswordInput').value = "";
     document.getElementById('phoneCodeWrap').style.display = 'none';
+    document.getElementById('sendPhone2faBtn').style.display = 'block';
     const disclaimer = document.getElementById('disclaimerCheck');
     if (disclaimer) disclaimer.checked = false; 
 

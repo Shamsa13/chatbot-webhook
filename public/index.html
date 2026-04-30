@@ -91,6 +91,7 @@
                         <label class="auth-label" for="codeInput">Enter 6-Digit Code</label>
                         <input type="text" id="codeInput" class="auth-input" placeholder="123456" inputmode="numeric" autocomplete="one-time-code" />
                         <button class="btn auth-button" onclick="verifyOAuthPhoneCode()">Enter Portal</button>
+                        <button type="button" class="auth-link-button" id="resendPhoneCodeBtn" onclick="sendOAuthPhoneCode()">Resend code</button>
                     </div>
 
                     <button type="button" class="auth-link-button" onclick="backToPrimaryAuth()">Back to sign in</button>
