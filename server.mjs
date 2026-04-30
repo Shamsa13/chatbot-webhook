@@ -720,6 +720,24 @@ function getAuthUserEmail(authUser) {
   return String(authUser?.email || authUser?.user_metadata?.email || "").trim().toLowerCase();
 }
 
+async function authEmailExists(email) {
+  const targetEmail = String(email || "").trim().toLowerCase();
+  if (!targetEmail) return false;
+
+  const perPage = 1000;
+  for (let page = 1; page <= 20; page++) {
+    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage });
+    if (error) throw new Error("Auth user lookup failed: " + error.message);
+
+    const users = Array.isArray(data?.users) ? data.users : [];
+    if (users.some(user => getAuthUserEmail(user) === targetEmail)) return true;
+
+    if (users.length < perPage || (data?.lastPage && page >= data.lastPage)) break;
+  }
+
+  return false;
+}
+
 function getAuthUserName(authUser) {
   return String(authUser?.user_metadata?.full_name || authUser?.user_metadata?.name || "").trim();
 }
@@ -2833,6 +2851,21 @@ app.get("/api/auth/public-config", (req, res) => {
     supabaseAnonKey: SUPABASE_ANON_KEY,
     oauthProviders: ["google", "azure"]
   });
+});
+
+app.post("/api/auth/email-exists", otpLimiter, async (req, res) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+    if (!email || !email.includes("@")) return res.status(400).json({ error: "A valid email is required." });
+
+    res.json({
+      success: true,
+      exists: await authEmailExists(email)
+    });
+  } catch (err) {
+    console.error("Auth email lookup error:", err.message);
+    res.status(500).json({ error: "Could not check this email right now." });
+  }
 });
 
 app.post("/api/auth/oauth/status", otpLimiter, async (req, res) => {

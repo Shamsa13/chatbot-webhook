@@ -201,6 +201,27 @@ function resetAuthStartScreen() {
     if (phoneDisclaimer) phoneDisclaimer.checked = false;
 }
 
+function routeExistingAccountToSignIn(email) {
+    pendingSupabaseSession = null;
+    pendingAuthLinkedPhone = false;
+    clearTermsAcceptedForAuth();
+    setAuthMode("signin");
+    document.getElementById('step1').style.display = 'block';
+    document.getElementById('step2').style.display = 'none';
+    document.getElementById('resetPasswordStep').style.display = 'none';
+    document.getElementById('phoneCodeWrap').style.display = 'none';
+    document.getElementById('sendPhone2faBtn').style.display = 'block';
+    document.getElementById('authNameInput').value = "";
+    document.getElementById('authEmailInput').value = email || "";
+    document.getElementById('authPasswordInput').value = "";
+    document.getElementById('phoneInput').value = "";
+    document.getElementById('codeInput').value = "";
+    const disclaimer = document.getElementById('disclaimerCheck');
+    if (disclaimer) disclaimer.checked = false;
+    const phoneDisclaimer = document.getElementById('phoneDisclaimerCheck');
+    if (phoneDisclaimer) phoneDisclaimer.checked = false;
+}
+
 function getAuthRedirectUrl(extra = "") {
     return `${window.location.origin}${window.location.pathname}${extra}`;
 }
@@ -215,6 +236,17 @@ async function signInWithOAuth(provider) {
         options: { redirectTo: getAuthRedirectUrl() }
     });
     if (error) await uiAlert("Login Error", error.message);
+}
+
+async function checkSignupEmailExists(email) {
+    const res = await fetch('/api/auth/email-exists', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Could not check this email right now.");
+    return !!data.exists;
 }
 
 async function submitEmailAuth() {
@@ -235,6 +267,19 @@ async function submitEmailAuth() {
     try {
         let result;
         if (authMode === "signup") {
+            let emailAlreadyExists = false;
+            try {
+                emailAlreadyExists = await checkSignupEmailExists(email);
+            } catch (lookupError) {
+                console.warn("Signup email lookup failed:", lookupError.message);
+            }
+
+            if (emailAlreadyExists) {
+                await uiAlert("Account Already Exists", "There is already an account under this email. Sign in instead, or use Forgot password if you need to reset it.");
+                routeExistingAccountToSignIn(email);
+                return;
+            }
+
             result = await supabaseClient.auth.signUp({
                 email,
                 password,
@@ -248,6 +293,12 @@ async function submitEmailAuth() {
         }
 
         if (result.error) throw result.error;
+
+        if (authMode === "signup" && result.data?.user && Array.isArray(result.data.user.identities) && result.data.user.identities.length === 0) {
+            await uiAlert("Account Already Exists", "There is already an account under this email. Sign in instead, or use Forgot password if you need to reset it.");
+            routeExistingAccountToSignIn(email);
+            return;
+        }
 
         if (!result.data.session) {
             await uiAlert("Check Your Email", "Confirm your email, then come back and sign in.");
@@ -342,6 +393,10 @@ async function beginPhoneSecondFactor(session) {
 async function sendOAuthPhoneCode() {
     const btn = document.getElementById('sendPhone2faBtn');
     const resendBtn = document.getElementById('resendPhoneCodeBtn');
+    const intro = document.getElementById('phone2faIntro');
+    const phoneWrap = document.getElementById('phone2faInputWrap');
+    const phoneTermsWrap = document.getElementById('phoneTermsWrap');
+    const codeWrap = document.getElementById('phoneCodeWrap');
     if (!pendingSupabaseSession || btn.disabled || resendBtn?.disabled) return;
     if (!ensureTermsAcceptedForAuth()) {
         updatePhoneTermsVisibility();
@@ -369,8 +424,11 @@ async function sendOAuthPhoneCode() {
         if (!data.success) throw new Error(data.error || "Could not send code.");
         if (data.linked) pendingAuthLinkedPhone = true;
         codeSent = true;
+        if (intro && data.maskedPhone) intro.innerText = `For your security, enter the code sent to ${data.maskedPhone}.`;
+        if (phoneWrap) phoneWrap.style.display = 'none';
+        if (phoneTermsWrap) phoneTermsWrap.style.display = 'none';
         btn.style.display = 'none';
-        document.getElementById('phoneCodeWrap').style.display = 'block';
+        if (codeWrap) codeWrap.style.display = 'block';
         document.getElementById('codeInput').focus();
     } catch (e) {
         await uiAlert("Code Error", e.message);
