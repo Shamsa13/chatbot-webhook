@@ -990,6 +990,138 @@ async function logError({ phone, userId, conversationId, channel, stage, message
   }
 }
 
+function getRequestIp(req) {
+  return String(req?.headers?.["x-forwarded-for"] || req?.ip || "")
+    .split(",")[0]
+    .trim() || null;
+}
+
+function getRequestUserAgent(req) {
+  return req?.headers?.["user-agent"] || null;
+}
+
+function sha256Hex(value) {
+  return crypto.createHash("sha256").update(String(value || "")).digest("hex");
+}
+
+function stableStringifyForHash(value) {
+  try {
+    return JSON.stringify(value || {});
+  } catch {
+    return String(value || "");
+  }
+}
+
+async function safeAuditInsert(tableName, payload) {
+  try {
+    const { error } = await supabase.from(tableName).insert(payload);
+    if (error) {
+      if (isMissingTableError(error) || error.code === "42703") return false;
+      console.error(`${tableName} insert failed:`, error.message);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.error(`${tableName} insert crashed:`, e.message);
+    return false;
+  }
+}
+
+async function auditOtpSend({ req, phone, userId, authUserId, flow, success, failureReason, twilioMessageSid }) {
+  await safeAuditInsert("otp_audit_log", {
+    flow: flow || "web_otp",
+    phone_hash: phone ? hashPhone(phone) : null,
+    user_id: userId || null,
+    auth_user_id: authUserId || null,
+    ip_address: getRequestIp(req),
+    user_agent: getRequestUserAgent(req),
+    success: !!success,
+    failure_reason: failureReason || null,
+    twilio_message_sid: twilioMessageSid || null
+  });
+}
+
+async function auditLoginAttempt({ req, phone, userId, authUserId, authProvider, flow, success, failureReason }) {
+  await safeAuditInsert("login_audit", {
+    flow: flow || "web_otp",
+    user_id: userId || null,
+    phone_hash: phone ? hashPhone(phone) : null,
+    auth_user_id: authUserId || null,
+    auth_provider: authProvider || null,
+    ip_address: getRequestIp(req),
+    user_agent: getRequestUserAgent(req),
+    success: !!success,
+    failure_reason: failureReason || null
+  });
+}
+
+async function auditDocumentAction({ req, userId, documentId, action, documentName, success, chunksBefore, chunksAfter, failureReason, details }) {
+  await safeAuditInsert("document_audit", {
+    user_id: userId || null,
+    document_id: documentId || null,
+    action,
+    document_name: documentName || null,
+    ip_address: getRequestIp(req),
+    user_agent: getRequestUserAgent(req),
+    success: !!success,
+    chunks_before: Number.isInteger(chunksBefore) ? chunksBefore : null,
+    chunks_after: Number.isInteger(chunksAfter) ? chunksAfter : null,
+    failure_reason: failureReason || null,
+    details: details || null
+  });
+}
+
+async function reserveWebhookEvent({ source, eventId, payloadHash }) {
+  if (!eventId) return { reserved: true, persistent: false };
+
+  if (processedTranscripts.has(eventId)) {
+    return { reserved: false, duplicate: true, persistent: false };
+  }
+
+  try {
+    const { error } = await supabase.from("webhook_deduplication").insert({
+      source,
+      event_id: eventId,
+      payload_hash: payloadHash || null,
+      status: "received"
+    });
+
+    if (error) {
+      if (error.code === "23505") return { reserved: false, duplicate: true, persistent: true };
+      if (!isMissingTableError(error) && error.code !== "42703") {
+        console.error("webhook_deduplication reserve failed:", error.message);
+      }
+    }
+  } catch (e) {
+    console.error("webhook_deduplication reserve crashed:", e.message);
+  }
+
+  processedTranscripts.add(eventId);
+  setTimeout(() => processedTranscripts.delete(eventId), 60 * 60 * 1000);
+  return { reserved: true, persistent: true };
+}
+
+async function markWebhookEventStatus(source, eventId, status, details) {
+  if (!eventId) return;
+  try {
+    const { error } = await supabase
+      .from("webhook_deduplication")
+      .update({
+        status,
+        processed_at: new Date().toISOString(),
+        details: details || null
+      })
+      .eq("source", source)
+      .eq("event_id", eventId);
+
+    if (error && !isMissingTableError(error) && error.code !== "42703") {
+      console.error("webhook_deduplication status update failed:", error.message);
+    }
+  } catch (e) {
+    console.error("webhook_deduplication status update crashed:", e.message);
+  }
+}
+
 async function getBotConfig() {
   const { data, error } = await supabase.from("bot_config").select("system_prompt").eq("id", "default").single();
   if (error) throw new Error("bot_config read failed: " + error.message);
@@ -2461,19 +2593,26 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
   console.log("🔔 POST-CALL WEBHOOK HIT AT:", new Date().toISOString());
   console.log("═══════════════════════════════════════════");
 
+  let postCallTranscriptId = null;
   try {
     const body = req.body || {};
     const data = body.data || body;
     const transcriptId = data?.conversation_id || body?.conversation_id;
+    postCallTranscriptId = transcriptId || null;
+    const transcriptPayloadHash = sha256Hex(stableStringifyForHash(body));
 
-    // 🛑 ANTI-DUPLICATE SHIELD: Instantly kill duplicate webhook blasts
+    // 🛑 ANTI-DUPLICATE SHIELD: Persistently blocks duplicate webhook processing across restarts.
     if (transcriptId) {
-        if (processedTranscripts.has(transcriptId)) {
-            console.log("♻️ BLOCKED DUPLICATE WEBHOOK for transcript:", transcriptId);
-            return res.status(200).json({ ok: true, duplicate: true }); // Acknowledge so ElevenLabs stops retrying
-        }
-        processedTranscripts.add(transcriptId);
-        setTimeout(() => processedTranscripts.delete(transcriptId), 60 * 60 * 1000); // Clear from RAM after 1 hour
+      const reservation = await reserveWebhookEvent({
+        source: "elevenlabs_post_call",
+        eventId: transcriptId,
+        payloadHash: transcriptPayloadHash
+      });
+
+      if (!reservation.reserved) {
+        console.log("♻️ BLOCKED DUPLICATE WEBHOOK for transcript:", transcriptId);
+        return res.status(200).json({ ok: true, duplicate: true });
+      }
     }
 
     res.status(200).json({ ok: true, received: true });
@@ -2484,6 +2623,7 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
     
     if (!phone) {
       console.error("❌ POST-CALL: Could not extract phone number");
+      await markWebhookEventStatus("elevenlabs_post_call", transcriptId, "skipped_no_phone", { payload_hash: transcriptPayloadHash });
       return;
     }
 
@@ -2492,6 +2632,7 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
 
     if (!transcriptText) {
       console.error("❌ POST-CALL: No transcript text could be extracted");
+      await markWebhookEventStatus("elevenlabs_post_call", transcriptId, "skipped_no_transcript", { payload_hash: transcriptPayloadHash });
       return;
     }
 
@@ -2500,11 +2641,13 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
     if (transcriptText.length > 200000) {
       console.error("❌ POST-CALL: Transcript suspiciously long (", transcriptText.length, "chars). Possible injection attack.");
       logError({ channel: "call", stage: "Transcript Validation", message: `Transcript exceeds 200K chars (${transcriptText.length}). Rejected.`, details: { transcriptId } });
+      await markWebhookEventStatus("elevenlabs_post_call", transcriptId, "rejected_transcript_too_long", { transcript_length: transcriptText.length });
       return;
     }
     
     if (transcriptText.length < 5) {
       console.warn("⚠️ POST-CALL: Transcript too short to process (", transcriptText.length, "chars). Skipping.");
+      await markWebhookEventStatus("elevenlabs_post_call", transcriptId, "skipped_transcript_too_short", { transcript_length: transcriptText.length });
       return;
     }
     
@@ -2716,8 +2859,15 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
       }
     }
 
+    await markWebhookEventStatus("elevenlabs_post_call", transcriptId, "processed", {
+      user_id: userId,
+      transcript_hash: sha256Hex(transcriptText),
+      transcript_length: transcriptText.length
+    });
+
   } catch (err) {
     console.error("❌ POST-CALL PROCESSING ERROR:", err?.message || err);
+    await markWebhookEventStatus("elevenlabs_post_call", postCallTranscriptId, "failed", { error: err?.message || String(err) });
     logError({ channel: "call", stage: "ElevenLabs Transcript Processing", message: err?.message || String(err) }); // 🚨 SLACK ALERT
   }
 });
@@ -2729,12 +2879,16 @@ function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-async function sendVerificationCodeToPhone(rawPhone, { hideDisallowed = false } = {}) {
-  if (!rawPhone) throw new Error("Phone number is required");
+async function sendVerificationCodeToPhone(rawPhone, { hideDisallowed = false, req = null, flow = "web_otp", authUserId = null } = {}) {
+  if (!rawPhone) {
+    await auditOtpSend({ req, flow, success: false, failureReason: "Phone number is required", authUserId });
+    throw new Error("Phone number is required");
+  }
   const cleanPhone = normalizeFrom(rawPhone);
 
   if (!isAllowedPhoneNumber(cleanPhone)) {
     console.warn(`🚫 OTP blocked for disallowed country code: ${maskPhone(cleanPhone)}`);
+    await auditOtpSend({ req, phone: cleanPhone, flow, success: false, failureReason: "Disallowed country code", authUserId });
     if (hideDisallowed) return { success: true, hiddenBlock: true, cleanPhone };
     const err = new Error("This phone country code is not supported for SMS verification.");
     err.status = 400;
@@ -2743,6 +2897,7 @@ async function sendVerificationCodeToPhone(rawPhone, { hideDisallowed = false } 
 
   if (!checkPhoneOtpLimit(cleanPhone)) {
     console.warn(`🚫 OTP rate limit hit for phone: ${maskPhone(cleanPhone)}`);
+    await auditOtpSend({ req, phone: cleanPhone, flow, success: false, failureReason: "Per-phone OTP rate limit", authUserId });
     const err = new Error("Too many code requests for this number. Please try again in 1 hour.");
     err.status = 429;
     throw err;
@@ -2751,6 +2906,7 @@ async function sendVerificationCodeToPhone(rawPhone, { hideDisallowed = false } 
   if (!checkGlobalSmsLimit()) {
     console.error("🚨 GLOBAL SMS CAP REACHED — Blocking all OTP sends");
     sendToSlack(`🚨 CRITICAL: Global SMS hourly cap (${GLOBAL_SMS_MAX_PER_HOUR}) reached! OTP sends disabled. Possible toll fraud attack.`);
+    await auditOtpSend({ req, phone: cleanPhone, flow, success: false, failureReason: "Global SMS hourly cap", authUserId });
     const err = new Error("Service temporarily unavailable. Please try again later.");
     err.status = 429;
     throw err;
@@ -2762,21 +2918,32 @@ async function sendVerificationCodeToPhone(rawPhone, { hideDisallowed = false } 
   const expiresAt = new Date(Date.now() + 10 * 60000).toISOString();
 
   const { error } = await supabase.from("users").update({ otp_code: otpHash, otp_expires_at: expiresAt }).eq("id", userId);
-  if (error) throw error;
+  if (error) {
+    await auditOtpSend({ req, phone: cleanPhone, userId, flow, success: false, failureReason: error.message, authUserId });
+    throw error;
+  }
 
+  let twilioMessageSid = null;
   if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
     const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
     const outboundPhone = cleanPhone.startsWith("+") ? cleanPhone : "+" + cleanPhone;
 
-    await twilioClient.messages.create({
-      body: `${otpCode} is your Director Compass web login code. It expires in 10 minutes. Only enter this at compass.boardchair.com.`,
-      from: process.env.TWILIO_PHONE_NUMBER,
-      to: outboundPhone
-    });
+    try {
+      const twilioMessage = await twilioClient.messages.create({
+        body: `${otpCode} is your Director Compass web login code. It expires in 10 minutes. Only enter this at compass.boardchair.com.`,
+        from: process.env.TWILIO_PHONE_NUMBER,
+        to: outboundPhone
+      });
+      twilioMessageSid = twilioMessage?.sid || null;
+    } catch (twilioErr) {
+      await auditOtpSend({ req, phone: cleanPhone, userId, flow, success: false, failureReason: twilioErr.message, twilioMessageSid, authUserId });
+      throw twilioErr;
+    }
   }
 
+  await auditOtpSend({ req, phone: cleanPhone, userId, flow, success: true, twilioMessageSid, authUserId });
   console.log(`📲 OTP sent to ${maskPhone(cleanPhone)} (Global count: ${globalSmsCap.count}/${GLOBAL_SMS_MAX_PER_HOUR})`);
-  return { success: true, userId, cleanPhone, maskedPhone: maskPhone(cleanPhone) };
+  return { success: true, userId, cleanPhone, maskedPhone: maskPhone(cleanPhone), twilioMessageSid };
 }
 
 async function verifyUserPhoneCode(user, cleanPhone, code) {
@@ -2826,7 +2993,7 @@ async function verifyUserPhoneCode(user, cleanPhone, code) {
 
 app.post("/api/auth/send-code", otpLimiter, async (req, res) => {
   try {
-    await sendVerificationCodeToPhone(req.body.phone, { hideDisallowed: true });
+    await sendVerificationCodeToPhone(req.body.phone, { hideDisallowed: true, req, flow: "legacy_web_otp" });
     res.json({ success: true, message: "Verification code sent via SMS." });
   } catch (err) {
     console.error("OTP Send Error:", err.message);
@@ -2835,19 +3002,27 @@ app.post("/api/auth/send-code", otpLimiter, async (req, res) => {
 });
 
 app.post("/api/auth/verify-code", otpLimiter, async (req, res) => {
+  let cleanPhone = "";
+  let user = null;
   try {
     const rawPhone = req.body.phone;
     const code = req.body.code;
-    if (!rawPhone || !code) return res.status(400).json({ error: "Phone and code are required." });
+    if (!rawPhone || !code) {
+      await auditLoginAttempt({ req, phone: rawPhone, flow: "legacy_web_otp", success: false, failureReason: "Phone and code are required." });
+      return res.status(400).json({ error: "Phone and code are required." });
+    }
     
-    const cleanPhone = normalizeFrom(rawPhone);
+    cleanPhone = normalizeFrom(rawPhone);
     
-    const user = await findUserByPhone(cleanPhone, "id, phone, otp_code, otp_expires_at, full_name, last_web_login");
+    user = await findUserByPhone(cleanPhone, "id, phone, otp_code, otp_expires_at, full_name, last_web_login");
     await verifyUserPhoneCode(user, cleanPhone, code);
 
-    res.json(await issueWebSession(req, res, user));
+    const session = await issueWebSession(req, res, user);
+    await auditLoginAttempt({ req, phone: cleanPhone, userId: user?.id, flow: "legacy_web_otp", success: true });
+    res.json(session);
   } catch (err) {
     console.error("OTP Verify Error:", err.message);
+    await auditLoginAttempt({ req, phone: cleanPhone || req.body.phone, userId: user?.id, flow: "legacy_web_otp", success: false, failureReason: err.message });
     res.status(err.status || 500).json({ error: err.status ? err.message : "Verification failed." });
   }
 });
@@ -2909,7 +3084,11 @@ app.post("/api/auth/oauth/send-phone-code", otpLimiter, async (req, res) => {
       }
     }
 
-    const sent = await sendVerificationCodeToPhone(targetPhone);
+    const sent = await sendVerificationCodeToPhone(targetPhone, {
+      req,
+      flow: "oauth_phone_2fa",
+      authUserId: authUser.id
+    });
     res.json({
       success: true,
       linked: !!linkedUser,
@@ -2923,28 +3102,82 @@ app.post("/api/auth/oauth/send-phone-code", otpLimiter, async (req, res) => {
 });
 
 app.post("/api/auth/oauth/verify-phone-code", otpLimiter, async (req, res) => {
+  let authUser = null;
+  let user = null;
+  let cleanPhone = "";
   try {
-    const authUser = await getSupabaseAuthUser(req.body.accessToken);
+    authUser = await getSupabaseAuthUser(req.body.accessToken);
     const code = String(req.body.code || "").trim();
-    if (!code) return res.status(400).json({ error: "Security code is required." });
+    if (!code) {
+      await auditLoginAttempt({
+        req,
+        authUserId: authUser.id,
+        authProvider: getAuthProvider(authUser),
+        flow: "oauth_phone_2fa",
+        success: false,
+        failureReason: "Security code is required."
+      });
+      return res.status(400).json({ error: "Security code is required." });
+    }
 
     const linkedUser = await findUserByAuthUserId(authUser.id, "id, phone, full_name, email, otp_code, otp_expires_at, last_web_login, auth_user_id");
-    let user = linkedUser;
-    let cleanPhone = linkedUser?.phone || normalizeFrom(req.body.phone || "");
+    user = linkedUser;
+    cleanPhone = linkedUser?.phone || normalizeFrom(req.body.phone || "");
 
     if (!user) {
-      if (!cleanPhone) return res.status(400).json({ error: "Phone number is required." });
+      if (!cleanPhone) {
+        await auditLoginAttempt({
+          req,
+          authUserId: authUser.id,
+          authProvider: getAuthProvider(authUser),
+          flow: "oauth_phone_2fa",
+          success: false,
+          failureReason: "Phone number is required."
+        });
+        return res.status(400).json({ error: "Phone number is required." });
+      }
       user = await findUserByPhone(cleanPhone, "id, phone, full_name, email, otp_code, otp_expires_at, last_web_login, auth_user_id");
     }
 
-    if (!user) return res.status(400).json({ error: "No active code. Please request a new one." });
+    if (!user) {
+      await auditLoginAttempt({
+        req,
+        phone: cleanPhone,
+        authUserId: authUser.id,
+        authProvider: getAuthProvider(authUser),
+        flow: "oauth_phone_2fa",
+        success: false,
+        failureReason: "No active code. Please request a new one."
+      });
+      return res.status(400).json({ error: "No active code. Please request a new one." });
+    }
     cleanPhone = normalizeFrom(user.phone || cleanPhone);
     await verifyUserPhoneCode(user, cleanPhone, code);
 
     const linkedProfile = await linkSupabaseAuthToUser(authUser, user);
-    res.json(await issueWebSession(req, res, linkedProfile));
+    const session = await issueWebSession(req, res, linkedProfile);
+    await auditLoginAttempt({
+      req,
+      phone: cleanPhone,
+      userId: linkedProfile.id,
+      authUserId: authUser.id,
+      authProvider: getAuthProvider(authUser),
+      flow: "oauth_phone_2fa",
+      success: true
+    });
+    res.json(session);
   } catch (err) {
     console.error("OAuth phone verify error:", err.message);
+    await auditLoginAttempt({
+      req,
+      phone: cleanPhone || req.body.phone,
+      userId: user?.id,
+      authUserId: authUser?.id,
+      authProvider: authUser ? getAuthProvider(authUser) : null,
+      flow: "oauth_phone_2fa",
+      success: false,
+      failureReason: err.message
+    });
     res.status(err.status || 400).json({ error: err.message });
   }
 });
@@ -3887,13 +4120,119 @@ app.delete("/api/documents/:id", authenticateToken, async (req, res) => {
       logError({ userId, channel: "web", stage: "Document Delete IDOR", message: `User attempted to delete a document they do not own`, details: { docId, userId } });
       return res.status(403).json({ error: "Access denied. You do not own this document." });
     }
+
+    const { count: chunksBefore, error: beforeCountErr } = await supabase
+      .from("user_document_chunks")
+      .select("id", { count: "exact", head: true })
+      .eq("document_id", docId)
+      .eq("user_id", userId);
+
+    if (beforeCountErr) {
+      await auditDocumentAction({
+        req,
+        userId,
+        documentId: docId,
+        action: "delete",
+        documentName: doc.document_name,
+        success: false,
+        failureReason: beforeCountErr.message
+      });
+      throw beforeCountErr;
+    }
     
     // 🔒 DELETE CHUNKS WITH USER_ID FILTER — Prevents cross-user chunk deletion
-    await supabase.from("user_document_chunks").delete().eq("document_id", docId).eq("user_id", userId);
+    const { error: chunkDeleteErr } = await supabase
+      .from("user_document_chunks")
+      .delete()
+      .eq("document_id", docId)
+      .eq("user_id", userId);
+
+    if (chunkDeleteErr) {
+      await auditDocumentAction({
+        req,
+        userId,
+        documentId: docId,
+        action: "delete",
+        documentName: doc.document_name,
+        success: false,
+        chunksBefore: chunksBefore || 0,
+        failureReason: chunkDeleteErr.message
+      });
+      throw chunkDeleteErr;
+    }
+
+    const { count: chunksAfter, error: afterCountErr } = await supabase
+      .from("user_document_chunks")
+      .select("id", { count: "exact", head: true })
+      .eq("document_id", docId)
+      .eq("user_id", userId);
+
+    if (afterCountErr || (chunksAfter || 0) > 0) {
+      const failureReason = afterCountErr?.message || `Delete verification failed: ${chunksAfter} chunks remain.`;
+      await auditDocumentAction({
+        req,
+        userId,
+        documentId: docId,
+        action: "delete",
+        documentName: doc.document_name,
+        success: false,
+        chunksBefore: chunksBefore || 0,
+        chunksAfter: chunksAfter || 0,
+        failureReason
+      });
+      throw new Error(failureReason);
+    }
     
     // Delete the parent document (also filtered by user_id)
     const { error } = await supabase.from("user_documents").delete().eq("id", docId).eq("user_id", userId);
-    if (error) throw error;
+    if (error) {
+      await auditDocumentAction({
+        req,
+        userId,
+        documentId: docId,
+        action: "delete",
+        documentName: doc.document_name,
+        success: false,
+        chunksBefore: chunksBefore || 0,
+        chunksAfter: chunksAfter || 0,
+        failureReason: error.message
+      });
+      throw error;
+    }
+
+    const { data: remainingDoc, error: verifyDeleteErr } = await supabase
+      .from("user_documents")
+      .select("id")
+      .eq("id", docId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (verifyDeleteErr || remainingDoc) {
+      const failureReason = verifyDeleteErr?.message || "Delete verification failed: document row remains.";
+      await auditDocumentAction({
+        req,
+        userId,
+        documentId: docId,
+        action: "delete",
+        documentName: doc.document_name,
+        success: false,
+        chunksBefore: chunksBefore || 0,
+        chunksAfter: chunksAfter || 0,
+        failureReason
+      });
+      throw new Error(failureReason);
+    }
+
+    await auditDocumentAction({
+      req,
+      userId,
+      documentId: docId,
+      action: "delete",
+      documentName: doc.document_name,
+      success: true,
+      chunksBefore: chunksBefore || 0,
+      chunksAfter: chunksAfter || 0
+    });
     
     console.log(`🗑️ Document "${doc.document_name}" (${docId}) deleted by user ${userId}`);
     res.json({ success: true, message: "Document deleted." });
