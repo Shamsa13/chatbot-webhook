@@ -108,6 +108,7 @@ async function initSupabaseAuth() {
         });
 
         const params = new URLSearchParams(window.location.search);
+        const hasAuthCallback = params.has('code') || window.location.hash.includes('access_token') || window.location.hash.includes('type=');
         if (params.has('code')) {
             await supabaseClient.auth.exchangeCodeForSession(params.get('code'));
             window.history.replaceState({}, document.title, window.location.pathname + (params.get('reset_password') ? '?reset_password=1' : ''));
@@ -120,8 +121,10 @@ async function initSupabaseAuth() {
             return;
         }
 
-        if (data.session && !localStorage.getItem('david_userId')) {
+        if (data.session && !localStorage.getItem('david_userId') && hasAuthCallback) {
             await beginPhoneSecondFactor(data.session);
+        } else if (data.session && !localStorage.getItem('david_userId')) {
+            await supabaseClient.auth.signOut();
         }
     } catch (e) {
         console.error("Supabase auth init failed:", e);
