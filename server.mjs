@@ -36,6 +36,15 @@ const MAX_DEEP_DIVE_CHARS = 200000;
 const DEEP_DIVE_DAILY_LIMIT = 5;
 const TRANSCRIPT_SEND_LIMIT_PER_DAY = 100;
 
+function envPositiveInt(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+const AUTH_IP_RATE_LIMIT_MAX = envPositiveInt("AUTH_IP_RATE_LIMIT_MAX", 30);
+const PHONE_OTP_MAX_PER_HOUR = envPositiveInt("PHONE_OTP_MAX_PER_HOUR", 12);
+const GLOBAL_SMS_MAX_PER_HOUR = envPositiveInt("GLOBAL_SMS_MAX_PER_HOUR", 200);
+
 if (!process.env.DATA_ENCRYPTION_KEY && !process.env.MESSAGE_ENCRYPTION_KEY) {
   console.warn("⚠️ DATA_ENCRYPTION_KEY is not set. Falling back to JWT_SECRET-derived encryption; set a dedicated 32+ byte key before production rollout.");
 }
@@ -416,17 +425,16 @@ const processedTranscripts = new Set(); // 🛑 Anti-Duplicate Lock
 
 // --- 🛡️ RATE LIMITERS ---
 
-// 1. Strict OTP Limiter (Stops Twilio SMS draining)
-// Max 5 requests per IP every 15 minutes
+// 1. Auth IP limiter. Per-phone and global SMS caps still control actual SMS spend.
 const otpLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, 
-  max: 5, 
+  max: AUTH_IP_RATE_LIMIT_MAX, 
   message: { error: "Too many login attempts. Please wait 15 minutes." }
 });
 
 // 🔒 PER-PHONE OTP RATE LIMITER — Prevents toll fraud regardless of IP rotation
 const phoneOtpAttempts = new Map(); // phone -> { count, firstAttempt }
-const PHONE_OTP_MAX = 3;            // Max 3 OTP requests per phone per hour
+const PHONE_OTP_MAX = PHONE_OTP_MAX_PER_HOUR; // Default: 12 OTP requests per phone per hour
 const PHONE_OTP_WINDOW = 60 * 60 * 1000; // 1 hour window
 
 function checkPhoneOtpLimit(phone) {
@@ -455,7 +463,7 @@ function checkGlobalSmsLimit() {
   if (now > globalSmsCap.resetAt) {
     globalSmsCap = { count: 0, resetAt: now + 60 * 60 * 1000 };
   }
-  if (globalSmsCap.count >= 200) {
+  if (globalSmsCap.count >= GLOBAL_SMS_MAX_PER_HOUR) {
     return false;
   }
   globalSmsCap.count++;
@@ -2742,7 +2750,7 @@ async function sendVerificationCodeToPhone(rawPhone, { hideDisallowed = false } 
 
   if (!checkGlobalSmsLimit()) {
     console.error("🚨 GLOBAL SMS CAP REACHED — Blocking all OTP sends");
-    sendToSlack("🚨 CRITICAL: Global SMS hourly cap (200) reached! OTP sends disabled. Possible toll fraud attack.");
+    sendToSlack(`🚨 CRITICAL: Global SMS hourly cap (${GLOBAL_SMS_MAX_PER_HOUR}) reached! OTP sends disabled. Possible toll fraud attack.`);
     const err = new Error("Service temporarily unavailable. Please try again later.");
     err.status = 429;
     throw err;
@@ -2767,7 +2775,7 @@ async function sendVerificationCodeToPhone(rawPhone, { hideDisallowed = false } 
     });
   }
 
-  console.log(`📲 OTP sent to ${maskPhone(cleanPhone)} (Global count: ${globalSmsCap.count}/200)`);
+  console.log(`📲 OTP sent to ${maskPhone(cleanPhone)} (Global count: ${globalSmsCap.count}/${GLOBAL_SMS_MAX_PER_HOUR})`);
   return { success: true, userId, cleanPhone, maskedPhone: maskPhone(cleanPhone) };
 }
 
