@@ -3346,8 +3346,7 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
         await sendGuestSignupSms(phone, transcriptText);
       } else if (
         voiceSession?.user_id &&
-        /voice pin is not set yet/i.test(String(voiceSession.failure_reason || "")) &&
-        transcriptAskedAboutMemoryAccess(transcriptText)
+        /voice pin is not set yet/i.test(String(voiceSession.failure_reason || ""))
       ) {
         await sendVoicePinSetupSms(phone);
       }
