@@ -13,6 +13,7 @@ const botAvatar = "/avatar.jpg";
 let supabaseClient = null;
 let pendingSupabaseSession = null;
 let pendingAuthLinkedPhone = false;
+let pendingVoicePinLoginData = null;
 let authMode = "signin";
 
 
@@ -187,6 +188,7 @@ function resetAuthStartScreen() {
     setAuthMode("signin");
     document.getElementById('step1').style.display = 'block';
     document.getElementById('step2').style.display = 'none';
+    document.getElementById('voicePinStep').style.display = 'none';
     document.getElementById('resetPasswordStep').style.display = 'none';
     document.getElementById('phoneCodeWrap').style.display = 'none';
     document.getElementById('sendPhone2faBtn').style.display = 'block';
@@ -195,6 +197,8 @@ function resetAuthStartScreen() {
     document.getElementById('authPasswordInput').value = "";
     document.getElementById('phoneInput').value = "";
     document.getElementById('codeInput').value = "";
+    document.getElementById('voicePinInput').value = "";
+    document.getElementById('voicePinConfirmInput').value = "";
     const disclaimer = document.getElementById('disclaimerCheck');
     if (disclaimer) disclaimer.checked = false;
     const phoneDisclaimer = document.getElementById('phoneDisclaimerCheck');
@@ -208,6 +212,7 @@ function routeExistingAccountToSignIn(email) {
     setAuthMode("signin");
     document.getElementById('step1').style.display = 'block';
     document.getElementById('step2').style.display = 'none';
+    document.getElementById('voicePinStep').style.display = 'none';
     document.getElementById('resetPasswordStep').style.display = 'none';
     document.getElementById('phoneCodeWrap').style.display = 'none';
     document.getElementById('sendPhone2faBtn').style.display = 'block';
@@ -216,6 +221,8 @@ function routeExistingAccountToSignIn(email) {
     document.getElementById('authPasswordInput').value = "";
     document.getElementById('phoneInput').value = "";
     document.getElementById('codeInput').value = "";
+    document.getElementById('voicePinInput').value = "";
+    document.getElementById('voicePinConfirmInput').value = "";
     const disclaimer = document.getElementById('disclaimerCheck');
     if (disclaimer) disclaimer.checked = false;
     const phoneDisclaimer = document.getElementById('phoneDisclaimerCheck');
@@ -330,6 +337,7 @@ async function sendPasswordReset() {
 function showPasswordResetStep() {
     document.getElementById('step1').style.display = 'none';
     document.getElementById('step2').style.display = 'none';
+    document.getElementById('voicePinStep').style.display = 'none';
     document.getElementById('resetPasswordStep').style.display = 'block';
 }
 
@@ -352,6 +360,7 @@ async function beginPhoneSecondFactor(session) {
     pendingAuthLinkedPhone = false;
     document.getElementById('step1').style.display = 'none';
     document.getElementById('resetPasswordStep').style.display = 'none';
+    document.getElementById('voicePinStep').style.display = 'none';
     document.getElementById('step2').style.display = 'block';
     document.getElementById('phoneCodeWrap').style.display = 'none';
     const title = document.querySelector('.auth-title');
@@ -458,6 +467,10 @@ async function verifyOAuthPhoneCode() {
         });
         const data = await res.json();
         if (!data.success) throw new Error(data.error || "Verification failed.");
+        if (data.requiresVoicePin) {
+            showRequiredVoicePinStep(data);
+            return;
+        }
         completeAppLogin(data);
     } catch (e) {
         await uiAlert("Verification Error", e.message);
@@ -467,7 +480,62 @@ async function verifyOAuthPhoneCode() {
     }
 }
 
+function showRequiredVoicePinStep(loginData = null) {
+    pendingVoicePinLoginData = loginData;
+    document.getElementById('step1').style.display = 'none';
+    document.getElementById('step2').style.display = 'none';
+    document.getElementById('resetPasswordStep').style.display = 'none';
+    document.getElementById('voicePinStep').style.display = 'block';
+    const title = document.querySelector('.auth-title');
+    if (title) title.innerText = "Secure Calls";
+    const subtitle = document.querySelector('.auth-subtitle');
+    if (subtitle) subtitle.innerText = "Set your Voice PIN before entering the portal.";
+    document.getElementById('voicePinInput').value = "";
+    document.getElementById('voicePinConfirmInput').value = "";
+    setTimeout(() => document.getElementById('voicePinInput')?.focus(), 50);
+}
+
+async function createRequiredVoicePin() {
+    const pin = document.getElementById('voicePinInput').value.trim();
+    const confirmPin = document.getElementById('voicePinConfirmInput').value.trim();
+    const btn = document.getElementById('voicePinCreateBtn');
+    if (!/^\d{4}$/.test(pin) || pin !== confirmPin) {
+        return uiAlert("Voice PIN", "Enter and confirm a 4-digit Voice PIN.");
+    }
+
+    btn.disabled = true;
+    btn.innerText = "Securing...";
+    try {
+        const res = await fetch('/api/web/voice-pin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'set', newPin: pin, confirmPin })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!data.success) throw new Error(data.error || "Could not set Voice PIN.");
+
+        showToast("Voice PIN secured.");
+        const loginData = pendingVoicePinLoginData || {
+            success: true,
+            userId: localStorage.getItem('david_userId'),
+            name: localStorage.getItem('david_userName') || "Guest",
+            previousLogin: localStorage.getItem('david_previous_login') || "First time logging in"
+        };
+        pendingVoicePinLoginData = null;
+        completeAppLogin({ ...loginData, requiresVoicePin: false });
+    } catch (e) {
+        await uiAlert("Voice PIN Error", e.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerText = "Secure My Calls";
+    }
+}
+
 function completeAppLogin(data) {
+    if (data?.requiresVoicePin) {
+        showRequiredVoicePinStep(data);
+        return;
+    }
     globalUserId = data.userId;
     userName = (data.name && data.name.toLowerCase() !== "null") ? data.name.split(' ')[0] : "Guest";
     localStorage.setItem('david_userId', globalUserId);
@@ -596,6 +664,7 @@ function logoutUser() {
     //  THE FIX: Change this to 'flex' so the login layout doesn't break!
     document.getElementById('loginContainer').style.display = 'flex'; 
     document.getElementById('step2').style.display = 'none';
+    document.getElementById('voicePinStep').style.display = 'none';
     document.getElementById('resetPasswordStep').style.display = 'none';
     document.getElementById('step1').style.display = 'block';
     
@@ -605,6 +674,8 @@ function logoutUser() {
     document.getElementById('authPasswordInput').value = "";
     document.getElementById('newPasswordInput').value = "";
     document.getElementById('confirmPasswordInput').value = "";
+    document.getElementById('voicePinInput').value = "";
+    document.getElementById('voicePinConfirmInput').value = "";
     document.getElementById('phoneCodeWrap').style.display = 'none';
     document.getElementById('sendPhone2faBtn').style.display = 'block';
     const disclaimer = document.getElementById('disclaimerCheck');
@@ -620,11 +691,41 @@ function logoutUser() {
 // DASHBOARD INITIALIZATION
 // ==========================================
 async function initDashboard() {
+    const voicePinReady = await ensureVoicePinReady();
+    if (!voicePinReady) return;
     currentConversationId = null;
     document.getElementById('chatMessages').innerHTML = '<div class="empty-state" id="emptyState"><h3>Loading...</h3></div>';
     loadUserDocuments();
     await loadConversationList(true);
     syncUserIdentity();
+}
+
+async function ensureVoicePinReady() {
+    try {
+        const res = await fetch('/api/web/profile');
+        if (res.status === 401 || res.status === 403) {
+            const data = await res.json().catch(() => ({}));
+            if (data.code === "voice_pin_required") {
+                document.getElementById('dashboardContainer').style.display = 'none';
+                document.getElementById('loginContainer').style.display = 'flex';
+                showRequiredVoicePinStep();
+                return false;
+            }
+            logoutUser();
+            return false;
+        }
+        const data = await res.json().catch(() => ({}));
+        if (data.success && data.profile && data.profile.voice_pin_schema_ready !== false && data.profile.has_voice_pin === false) {
+            document.getElementById('dashboardContainer').style.display = 'none';
+            document.getElementById('loginContainer').style.display = 'flex';
+            showRequiredVoicePinStep();
+            return false;
+        }
+        return true;
+    } catch (e) {
+        console.error("Voice PIN readiness check failed:", e);
+        return true;
+    }
 }
 
 // ==========================================
@@ -1470,10 +1571,101 @@ async function openProfileModal() {
                 ? prev
                 : data.profile.last_web_login;
             renderSecurityHistory(webLogin, data.profile.last_call_at);
+            renderVoicePinProfile(data.profile);
         }
     } catch (e) {
         nameInput.value = ""; emailInput.value = "";
         loginDisplay.innerText = "Could not load account activity.";
+    }
+}
+
+function renderVoicePinProfile(profile) {
+    const status = document.getElementById('voicePinStatusText');
+    if (!status) return;
+    if (profile?.voice_pin_schema_ready === false) {
+        status.innerText = "Voice PIN setup is waiting on the database migration.";
+        return;
+    }
+    if (!profile?.has_voice_pin) {
+        status.innerText = "Required before private context is used on calls.";
+        return;
+    }
+    const changed = profile.voice_pin_set_at ? new Date(profile.voice_pin_set_at) : null;
+    const changedText = changed && !Number.isNaN(changed.getTime())
+        ? changed.toLocaleDateString() + " at " + changed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : "date unavailable";
+    status.innerText = `Set and secured. Last changed: ${changedText}.`;
+}
+
+function clearProfilePinFields() {
+    ['profileCurrentPinInput', 'profileNewPinInput', 'profileConfirmPinInput', 'profileRecoveryCodeInput', 'profileRecoveryPinInput', 'profileRecoveryConfirmInput'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = "";
+    });
+}
+
+async function changeVoicePin() {
+    const currentPin = document.getElementById('profileCurrentPinInput').value.trim();
+    const newPin = document.getElementById('profileNewPinInput').value.trim();
+    const confirmPin = document.getElementById('profileConfirmPinInput').value.trim();
+    if (!/^\d{4}$/.test(currentPin) || !/^\d{4}$/.test(newPin) || newPin !== confirmPin) {
+        return uiAlert("Voice PIN", "Enter your current PIN and confirm a new 4-digit PIN.");
+    }
+
+    try {
+        const res = await fetch('/api/web/voice-pin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'change', currentPin, newPin, confirmPin })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!data.success) throw new Error(data.error || "Could not change Voice PIN.");
+        clearProfilePinFields();
+        renderVoicePinProfile({ has_voice_pin: true, voice_pin_set_at: data.voice_pin_set_at });
+        showToast("Voice PIN changed.");
+    } catch (e) {
+        await uiAlert("Voice PIN Error", e.message);
+    }
+}
+
+async function sendVoicePinRecoveryCode() {
+    try {
+        const res = await fetch('/api/web/voice-pin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'recover_send_code' })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!data.success) throw new Error(data.error || "Could not send recovery code.");
+        document.getElementById('profilePinRecoveryFields').style.display = 'grid';
+        showToast(`Recovery code sent to ${data.maskedPhone || 'your phone'}.`);
+    } catch (e) {
+        await uiAlert("Recovery Error", e.message);
+    }
+}
+
+async function recoverVoicePin() {
+    const code = document.getElementById('profileRecoveryCodeInput').value.trim();
+    const newPin = document.getElementById('profileRecoveryPinInput').value.trim();
+    const confirmPin = document.getElementById('profileRecoveryConfirmInput').value.trim();
+    if (!code || !/^\d{4}$/.test(newPin) || newPin !== confirmPin) {
+        return uiAlert("Voice PIN", "Enter the SMS code and confirm a new 4-digit PIN.");
+    }
+
+    try {
+        const res = await fetch('/api/web/voice-pin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'recover_confirm', code, newPin, confirmPin })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!data.success) throw new Error(data.error || "Could not recover Voice PIN.");
+        clearProfilePinFields();
+        document.getElementById('profilePinRecoveryFields').style.display = 'none';
+        renderVoicePinProfile({ has_voice_pin: true, voice_pin_set_at: data.voice_pin_set_at });
+        showToast("Voice PIN recovered.");
+    } catch (e) {
+        await uiAlert("Recovery Error", e.message);
     }
 }
 

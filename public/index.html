@@ -96,6 +96,15 @@
 
                     <button type="button" class="auth-link-button" onclick="backToPrimaryAuth()">Back to sign in</button>
                 </div>
+                <div id="voicePinStep" style="display: none;">
+                    <div class="auth-step-note">Create a 4-digit Voice PIN to protect private memory, call history, and uploaded document context when you call.</div>
+                    <label class="auth-label" for="voicePinInput">Voice PIN</label>
+                    <input type="password" id="voicePinInput" class="auth-input" placeholder="4 digits" inputmode="numeric" maxlength="4" autocomplete="off" />
+                    <label class="auth-label" for="voicePinConfirmInput">Confirm Voice PIN</label>
+                    <input type="password" id="voicePinConfirmInput" class="auth-input" placeholder="4 digits" inputmode="numeric" maxlength="4" autocomplete="off" />
+                    <button class="btn auth-button" id="voicePinCreateBtn" onclick="createRequiredVoicePin()">Secure My Calls</button>
+                    <button type="button" class="auth-link-button" onclick="logoutUser()">Back to sign in</button>
+                </div>
                 <div id="resetPasswordStep" style="display: none;">
                     <label class="auth-label" for="newPasswordInput">New Password</label>
                     <input type="password" id="newPasswordInput" class="auth-input" placeholder="New password" autocomplete="new-password" />
@@ -323,6 +332,30 @@
         
         <label style="display:block; font-size:12px; font-weight:600; color:#555; margin-bottom:6px;">Email Address</label>
         <input type="email" id="profileEmailInput" class="custom-modal-input" placeholder="e.g. jane@example.com" />
+
+        <div class="profile-security-section">
+            <div class="profile-security-header">
+                <div>
+                    <div class="profile-security-title">Voice PIN</div>
+                    <div class="profile-security-subtitle" id="voicePinStatusText">Loading Voice PIN status...</div>
+                </div>
+            </div>
+            <div class="profile-pin-grid">
+                <input type="password" id="profileCurrentPinInput" class="custom-modal-input" placeholder="Current PIN" inputmode="numeric" maxlength="4" autocomplete="off" />
+                <input type="password" id="profileNewPinInput" class="custom-modal-input" placeholder="New 4-digit PIN" inputmode="numeric" maxlength="4" autocomplete="off" />
+                <input type="password" id="profileConfirmPinInput" class="custom-modal-input" placeholder="Confirm new PIN" inputmode="numeric" maxlength="4" autocomplete="off" />
+                <button type="button" class="custom-modal-btn confirm profile-pin-btn" onclick="changeVoicePin()">Change PIN</button>
+            </div>
+            <div class="profile-pin-recovery">
+                <button type="button" class="auth-link-button profile-recovery-link" onclick="sendVoicePinRecoveryCode()">Forgot Voice PIN?</button>
+                <div id="profilePinRecoveryFields" style="display:none;">
+                    <input type="text" id="profileRecoveryCodeInput" class="custom-modal-input" placeholder="SMS code" inputmode="numeric" autocomplete="one-time-code" />
+                    <input type="password" id="profileRecoveryPinInput" class="custom-modal-input" placeholder="New 4-digit PIN" inputmode="numeric" maxlength="4" autocomplete="off" />
+                    <input type="password" id="profileRecoveryConfirmInput" class="custom-modal-input" placeholder="Confirm new PIN" inputmode="numeric" maxlength="4" autocomplete="off" />
+                    <button type="button" class="custom-modal-btn confirm profile-pin-btn" onclick="recoverVoicePin()">Save Recovered PIN</button>
+                </div>
+            </div>
+        </div>
         
         <div class="custom-modal-actions" style="margin-top: 24px;">
             <button class="custom-modal-btn cancel" onclick="closeProfileModal()">Cancel</button>

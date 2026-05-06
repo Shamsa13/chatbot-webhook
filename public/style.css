@@ -402,7 +402,7 @@ input:checked + .slider:before { transform: translateX(18px); }
    ========================================= */
 .custom-modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 9999; opacity: 0; transition: 0.2s; pointer-events: none; }
 .custom-modal-overlay.show { opacity: 1; pointer-events: auto; }
-.custom-modal-box { background: white; border-radius: 16px; padding: 24px; width: 90%; max-width: 400px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); transform: translateY(20px); transition: 0.2s; font-family: 'Inter', sans-serif; }
+.custom-modal-box { background: white; border-radius: 16px; padding: 24px; width: 90%; max-width: 400px; max-height: 90vh; overflow-y: auto; box-shadow: 0 10px 40px rgba(0,0,0,0.2); transform: translateY(20px); transition: 0.2s; font-family: 'Inter', sans-serif; }
 .custom-modal-overlay.show .custom-modal-box { transform: translateY(0); }
 .custom-modal-title { font-family: 'Playfair Display', serif; font-size: 20px; color: #181d32; margin-bottom: 8px; font-weight: 600; }
 .custom-modal-text { font-size: 14px; color: #555; margin-bottom: 24px; line-height: 1.5; }
@@ -416,6 +416,17 @@ input:checked + .slider:before { transform: translateX(18px); }
 .custom-modal-btn.confirm:hover { background: #252b48; }
 .custom-modal-btn.danger { background: #ff4c4c; color: white; }
 .custom-modal-btn.danger:hover { background: #e60000; }
+.profile-security-section { margin-top: 20px; padding-top: 18px; border-top: 1px solid #eceef3; }
+.profile-security-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.profile-security-title { font-size: 13px; font-weight: 700; color: #181d32; }
+.profile-security-subtitle { font-size: 12px; color: #777; line-height: 1.45; margin-top: 3px; }
+.profile-pin-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.profile-pin-grid .custom-modal-input,
+#profilePinRecoveryFields .custom-modal-input { margin-bottom: 0; }
+.profile-pin-btn { width: 100%; }
+.profile-pin-recovery { margin-top: 12px; }
+.profile-recovery-link { color: #181d32; margin-top: 0; text-align: left; }
+#profilePinRecoveryFields { grid-template-columns: 1fr; gap: 10px; margin-top: 10px; }
 
 
 /* =========================================

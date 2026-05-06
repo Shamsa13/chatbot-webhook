@@ -27,6 +27,7 @@ const ADMIN_SECRET = process.env.ADMIN_SECRET || "";
 const ENCRYPTED_FIELD_PREFIX = "enc:v1:";
 const DATA_ENCRYPTION_SECRET = process.env.DATA_ENCRYPTION_KEY || process.env.MESSAGE_ENCRYPTION_KEY || JWT_SECRET;
 const OTP_HASH_SECRET = process.env.OTP_HASH_SECRET || JWT_SECRET;
+const PIN_HASH_SECRET = process.env.PIN_HASH_SECRET || JWT_SECRET;
 const SESSION_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
 const SESSION_COOKIE_MAX_AGE_MS = SESSION_TOKEN_TTL_MS;
 const SMS_FULL_CONTEXT_MAX_IDLE_MS = 3 * 24 * 60 * 60 * 1000;
@@ -51,6 +52,9 @@ if (!process.env.DATA_ENCRYPTION_KEY && !process.env.MESSAGE_ENCRYPTION_KEY) {
 if (!process.env.OTP_HASH_SECRET) {
   console.warn("⚠️ OTP_HASH_SECRET is not set. Falling back to JWT_SECRET-derived OTP hashing; set a dedicated secret before production rollout.");
 }
+if (!process.env.PIN_HASH_SECRET) {
+  console.warn("⚠️ PIN_HASH_SECRET is not set. Falling back to JWT_SECRET-derived Voice PIN hashing; set a dedicated secret before production rollout.");
+}
 
 function deriveSecurityKey(secret, info) {
   return crypto.hkdfSync("sha256", Buffer.from(String(secret)), Buffer.from("director-compass"), Buffer.from(info), 32);
@@ -58,6 +62,7 @@ function deriveSecurityKey(secret, info) {
 
 const DATA_ENCRYPTION_KEY = deriveSecurityKey(DATA_ENCRYPTION_SECRET, "field-encryption");
 const OTP_PEPPER_KEY = deriveSecurityKey(OTP_HASH_SECRET, "otp-pepper");
+const PIN_PEPPER_KEY = deriveSecurityKey(PIN_HASH_SECRET, "voice-pin-pepper");
 
 function isEncryptedField(value) {
   return typeof value === "string" && value.startsWith(ENCRYPTED_FIELD_PREFIX);
@@ -249,6 +254,43 @@ async function compareOTP(submittedCode, storedValue) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+function normalizeVoicePin(pin) {
+  return String(pin || "").replace(/\D/g, "").slice(0, 4);
+}
+
+function isValidVoicePin(pin) {
+  return /^\d{4}$/.test(String(pin || ""));
+}
+
+async function hashVoicePin(pin) {
+  if (!isValidVoicePin(pin)) throw new Error("Voice PIN must be exactly 4 digits.");
+  const salt = crypto.randomBytes(16).toString("base64url");
+  const peppered = crypto.createHmac("sha256", PIN_PEPPER_KEY).update(String(pin)).digest("hex");
+  const hash = await new Promise((resolve, reject) => {
+    crypto.scrypt(peppered, salt, 64, { N: 16384, r: 8, p: 1 }, (err, key) => {
+      if (err) reject(err);
+      else resolve(key.toString("base64url"));
+    });
+  });
+  return `scrypt:v1:${salt}:${hash}`;
+}
+
+async function compareVoicePin(submittedPin, storedValue) {
+  if (!isValidVoicePin(submittedPin) || !storedValue || !String(storedValue).startsWith("scrypt:v1:")) return false;
+  const [, , salt, expectedHash] = String(storedValue).split(":");
+  const peppered = crypto.createHmac("sha256", PIN_PEPPER_KEY).update(String(submittedPin)).digest("hex");
+  const actualHash = await new Promise((resolve, reject) => {
+    crypto.scrypt(peppered, salt, 64, { N: 16384, r: 8, p: 1 }, (err, key) => {
+      if (err) reject(err);
+      else resolve(key.toString("base64url"));
+    });
+  });
+
+  const a = Buffer.from(actualHash);
+  const b = Buffer.from(expectedHash || "");
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 function isSuspiciousMemoryText(text = "") {
   return [
     /\b(system administrator|full access|superuser|root access|admin role|site admin)\b/i,
@@ -403,10 +445,17 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.4";
 const OPENAI_MEMORY_MODEL = process.env.OPENAI_MEMORY_MODEL || "gpt-4o-mini";
 const HEYGEN_API_KEY = process.env.HEYGEN_API_KEY || "";
 const HEYGEN_AVATAR_ID = process.env.HEYGEN_AVATAR_ID || "";
+const APP_URL = (process.env.APP_URL || process.env.PUBLIC_APP_URL || process.env.WEB_APP_URL || "https://compass.boardchair.com").replace(/\/+$/, "");
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || "";
+const ELEVENLABS_AGENT_ID = process.env.ELEVENLABS_AGENT_ID || "";
+const VOICE_PIN_PROMPT_AUDIO_URL = process.env.VOICE_PIN_PROMPT_AUDIO_URL || "";
+const VOICE_PIN_RETRY_AUDIO_URL = process.env.VOICE_PIN_RETRY_AUDIO_URL || "";
 
 if (!SUPABASE_URL || !SUPABASE_SECRET_KEY) console.error("Missing SUPABASE_URL or SUPABASE_SECRET_KEY");
 if (!SUPABASE_ANON_KEY) console.error("Missing SUPABASE_ANON_KEY — OAuth/email login will not initialize in the browser.");
 if (!OPENAI_API_KEY) console.error("Missing OPENAI_API_KEY");
+if (!ELEVENLABS_API_KEY) console.error("Missing ELEVENLABS_API_KEY — Twilio voice register-call will not work.");
+if (!ELEVENLABS_AGENT_ID) console.error("Missing ELEVENLABS_AGENT_ID — Twilio voice register-call will not know which agent to use.");
 if (!ADMIN_SECRET) console.error("⚠️ WARNING: ADMIN_SECRET not set — admin endpoints will reject all requests");
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, {
@@ -627,6 +676,34 @@ function requireAuthMigrationError() {
   return new Error("OAuth login is not fully configured yet. Run the updated security-hardening.sql migration in Supabase first.");
 }
 
+async function getUserVoicePinStatus(userId) {
+  try {
+    const { data, error } = await supabase
+      .from("users")
+      .select("voice_pin_hash, voice_pin_set_at, voice_pin_locked_until, voice_pin_failed_count")
+      .eq("id", userId)
+      .single();
+
+    if (error) {
+      if (isMissingColumnError(error, "voice_pin_hash") || error.code === "42703") {
+        return { schemaReady: false, hasVoicePin: false, voicePinSetAt: null, lockedUntil: null, failedCount: 0 };
+      }
+      throw error;
+    }
+
+    return {
+      schemaReady: true,
+      hasVoicePin: !!data?.voice_pin_hash,
+      voicePinSetAt: data?.voice_pin_set_at || null,
+      lockedUntil: data?.voice_pin_locked_until || null,
+      failedCount: Number(data?.voice_pin_failed_count || 0)
+    };
+  } catch (e) {
+    console.error("Voice PIN status lookup failed:", e.message);
+    return { schemaReady: false, hasVoicePin: false, voicePinSetAt: null, lockedUntil: null, failedCount: 0 };
+  }
+}
+
 async function storeSessionToken({ token, userId, req, expiresAt }) {
   const { error } = await supabase.from("session_tokens").insert({
     user_id: userId,
@@ -704,6 +781,7 @@ function setSessionCookie(res, token) {
 
 async function issueWebSession(req, res, user) {
   const previousLogin = user?.last_web_login || "First time logging in";
+  const voicePinStatus = await getUserVoicePinStatus(user.id);
   await supabase.from("users").update({
     otp_code: null,
     otp_expires_at: null,
@@ -720,7 +798,9 @@ async function issueWebSession(req, res, user) {
     success: true,
     userId: user.id,
     name: user.full_name,
-    previousLogin
+    previousLogin,
+    requiresVoicePin: voicePinStatus.schemaReady ? !voicePinStatus.hasVoicePin : false,
+    voicePinSchemaReady: voicePinStatus.schemaReady
   };
 }
 
@@ -831,6 +911,22 @@ async function authenticateToken(req, res, next) {
     const decoded = jwt.verify(token, JWT_SECRET);
     const active = await isSessionTokenActive({ token, userId: decoded.userId });
     if (!active) return res.status(403).json({ error: "Session revoked or expired. Please log in again." });
+
+    if (req.path.startsWith("/api/web/")) {
+      const pinAllowedPath =
+        req.path === "/api/web/profile" ||
+        req.path === "/api/web/logout" ||
+        req.path.startsWith("/api/web/voice-pin");
+      if (!pinAllowedPath) {
+        const voicePinStatus = await getUserVoicePinStatus(decoded.userId);
+        if (voicePinStatus.schemaReady && !voicePinStatus.hasVoicePin) {
+          return res.status(403).json({
+            error: "Voice PIN setup is required before entering the portal.",
+            code: "voice_pin_required"
+          });
+        }
+      }
+    }
 
     req.user = decoded;
     req.authToken = token;
@@ -944,6 +1040,43 @@ function twimlReply(text) {
   const twiml = new MessagingResponse();
   twiml.message(text);
   return twiml.toString();
+}
+
+function buildRequestUrl(req, pathname = req.path) {
+  const base = process.env.TWILIO_VOICE_WEBHOOK_URL || process.env.TWILIO_WEBHOOK_URL || `${req.protocol}://${req.get("host")}${req.originalUrl}`;
+  try {
+    const url = new URL(base);
+    url.pathname = pathname;
+    const query = String(req.originalUrl || "").split("?")[1];
+    url.search = query ? `?${query}` : "";
+    return url.toString();
+  } catch {
+    return `${req.protocol}://${req.get("host")}${req.originalUrl}`;
+  }
+}
+
+function getTwilioValidationUrl(req) {
+  if (req.path.startsWith("/twilio/voice")) {
+    const configured = process.env.TWILIO_VOICE_WEBHOOK_URL;
+    if (configured) {
+      try {
+        const url = new URL(configured);
+        url.pathname = req.path;
+        const query = String(req.originalUrl || "").split("?")[1];
+        url.search = query ? `?${query}` : "";
+        return url.toString();
+      } catch {
+        return configured;
+      }
+    }
+  }
+
+  if (req.path === "/twilio/sms" && process.env.TWILIO_WEBHOOK_URL) return process.env.TWILIO_WEBHOOK_URL;
+  return `${req.protocol}://${req.get("host")}${req.originalUrl}`;
+}
+
+function sendVoiceTwiML(res, twiml) {
+  return res.status(200).type("text/xml").send(twiml);
 }
 
 //   NEW: Function to push messages directly to your Slack channel
@@ -2143,10 +2276,8 @@ function validateTwilioWebhook(req, res, next) {
     return res.status(403).type("text/xml").send("<Response></Response>");
   }
 
-  // Reconstruct the full URL that Twilio used to POST to this server
-  // The TWILIO_WEBHOOK_URL env var is optional — if set, it overrides auto-detection
-  // (Useful if the auto-detected URL doesn't match what's configured in Twilio console)
-  const webhookUrl = process.env.TWILIO_WEBHOOK_URL || `${req.protocol}://${req.get('host')}${req.originalUrl}`;
+  // Reconstruct the full URL that Twilio used to POST to this server.
+  const webhookUrl = getTwilioValidationUrl(req);
 
   const isValid = twilio.validateRequest(
     authToken,
@@ -2164,6 +2295,534 @@ function validateTwilioWebhook(req, res, next) {
   console.log("✅ Twilio webhook signature verified");
   next();
 }
+
+function voiceResponseWithMessage(message) {
+  const VoiceResponse = twilio.twiml.VoiceResponse;
+  const twiml = new VoiceResponse();
+  twiml.say({ voice: "alice" }, message);
+  return twiml.toString();
+}
+
+function addVoicePinPrompt(gather, retry = false) {
+  const audioUrl = retry ? VOICE_PIN_RETRY_AUDIO_URL : VOICE_PIN_PROMPT_AUDIO_URL;
+  if (audioUrl) {
+    gather.play(audioUrl);
+  } else {
+    gather.say({ voice: "alice" }, retry
+      ? "That PIN did not work. Please say or enter your four digit voice PIN."
+      : "Before I access your private notes and documents, please say or enter your four digit voice PIN.");
+  }
+}
+
+function voicePinGatherTwiML(req, { retry = false } = {}) {
+  const VoiceResponse = twilio.twiml.VoiceResponse;
+  const twiml = new VoiceResponse();
+  const action = buildRequestUrl(req, "/twilio/voice-pin");
+  const gather = twiml.gather({
+    input: "dtmf speech",
+    numDigits: 4,
+    action,
+    method: "POST",
+    timeout: 7,
+    speechTimeout: "auto",
+    language: "en-US"
+  });
+  addVoicePinPrompt(gather, retry);
+  twiml.redirect({ method: "POST" }, action);
+  return twiml.toString();
+}
+
+function extractPinFromSpeech(speech = "") {
+  const raw = String(speech || "").toLowerCase();
+  const digitMatch = raw.match(/\b\d[\d\s-]{2,}\d\b/);
+  if (digitMatch) {
+    const digits = digitMatch[0].replace(/\D/g, "");
+    if (digits.length >= 4) return digits.slice(0, 4);
+  }
+
+  const wordMap = {
+    zero: "0", oh: "0", o: "0",
+    one: "1", won: "1",
+    two: "2", too: "2", to: "2",
+    three: "3", tree: "3",
+    four: "4", for: "4", fore: "4",
+    five: "5",
+    six: "6",
+    seven: "7",
+    eight: "8", ate: "8",
+    nine: "9"
+  };
+
+  const digits = raw
+    .split(/[^a-z0-9]+/)
+    .map(token => (/^\d$/.test(token) ? token : wordMap[token]))
+    .filter(Boolean)
+    .join("");
+
+  return digits.length >= 4 ? digits.slice(0, 4) : "";
+}
+
+function extractVoicePinInput(req) {
+  const digits = normalizeVoicePin(req.body?.Digits || "");
+  if (digits.length === 4) return digits;
+  return extractPinFromSpeech(req.body?.SpeechResult || req.body?.UnstableSpeechResult || "");
+}
+
+function generalCallVariables({ phone, reason, firstName = "" } = {}) {
+  const name = firstName || "there";
+  const reasonText = reason || "private context is not available for this call";
+  return {
+    memory_summary: "No private account memory, uploaded documents, or cross-channel history is available for this call.",
+    caller_phone: firstName || "Unknown caller",
+    channel: "call",
+    recent_history: "No private history is available for this call.",
+    first_greeting: firstName
+      ? `Hi ${name}. For privacy, I will keep this call general because ${reasonText}. How can I help today?`
+      : `Hi, I am your Director Compass. I can help with general board questions today, but I will not use private account context because ${reasonText}.`,
+    user_name: firstName || "Unknown",
+    caller_phone_masked: phone ? maskPhone(phone) : "",
+    upcoming_events: "No private event context is available for this call.",
+    transcript_protocol: "Do not offer to email or save a transcript for this call unless the caller signs in and completes account security first.",
+    identity_status: reason || "general_only"
+  };
+}
+
+async function buildPrivateCallDynamicVariables(userId, phone, stirVerstat = "") {
+  const [memorySummary, history, userResponse] = await Promise.all([
+    getUserMemorySummary(userId),
+    getRecentUserMessages(userId, 12),
+    supabase.from("users").select("full_name, email, event_pitch_counts").eq("id", userId).single()
+  ]);
+  const userRecord = decryptUserRecord(userResponse?.data);
+
+  const hasName = userRecord?.full_name && userRecord.full_name.toLowerCase() !== "null" && userRecord.full_name.trim() !== "";
+  const name = hasName ? userRecord.full_name.split(" ")[0] : "";
+
+  let greeting;
+  if (hasName && memorySummary) {
+    greeting = `Welcome back, ${name}. Shall we continue where we left off?`;
+  } else if (hasName && !memorySummary) {
+    greeting = `Hi ${name}! I'm your Director Compass. How can I help you with your board decisions today?`;
+  } else {
+    greeting = "Hi! I'm your Director Compass. Before we dive into your board decisions, what can I call you?";
+  }
+
+  const userPitchCounts = userRecord?.event_pitch_counts || {};
+  let voiceEventContext = "No upcoming events.";
+  if (activeEventsCache.length > 0) {
+    const availableEvents = activeEventsCache.filter(e => (userPitchCounts[e.id] || 0) < 3);
+    if (availableEvents.length > 0) {
+      const eventList = availableEvents.map(e => {
+        const timeString = new Date(e.event_date).toLocaleString("en-US", {
+          timeZone: "America/Toronto",
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+          timeZoneName: "short"
+        });
+        return `- ${e.event_name}. Date/Time: ${timeString}. Cost: ${e.cost_type}.`;
+      }).join("\n");
+      voiceEventContext = `UPCOMING EVENTS:\n${eventList}`;
+    }
+  }
+
+  const userDocs = await getUserDocumentsContext(userId);
+  const conversationSummaries = await getRecentConversationSummaries(userId, 8);
+  const condensedMemory = [
+    memorySummary ? memorySummary.substring(0, 3000) : "",
+    userDocs || "",
+    conversationSummaries || ""
+  ].filter(Boolean).join("\n\n") || "No previous memory.";
+
+  const hasValidEmail = userRecord?.email && userRecord.email.toLowerCase() !== "null" && userRecord.email.trim() !== "";
+  const transcriptInstruction = hasValidEmail
+    ? "TRANSCRIPT PROTOCOL: If the user asks for a transcript during this call, say: 'After we hang up, I will send you a quick text message to confirm if you want the transcript sent to your email.'"
+    : "TRANSCRIPT PROTOCOL: If the user asks for a transcript during this call, say: 'After we hang up, I will send you a quick text message to get your email address so I can send the transcript over.'";
+
+  return {
+    memory_summary: condensedMemory,
+    caller_phone: name || "Unknown caller",
+    channel: "call",
+    recent_history: formatRecentHistoryForCall(history.slice(-6)) || "No recent history.",
+    first_greeting: greeting,
+    user_name: name || "Unknown",
+    caller_phone_masked: maskPhone(phone),
+    upcoming_events: voiceEventContext,
+    transcript_protocol: transcriptInstruction,
+    identity_status: stirVerstat ? `pin_verified_attestation_${String(stirVerstat).toLowerCase()}` : "pin_verified_attestation_not_provided_allowed"
+  };
+}
+
+async function findVoiceUserByPhone(phone) {
+  try {
+    return await findUserByPhone(phone, "id, phone, full_name, email, voice_pin_hash, voice_pin_set_at, voice_pin_failed_count, voice_pin_locked_until");
+  } catch (e) {
+    if (isMissingColumnError({ message: e.message, code: e.code }, "voice_pin_hash") || /voice_pin_/i.test(e.message || "")) {
+      const fallback = await findUserByPhone(phone, "id, phone, full_name, email");
+      return fallback ? { ...fallback, voice_pin_hash: null, voice_pin_set_at: null, voice_pin_failed_count: 0, voice_pin_locked_until: null } : null;
+    }
+    throw e;
+  }
+}
+
+async function saveVoiceCallSession(payload) {
+  const row = {
+    call_sid: payload.callSid,
+    user_id: payload.userId || null,
+    phone_hash: payload.phone ? hashPhone(payload.phone) : null,
+    from_number_enc: payload.phone ? encryptField(payload.phone) : null,
+    to_number: payload.toNumber || null,
+    identity_status: payload.identityStatus || null,
+    verification_status: payload.verificationStatus || "general_only",
+    failure_reason: payload.failureReason || null,
+    dynamic_context: payload.dynamicContext || null
+  };
+  if (Number.isInteger(payload.pinAttemptCount)) row.pin_attempt_count = payload.pinAttemptCount;
+
+  try {
+    const { error } = await supabase.from("voice_call_sessions").upsert(row, { onConflict: "call_sid" });
+    if (error) {
+      if (isMissingTableError(error) || error.code === "42703") return false;
+      console.error("voice_call_sessions upsert failed:", error.message);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.error("voice_call_sessions upsert crashed:", e.message);
+    return false;
+  }
+}
+
+async function updateVoiceCallSession(callSid, updates) {
+  if (!callSid) return false;
+  try {
+    const { error } = await supabase.from("voice_call_sessions").update(updates).eq("call_sid", callSid);
+    if (error) {
+      if (isMissingTableError(error) || error.code === "42703") return false;
+      console.error("voice_call_sessions update failed:", error.message);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.error("voice_call_sessions update crashed:", e.message);
+    return false;
+  }
+}
+
+async function getVoiceCallSessionBySid(callSid) {
+  if (!callSid) return null;
+  try {
+    const { data, error } = await supabase
+      .from("voice_call_sessions")
+      .select("*")
+      .eq("call_sid", callSid)
+      .limit(1);
+    if (error) {
+      if (isMissingTableError(error) || error.code === "42703") return null;
+      throw error;
+    }
+    return data?.[0] || null;
+  } catch (e) {
+    console.error("voice_call_sessions read failed:", e.message);
+    return null;
+  }
+}
+
+function findDeepValue(obj, keys, depth = 0) {
+  if (!obj || depth > 8) return "";
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      const found = findDeepValue(item, keys, depth + 1);
+      if (found) return found;
+    }
+    return "";
+  }
+  if (typeof obj === "object") {
+    for (const key of keys) {
+      if (obj[key] !== undefined && obj[key] !== null && obj[key] !== "") return obj[key];
+    }
+    for (const value of Object.values(obj)) {
+      const found = findDeepValue(value, keys, depth + 1);
+      if (found) return found;
+    }
+  }
+  return "";
+}
+
+function extractElevenCallSid(body) {
+  return String(findDeepValue(body, ["twilio_call_sid", "call_sid", "CallSid", "callSid"]) || "").trim();
+}
+
+async function findVoiceCallSessionForPostCall({ body, transcriptId, phone }) {
+  const callSid = extractElevenCallSid(body);
+  if (callSid) {
+    const bySid = await getVoiceCallSessionBySid(callSid);
+    if (bySid) return bySid;
+  }
+
+  if (transcriptId) {
+    try {
+      const { data } = await supabase
+        .from("voice_call_sessions")
+        .select("*")
+        .eq("elevenlabs_conversation_id", transcriptId)
+        .limit(1);
+      if (data?.[0]) return data[0];
+    } catch {}
+  }
+
+  if (phone) {
+    try {
+      const since = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+      const { data } = await supabase
+        .from("voice_call_sessions")
+        .select("*")
+        .eq("phone_hash", hashPhone(phone))
+        .gte("created_at", since)
+        .order("created_at", { ascending: false })
+        .limit(1);
+      if (data?.[0]) return data[0];
+    } catch {}
+  }
+
+  return null;
+}
+
+async function registerElevenLabsCall({ req, fromNumber, toNumber, dynamicVariables }) {
+  if (!ELEVENLABS_API_KEY || !ELEVENLABS_AGENT_ID) {
+    return voiceResponseWithMessage("The voice assistant is not fully configured yet. Please try again later.");
+  }
+
+  const response = await fetch("https://api.elevenlabs.io/v1/convai/twilio/register-call", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "xi-api-key": ELEVENLABS_API_KEY
+    },
+    body: JSON.stringify({
+      agent_id: ELEVENLABS_AGENT_ID,
+      from_number: fromNumber,
+      to_number: toNumber || process.env.TWILIO_PHONE_NUMBER || "",
+      direction: "inbound",
+      conversation_initiation_client_data: {
+        dynamic_variables: dynamicVariables || {}
+      }
+    })
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    console.error("ElevenLabs register-call failed:", response.status, text.slice(0, 500));
+    return voiceResponseWithMessage("The voice assistant is temporarily unavailable. Please try again soon.");
+  }
+
+  try {
+    const parsed = JSON.parse(text);
+    return typeof parsed === "string" ? parsed : text;
+  } catch {
+    return text;
+  }
+}
+
+async function connectGeneralOnlyCall(req, res, { phone, toNumber, callSid, reason, userId = null, firstName = "" }) {
+  const dynamicVariables = {
+    ...generalCallVariables({ phone, reason, firstName }),
+    twilio_call_sid: callSid || "",
+    voice_access_level: "general_only"
+  };
+  await saveVoiceCallSession({
+    callSid,
+    userId,
+    phone,
+    toNumber,
+    identityStatus: reason,
+    verificationStatus: "general_only",
+    failureReason: reason,
+    dynamicContext: { access: "general_only", reason }
+  });
+  const twiml = await registerElevenLabsCall({ req, fromNumber: phone, toNumber, dynamicVariables });
+  return sendVoiceTwiML(res, twiml);
+}
+
+async function connectVerifiedCall(req, res, { phone, toNumber, callSid, userId, stirVerstat }) {
+  const privateVariables = await buildPrivateCallDynamicVariables(userId, phone, stirVerstat);
+  const dynamicVariables = {
+    ...privateVariables,
+    twilio_call_sid: callSid || "",
+    voice_access_level: "pin_verified"
+  };
+  await updateVoiceCallSession(callSid, {
+    verification_status: "verified",
+    verified_at: new Date().toISOString(),
+    failure_reason: null,
+    dynamic_context: { access: "private", identity_status: privateVariables.identity_status }
+  });
+  const twiml = await registerElevenLabsCall({ req, fromNumber: phone, toNumber, dynamicVariables });
+  return sendVoiceTwiML(res, twiml);
+}
+
+app.post("/twilio/voice", validateTwilioWebhook, async (req, res) => {
+  try {
+    const phone = normalizeFrom(req.body?.From || "");
+    const toNumber = normalizeFrom(req.body?.To || process.env.TWILIO_PHONE_NUMBER || "");
+    const callSid = String(req.body?.CallSid || "").trim();
+    const stirVerstat = getStirVerstat(req);
+
+    if (!phone || !callSid) {
+      return sendVoiceTwiML(res, voiceResponseWithMessage("We could not read this call. Please try again."));
+    }
+
+    if (!isCallerAttestationAllowed(stirVerstat)) {
+      return connectGeneralOnlyCall(req, res, {
+        phone,
+        toNumber,
+        callSid,
+        reason: "caller verification failed"
+      });
+    }
+
+    const user = await findVoiceUserByPhone(phone);
+    if (!user?.id) {
+      return connectGeneralOnlyCall(req, res, {
+        phone,
+        toNumber,
+        callSid,
+        reason: "no account is linked to this phone number"
+      });
+    }
+
+    const firstName = user.full_name && user.full_name.toLowerCase() !== "null" ? user.full_name.split(" ")[0] : "";
+    if (!user.voice_pin_hash) {
+      return connectGeneralOnlyCall(req, res, {
+        phone,
+        toNumber,
+        callSid,
+        userId: user.id,
+        firstName,
+        reason: "your Voice PIN is not set yet"
+      });
+    }
+
+    if (user.voice_pin_locked_until && new Date(user.voice_pin_locked_until).getTime() > Date.now()) {
+      return connectGeneralOnlyCall(req, res, {
+        phone,
+        toNumber,
+        callSid,
+        userId: user.id,
+        firstName,
+        reason: "Voice PIN verification is temporarily locked"
+      });
+    }
+
+    await saveVoiceCallSession({
+      callSid,
+      userId: user.id,
+      phone,
+      toNumber,
+      identityStatus: stirVerstat ? `attestation_${String(stirVerstat).toLowerCase()}` : "attestation_not_provided_pin_required",
+      verificationStatus: "pin_required",
+      pinAttemptCount: 0
+    });
+
+    return sendVoiceTwiML(res, voicePinGatherTwiML(req));
+  } catch (e) {
+    console.error("Voice pre-gate error:", e.message);
+    logError({ channel: "call", stage: "Twilio Voice Pregate", message: e.message });
+    return sendVoiceTwiML(res, voiceResponseWithMessage("The voice assistant is temporarily unavailable. Please try again soon."));
+  }
+});
+
+app.post("/twilio/voice-pin", validateTwilioWebhook, async (req, res) => {
+  try {
+    const phone = normalizeFrom(req.body?.From || "");
+    const toNumber = normalizeFrom(req.body?.To || process.env.TWILIO_PHONE_NUMBER || "");
+    const callSid = String(req.body?.CallSid || "").trim();
+    const stirVerstat = getStirVerstat(req);
+    const submittedPin = extractVoicePinInput(req);
+
+    if (!phone || !callSid) {
+      return sendVoiceTwiML(res, voiceResponseWithMessage("We could not verify this call. I can help with general questions only."));
+    }
+
+    const session = await getVoiceCallSessionBySid(callSid);
+    const user = await findVoiceUserByPhone(phone);
+    const firstName = user?.full_name && user.full_name.toLowerCase() !== "null" ? user.full_name.split(" ")[0] : "";
+
+    if (!isCallerAttestationAllowed(stirVerstat)) {
+      return connectGeneralOnlyCall(req, res, {
+        phone,
+        toNumber,
+        callSid,
+        userId: user?.id || session?.user_id || null,
+        firstName,
+        reason: "caller verification failed"
+      });
+    }
+
+    if (!user?.id || !user.voice_pin_hash) {
+      return connectGeneralOnlyCall(req, res, {
+        phone,
+        toNumber,
+        callSid,
+        userId: user?.id || null,
+        firstName,
+        reason: user?.id ? "your Voice PIN is not set yet" : "no account is linked to this phone number"
+      });
+    }
+
+    if (user.voice_pin_locked_until && new Date(user.voice_pin_locked_until).getTime() > Date.now()) {
+      return connectGeneralOnlyCall(req, res, {
+        phone,
+        toNumber,
+        callSid,
+        userId: user.id,
+        firstName,
+        reason: "Voice PIN verification is temporarily locked"
+      });
+    }
+
+    const pinMatches = await compareVoicePin(submittedPin, user.voice_pin_hash);
+    if (pinMatches) {
+      await supabase
+        .from("users")
+        .update({ voice_pin_failed_count: 0, voice_pin_locked_until: null })
+        .eq("id", user.id);
+      return connectVerifiedCall(req, res, { phone, toNumber, callSid, userId: user.id, stirVerstat });
+    }
+
+    const nextAttemptCount = Number(session?.pin_attempt_count || 0) + 1;
+    const nextFailedCount = Number(user.voice_pin_failed_count || 0) + 1;
+    const lockedUntil = nextFailedCount >= 5 ? new Date(Date.now() + 30 * 60 * 1000).toISOString() : null;
+    await supabase
+      .from("users")
+      .update({ voice_pin_failed_count: nextFailedCount, voice_pin_locked_until: lockedUntil })
+      .eq("id", user.id);
+    await updateVoiceCallSession(callSid, {
+      pin_attempt_count: nextAttemptCount,
+      verification_status: lockedUntil ? "pin_locked" : "pin_failed",
+      failure_reason: lockedUntil ? "too_many_wrong_pins" : "wrong_pin"
+    });
+
+    if (nextAttemptCount < 2 && !lockedUntil) {
+      return sendVoiceTwiML(res, voicePinGatherTwiML(req, { retry: true }));
+    }
+
+    return connectGeneralOnlyCall(req, res, {
+      phone,
+      toNumber,
+      callSid,
+      userId: user.id,
+      firstName,
+      reason: lockedUntil ? "Voice PIN verification is temporarily locked" : "the Voice PIN was not verified"
+    });
+  } catch (e) {
+    console.error("Voice PIN verification error:", e.message);
+    logError({ channel: "call", stage: "Twilio Voice PIN", message: e.message });
+    return sendVoiceTwiML(res, voiceResponseWithMessage("I could not verify the PIN. I can help with general questions only."));
+  }
+});
 
 app.post("/twilio/sms", validateTwilioWebhook, async (req, res) => {
   const rawFrom = req.body.From || ""; 
@@ -2455,72 +3114,22 @@ app.post("/elevenlabs/twilio-personalize", personalizeLimiter, validatePersonali
       });
     }
 
-    const userId = await getOrCreateUser(phone);
-    await getOrCreateConversation(userId, "call");
-
-    const [memorySummary, history, userResponse] = await Promise.all([
-      getUserMemorySummary(userId), getRecentUserMessages(userId, 12), supabase.from("users").select("full_name, email, event_pitch_counts").eq("id", userId).single()
-    ]);
-    const userRecord = decryptUserRecord(userResponse?.data);
-    
-    const hasName = userRecord?.full_name && userRecord.full_name.toLowerCase() !== 'null' && userRecord.full_name.trim() !== '';
-    const name = hasName ? userRecord.full_name.split(' ')[0] : "";
-    
-    let greeting;
-    if (hasName && memorySummary) {
-      greeting = `Welcome back, ${name}. Shall we continue where we left off?`;
-    } else if (hasName && !memorySummary) {
-      greeting = `Hi ${name}! I'm your Director Compass. How can I help you with your board decisions today?`;
-    } else {
-      greeting = "Hi! I'm your Director Compass. Before we dive into your board decisions, what can I call you?";
+    const callSid = String(req.body?.call_sid || req.body?.CallSid || req.body?.callSid || "").trim();
+    const verifiedSession = callSid ? await getVoiceCallSessionBySid(callSid) : null;
+    if (!verifiedSession || verifiedSession.verification_status !== "verified" || !verifiedSession.user_id) {
+      const user = await findVoiceUserByPhone(phone);
+      const firstName = user?.full_name && user.full_name.toLowerCase() !== "null" ? user.full_name.split(" ")[0] : "";
+      return res.status(200).json({
+        dynamic_variables: generalCallVariables({
+          phone,
+          firstName,
+          reason: verifiedSession ? "the Voice PIN has not been verified" : "this call did not pass through Voice PIN verification"
+        })
+      });
     }
 
-    const userPitchCounts = userRecord?.event_pitch_counts || {};
-    let voiceEventContext = "No upcoming events.";
-    
-    if (activeEventsCache.length > 0) {
-      const availableEvents = activeEventsCache.filter(e => (userPitchCounts[e.id] || 0) < 3);
-      if (availableEvents.length > 0) {
-        const eventList = availableEvents.map(e => {
-          const timeString = new Date(e.event_date).toLocaleString('en-US', { timeZone: 'America/Toronto', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
-          return `- ${e.event_name}. Date/Time: ${timeString}. Cost: ${e.cost_type}.`;
-        }).join("\n");
-        voiceEventContext = `UPCOMING EVENTS:\n${eventList}`;
-      }
-    }
-
-    const userDocs = await getUserDocumentsContext(userId);
-    const conversationSummaries = await getRecentConversationSummaries(userId, 8);
-
-    // 🔒 BUILD CONDENSED MEMORY — Avoids exposing raw PII in the webhook response
-    // The voice agent gets enough context to personalize without receiving raw email/phone
-    const condensedMemory = [
-      memorySummary ? memorySummary.substring(0, 3000) : "", // Cap memory at 3000 chars
-      userDocs || "",
-      conversationSummaries || ""
-    ].filter(Boolean).join("\n\n") || "No previous memory.";
-
-    const hasValidEmail = userRecord?.email && userRecord.email.toLowerCase() !== 'null' && userRecord.email.trim() !== '';
-    const transcriptInstruction = hasValidEmail
-      ? "TRANSCRIPT PROTOCOL: If the user asks for a transcript during this call, say: 'After we hang up, I will send you a quick text message to confirm if you want the transcript sent to your email.'"
-      : "TRANSCRIPT PROTOCOL: If the user asks for a transcript during this call, say: 'After we hang up, I will send you a quick text message to get your email address so I can send the transcript over.'";
-
-    // 🔒 REDUCED RESPONSE — Removed raw email, raw phone echo, and raw conversation history
-    // The voice agent only needs: greeting, first name, memory context, events, and transcript protocol
-    return res.status(200).json({ 
-      dynamic_variables: { 
-        memory_summary: condensedMemory, 
-        caller_phone: name || "Unknown caller", 
-        channel: "call", 
-        recent_history: formatRecentHistoryForCall(history.slice(-6)) || "No recent history.", 
-        first_greeting: greeting,
-        user_name: name || "Unknown",
-        caller_phone_masked: maskPhone(phone),
-        upcoming_events: voiceEventContext,
-        transcript_protocol: transcriptInstruction,
-        identity_status: stirVerstat ? `attestation_${String(stirVerstat).toLowerCase()}` : "attestation_not_provided_allowed"
-      } 
-    });
+    const dynamicVariables = await buildPrivateCallDynamicVariables(verifiedSession.user_id, phone, stirVerstat);
+    return res.status(200).json({ dynamic_variables: dynamicVariables });
 
   } catch (err) {
     console.error("ERROR eleven personalize", err?.message || String(err));
@@ -2585,6 +3194,35 @@ function verifyElevenLabsSignature(req, res, next) {
     console.error("🚨 HMAC error:", e.message);
     logError({ channel: "call", stage: "ElevenLabs HMAC Verification", message: "HMAC crashed: " + e.message });
     return res.status(500).json({ error: "Signature verification failed." });
+  }
+}
+
+async function generateShortCallTopic(transcriptText) {
+  try {
+    const titleResp = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: "Generate a short 2-to-5 word topic label for this phone call. Return only the topic." },
+        { role: "user", content: String(transcriptText || "").slice(0, 5000) }
+      ]
+    });
+    const topic = titleResp.choices?.[0]?.message?.content?.trim().toLowerCase() || "";
+    return topic.replace(/^great chat about\s*/i, "").replace(/[.!"']+$/g, "").trim() || "our conversation";
+  } catch {
+    return "our conversation";
+  }
+}
+
+async function sendGuestSignupSms(phone, transcriptText) {
+  if (!phone || !process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_PHONE_NUMBER) return;
+  try {
+    const topic = await generateShortCallTopic(transcriptText);
+    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
+    const message = `Great talking with you about ${topic}. If you want Director Compass to remember your calls, use your uploaded documents, and carry context across web, SMS, and phone, create your free account here: ${APP_URL}`;
+    await twilioClient.messages.create({ body: message, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
+  } catch (e) {
+    console.error("Guest signup SMS failed:", e.message);
   }
 }
 
@@ -2659,7 +3297,31 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
       // Continue processing but flag it — the AI injection resistance in the system prompt will handle it
     }
 
-    const userId = await getOrCreateUser(phone);
+    const voiceSession = await findVoiceCallSessionForPostCall({ body, transcriptId, phone });
+    if (voiceSession?.call_sid && transcriptId) {
+      await updateVoiceCallSession(voiceSession.call_sid, { elevenlabs_conversation_id: transcriptId });
+    }
+
+    if (!voiceSession || voiceSession.verification_status !== "verified" || !voiceSession.user_id) {
+      console.log("🔒 POST-CALL: General-only or unverified voice call. Skipping user memory/transcript storage.");
+      if (voiceSession?.call_sid) {
+        await updateVoiceCallSession(voiceSession.call_sid, {
+          post_call_processed_at: new Date().toISOString(),
+          failure_reason: voiceSession.failure_reason || "not_pin_verified"
+        });
+      }
+      if (voiceSession && !voiceSession.user_id) {
+        await sendGuestSignupSms(phone, transcriptText);
+      }
+      await markWebhookEventStatus("elevenlabs_post_call", transcriptId, "skipped_unverified_voice_call", {
+        transcript_hash: sha256Hex(transcriptText),
+        verification_status: voiceSession?.verification_status || "missing_voice_call_session",
+        call_sid: voiceSession?.call_sid || extractElevenCallSid(body) || null
+      });
+      return;
+    }
+
+    const userId = voiceSession.user_id;
     console.log("👤 User ID:", userId);
 
     
@@ -2864,6 +3526,9 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
       transcript_hash: sha256Hex(transcriptText),
       transcript_length: transcriptText.length
     });
+    if (voiceSession?.call_sid) {
+      await updateVoiceCallSession(voiceSession.call_sid, { post_call_processed_at: new Date().toISOString() });
+    }
 
   } catch (err) {
     console.error("❌ POST-CALL PROCESSING ERROR:", err?.message || err);
@@ -3872,9 +4537,8 @@ app.post("/api/transcribe", apiLimiter, authenticateToken, upload.single("audio"
 app.get("/api/web/profile", authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
-    // 🔒 Now securely fetching the strict web login trail
-    const [{ data: rawData, error }, { data: latestCall }] = await Promise.all([
-      supabase.from("users").select("full_name, email, last_web_login").eq("id", userId).single(),
+    const [profileResult, { data: latestCall }] = await Promise.all([
+      supabase.from("users").select("full_name, email, last_web_login, voice_pin_hash, voice_pin_set_at").eq("id", userId).single(),
       supabase
         .from("conversations")
         .select("started_at, last_active_at, closed_at")
@@ -3883,8 +4547,25 @@ app.get("/api/web/profile", authenticateToken, async (req, res) => {
         .order("last_active_at", { ascending: false })
         .limit(1)
     ]);
-    if (error) throw error;
+
+    let rawData = profileResult.data;
+    let voicePinSchemaReady = true;
+    if (profileResult.error) {
+      if (isMissingColumnError(profileResult.error, "voice_pin_hash") || profileResult.error.code === "42703") {
+        const fallback = await supabase.from("users").select("full_name, email, last_web_login").eq("id", userId).single();
+        if (fallback.error) throw fallback.error;
+        rawData = fallback.data;
+        voicePinSchemaReady = false;
+      } else {
+        throw profileResult.error;
+      }
+    }
+
     const data = decryptUserRecord(rawData);
+    data.has_voice_pin = !!rawData?.voice_pin_hash;
+    data.voice_pin_set_at = rawData?.voice_pin_set_at || null;
+    data.voice_pin_schema_ready = voicePinSchemaReady;
+    delete data.voice_pin_hash;
     data.last_call_at = latestCall?.[0]?.closed_at || latestCall?.[0]?.last_active_at || latestCall?.[0]?.started_at || null;
     res.json({ success: true, profile: data });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -3901,6 +4582,98 @@ app.put("/api/web/profile", authenticateToken, async (req, res) => {
     if (error) throw error;
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+async function sendVoicePinConfirmationSms(phone) {
+  if (!phone || !process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_PHONE_NUMBER) return;
+  if (!checkGlobalSmsLimit()) {
+    console.warn("Voice PIN confirmation SMS skipped because global SMS circuit breaker is active.");
+    return;
+  }
+  const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+  const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
+  await twilioClient.messages.create({
+    body: "Your Director Compass voice PIN is set and your phone number is secured. You can safely call this number anytime. For privacy, I may ask for your PIN before using private account context.",
+    from: process.env.TWILIO_PHONE_NUMBER,
+    to: outboundPhone
+  });
+}
+
+async function getVoicePinUserForWeb(userId) {
+  const { data, error } = await supabase
+    .from("users")
+    .select("id, phone, voice_pin_hash, voice_pin_set_at, voice_pin_failed_count, voice_pin_locked_until, otp_code, otp_expires_at")
+    .eq("id", userId)
+    .single();
+  if (error) {
+    if (isMissingColumnError(error, "voice_pin_hash") || error.code === "42703") {
+      const err = new Error("Voice PIN columns are not configured yet. Run the updated security-hardening.sql migration in Supabase.");
+      err.status = 500;
+      throw err;
+    }
+    throw error;
+  }
+  return decryptUserRecord(data);
+}
+
+app.post("/api/web/voice-pin", authenticateToken, async (req, res) => {
+  try {
+    const action = String(req.body?.action || "set").trim();
+    const user = await getVoicePinUserForWeb(req.user.userId);
+    const cleanPhone = normalizeFrom(user.phone || "");
+    if (!cleanPhone) return res.status(400).json({ error: "This account does not have a phone number on file." });
+
+    if (action === "recover_send_code") {
+      await sendVerificationCodeToPhone(cleanPhone, {
+        req,
+        flow: "voice_pin_recovery"
+      });
+      return res.json({ success: true, maskedPhone: maskPhone(cleanPhone) });
+    }
+
+    if (action === "set" || action === "change" || action === "recover_confirm") {
+      const newPin = normalizeVoicePin(req.body?.newPin);
+      const confirmPin = normalizeVoicePin(req.body?.confirmPin || req.body?.newPin);
+      if (!isValidVoicePin(newPin) || newPin !== confirmPin) {
+        return res.status(400).json({ error: "Enter and confirm a 4-digit Voice PIN." });
+      }
+
+      if (action === "set" && user.voice_pin_hash) {
+        return res.status(400).json({ error: "A Voice PIN is already set. Use Change PIN instead." });
+      }
+
+      if (action === "change") {
+        if (!user.voice_pin_hash) return res.status(400).json({ error: "No Voice PIN is set yet." });
+        const currentPin = normalizeVoicePin(req.body?.currentPin);
+        const currentMatches = await compareVoicePin(currentPin, user.voice_pin_hash);
+        if (!currentMatches) return res.status(403).json({ error: "Current Voice PIN is incorrect." });
+      }
+
+      if (action === "recover_confirm") {
+        const code = String(req.body?.code || "").trim();
+        await verifyUserPhoneCode(user, cleanPhone, code);
+      }
+
+      const voicePinHash = await hashVoicePin(newPin);
+      const { error } = await supabase.from("users").update({
+        voice_pin_hash: voicePinHash,
+        voice_pin_set_at: new Date().toISOString(),
+        voice_pin_failed_count: 0,
+        voice_pin_locked_until: null,
+        otp_code: null,
+        otp_expires_at: null
+      }).eq("id", req.user.userId);
+      if (error) throw error;
+
+      sendVoicePinConfirmationSms(cleanPhone).catch(e => console.error("Voice PIN confirmation SMS failed:", e.message));
+      return res.json({ success: true, has_voice_pin: true, voice_pin_set_at: new Date().toISOString() });
+    }
+
+    return res.status(400).json({ error: "Unknown Voice PIN action." });
+  } catch (e) {
+    console.error("Voice PIN web error:", e.message);
+    res.status(e.status || 500).json({ error: e.message });
+  }
 });
 
 app.post("/api/web/sms-lock", authenticateToken, async (req, res) => {
