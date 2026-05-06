@@ -2309,18 +2309,19 @@ function voiceResponseWithMessage(message) {
   return twiml.toString();
 }
 
-function addVoicePinPrompt(gather, retry = false) {
+function addVoicePinPrompt(gather, { retry = false, incomplete = false } = {}) {
   const audioUrl = retry ? VOICE_PIN_RETRY_AUDIO_URL : VOICE_PIN_PROMPT_AUDIO_URL;
   if (audioUrl) {
     gather.play(audioUrl);
   } else {
-    gather.say({ voice: "alice" }, retry
-      ? "That PIN did not work. Please say or enter your four digit voice PIN."
-      : "Before I access your private notes and documents, please say or enter your four digit voice PIN.");
+    let prompt = "Before I access your private notes and documents, please say or enter your four digit voice PIN.";
+    if (retry) prompt = "That PIN did not work. Please say or enter your four digit voice PIN.";
+    if (incomplete) prompt = "I did not catch all four digits. Please say or enter your complete four digit voice PIN.";
+    gather.say({ voice: "alice" }, prompt);
   }
 }
 
-function voicePinGatherTwiML(req, { retry = false } = {}) {
+function voicePinGatherTwiML(req, { retry = false, incomplete = false } = {}) {
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
   const action = buildRequestUrl(req, "/twilio/voice-pin");
@@ -2333,7 +2334,7 @@ function voicePinGatherTwiML(req, { retry = false } = {}) {
     speechTimeout: "auto",
     language: "en-US"
   });
-  addVoicePinPrompt(gather, retry);
+  addVoicePinPrompt(gather, { retry, incomplete });
   twiml.redirect({ method: "POST" }, action);
   return twiml.toString();
 }
@@ -2796,6 +2797,28 @@ app.post("/twilio/voice-pin", validateTwilioWebhook, async (req, res) => {
         userId: user.id,
         firstName,
         reason: "Voice PIN verification is temporarily locked"
+      });
+    }
+
+    if (!submittedPin) {
+      const nextAttemptCount = Number(session?.pin_attempt_count || 0) + 1;
+      await updateVoiceCallSession(callSid, {
+        pin_attempt_count: nextAttemptCount,
+        verification_status: "pin_incomplete",
+        failure_reason: "pin_incomplete"
+      });
+
+      if (nextAttemptCount < 2) {
+        return sendVoiceTwiML(res, voicePinGatherTwiML(req, { incomplete: true }));
+      }
+
+      return connectGeneralOnlyCall(req, res, {
+        phone,
+        toNumber,
+        callSid,
+        userId: user.id,
+        firstName,
+        reason: "the Voice PIN was not completed"
       });
     }
 

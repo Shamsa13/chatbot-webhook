@@ -426,6 +426,7 @@ input:checked + .slider:before { transform: translateX(18px); }
 .profile-pin-btn { width: 100%; }
 .profile-pin-recovery { margin-top: 12px; }
 .profile-recovery-link { color: #181d32; margin-top: 0; text-align: left; }
+.profile-recovery-link:hover { color: #B99784; text-decoration: underline; }
 #profilePinRecoveryFields { grid-template-columns: 1fr; gap: 10px; margin-top: 10px; }
 
 
