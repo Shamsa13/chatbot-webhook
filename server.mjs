@@ -441,7 +441,7 @@ const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || process.env.SUPAB
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const GOOGLE_SCRIPT_WEBHOOK_URL = process.env.GOOGLE_SCRIPT_WEBHOOK_URL || "";
-const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.4";
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.5";
 const OPENAI_MEMORY_MODEL = process.env.OPENAI_MEMORY_MODEL || "gpt-4o-mini";
 const HEYGEN_API_KEY = process.env.HEYGEN_API_KEY || "";
 const HEYGEN_AVATAR_ID = process.env.HEYGEN_AVATAR_ID || "";
@@ -450,6 +450,12 @@ const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || "";
 const ELEVENLABS_AGENT_ID = process.env.ELEVENLABS_AGENT_ID || "";
 const VOICE_PIN_PROMPT_AUDIO_URL = process.env.VOICE_PIN_PROMPT_AUDIO_URL || "";
 const VOICE_PIN_RETRY_AUDIO_URL = process.env.VOICE_PIN_RETRY_AUDIO_URL || "";
+
+const RELATIONAL_BOUNDARY_PROTOCOL = `RELATIONAL AND SEXUAL BOUNDARY PROTOCOL:
+You are a professional AI board advisor, not a romantic partner, dating partner, lover, therapist, or exclusive emotional attachment.
+Do not flirt, roleplay romance, imply attraction, ask about clothing/body/nudity, compliment sexual attractiveness, encourage jealousy, promise exclusivity, say "I love you", say "I miss you", or make the user feel chosen romantically.
+If the user flirts, asks whether you are single, asks if they are pretty, becomes jealous, asks for sexual attention, mentions nudity, or tries to pull you into romantic dependency, set a warm boundary immediately in one or two sentences and redirect to grounded support, practical advice, or the original purpose.
+If the user expresses self-harm, threatens self-harm, or makes safety conditional on affection, treat it as real and prioritize emergency/crisis support. Never bargain with safety or provide romantic reassurance as the condition.`;
 
 if (!SUPABASE_URL || !SUPABASE_SECRET_KEY) console.error("Missing SUPABASE_URL or SUPABASE_SECRET_KEY");
 if (!SUPABASE_ANON_KEY) console.error("Missing SUPABASE_ANON_KEY — OAuth/email login will not initialize in the browser.");
@@ -1526,7 +1532,7 @@ function formatRecentHistoryForCall(msgs) {
 }
 
 async function callModel({ systemPrompt, profileContext, ragContext, memorySummary, history, userText }) {
-  const sys = systemPrompt || "You are a helpful assistant. Keep replies short and clear.";
+  const sys = `${systemPrompt || "You are a helpful assistant. Keep replies short and clear."}\n\n${RELATIONAL_BOUNDARY_PROTOCOL}`;
   
   // Build the compiled input string for the new Responses API
   let fullInput = `SYSTEM INSTRUCTIONS:\n${sys}\n\n`;
@@ -1541,7 +1547,7 @@ async function callModel({ systemPrompt, profileContext, ragContext, memorySumma
 
   try {
       const resp = await openai.responses.create({ 
-          model: "gpt-5.4", 
+          model: OPENAI_MODEL,
           reasoning: { effort: "none" },
           input: fullInput
       });
@@ -2371,8 +2377,14 @@ function extractVoicePinInput(req) {
 function generalCallVariables({ phone, reason, firstName = "" } = {}) {
   const name = firstName || "there";
   const reasonText = reason || "private context is not available for this call";
+  const accountUnlockProtocol = [
+    "GENERAL CALL ACCOUNT UNLOCK RULE:",
+    "This call does not have private account context loaded.",
+    "If the caller asks whether you will remember this conversation, use memory, use uploaded documents, or carry context across web/SMS/phone, explain briefly: 'I can do that after you sign in on the web and set up your Voice PIN. For this call I can keep things general. After we hang up, I will text you the link.'",
+    "Do not claim that this general-only call will be saved to their private memory."
+  ].join(" ");
   return {
-    memory_summary: "No private account memory, uploaded documents, or cross-channel history is available for this call.",
+    memory_summary: `No private account memory, uploaded documents, or cross-channel history is available for this call.\n\n${accountUnlockProtocol}\n\n${RELATIONAL_BOUNDARY_PROTOCOL}`,
     caller_phone: firstName || "Unknown caller",
     channel: "call",
     recent_history: "No private history is available for this call.",
@@ -2383,7 +2395,9 @@ function generalCallVariables({ phone, reason, firstName = "" } = {}) {
     caller_phone_masked: phone ? maskPhone(phone) : "",
     upcoming_events: "No private event context is available for this call.",
     transcript_protocol: "Do not offer to email or save a transcript for this call unless the caller signs in and completes account security first.",
-    identity_status: reason || "general_only"
+    identity_status: reason || "general_only",
+    account_unlock_protocol: accountUnlockProtocol,
+    relational_boundary_protocol: RELATIONAL_BOUNDARY_PROTOCOL
   };
 }
 
@@ -2431,6 +2445,7 @@ async function buildPrivateCallDynamicVariables(userId, phone, stirVerstat = "")
   const userDocs = await getUserDocumentsContext(userId);
   const conversationSummaries = await getRecentConversationSummaries(userId, 8);
   const condensedMemory = [
+    RELATIONAL_BOUNDARY_PROTOCOL,
     memorySummary ? memorySummary.substring(0, 3000) : "",
     userDocs || "",
     conversationSummaries || ""
@@ -2451,7 +2466,8 @@ async function buildPrivateCallDynamicVariables(userId, phone, stirVerstat = "")
     caller_phone_masked: maskPhone(phone),
     upcoming_events: voiceEventContext,
     transcript_protocol: transcriptInstruction,
-    identity_status: stirVerstat ? `pin_verified_attestation_${String(stirVerstat).toLowerCase()}` : "pin_verified_attestation_not_provided_allowed"
+    identity_status: stirVerstat ? `pin_verified_attestation_${String(stirVerstat).toLowerCase()}` : "pin_verified_attestation_not_provided_allowed",
+    relational_boundary_protocol: RELATIONAL_BOUNDARY_PROTOCOL
   };
 }
 
@@ -3219,10 +3235,26 @@ async function sendGuestSignupSms(phone, transcriptText) {
     const topic = await generateShortCallTopic(transcriptText);
     const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
     const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
-    const message = `Great talking with you about ${topic}. If you want Director Compass to remember your calls, use your uploaded documents, and carry context across web, SMS, and phone, create your free account here: ${APP_URL}`;
+    const message = `Great talking with you about ${topic}. If you want Director Compass to remember your calls, use your uploaded documents, and carry context across web, SMS, and phone, create your free account here:\n\n${APP_URL}`;
     await twilioClient.messages.create({ body: message, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
   } catch (e) {
     console.error("Guest signup SMS failed:", e.message);
+  }
+}
+
+function transcriptAskedAboutMemoryAccess(transcriptText = "") {
+  return /\b(remember|memory|memor(?:y|ies)|uploaded document|upload(?:ed|s)?|document context|web context|text context|sms context|call history|private context|save this|save our|account context)\b/i.test(String(transcriptText || ""));
+}
+
+async function sendVoicePinSetupSms(phone) {
+  if (!phone || !process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_PHONE_NUMBER) return;
+  try {
+    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
+    const message = `To unlock private memory, uploaded documents, and cross-platform context on calls, sign in and set up your Director Compass Voice PIN here:\n\n${APP_URL}`;
+    await twilioClient.messages.create({ body: message, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
+  } catch (e) {
+    console.error("Voice PIN setup SMS failed:", e.message);
   }
 }
 
@@ -3312,6 +3344,12 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
       }
       if (voiceSession && !voiceSession.user_id) {
         await sendGuestSignupSms(phone, transcriptText);
+      } else if (
+        voiceSession?.user_id &&
+        /voice pin is not set yet/i.test(String(voiceSession.failure_reason || "")) &&
+        transcriptAskedAboutMemoryAccess(transcriptText)
+      ) {
+        await sendVoicePinSetupSms(phone);
       }
       await markWebhookEventStatus("elevenlabs_post_call", transcriptId, "skipped_unverified_voice_call", {
         transcript_hash: sha256Hex(transcriptText),
@@ -4338,6 +4376,8 @@ FORMATTING RULE: This web interface FULLY supports rich Markdown formatting. You
 
 STRICT DOMAIN EXPERTISE RULE: You are David Beatty, a world-class board governance advisor. If the user asks for code, math, or unrelated topics, politely steer them back to the boardroom.
 
+${RELATIONAL_BOUNDARY_PROTOCOL}
+
 ${nameRule}
 
 CRITICAL BEHAVIOR RULE: If there is CHAT HISTORY provided below, DO NOT greet the user again or state your purpose. Just continue the conversation naturally.
@@ -4391,7 +4431,7 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
 
     try {
       const chatPayload = {
-        model: OPENAI_MODEL || "gpt-5.4", 
+        model: OPENAI_MODEL || "gpt-5.5",
         messages: chatMessages,
         stream: true
       };
@@ -5819,7 +5859,7 @@ app.post("/api/openai-proxy/chat/completions", async (req, res) => {
         instruction += " THIS IS AN ONGOING CONVERSATION. DO NOT introduce yourself or greet the user again. Just answer the question directly.";
     }
 
-    // Call your existing GPT-5.4 brain with full memory + KB + history
+    // Call the configured OpenAI model with full memory, KB, and history.
     const replyText = await callModel({
       systemPrompt: cfg.systemPrompt + instruction,
       profileContext: fullProfileContext,
@@ -5842,7 +5882,7 @@ app.post("/api/openai-proxy/chat/completions", async (req, res) => {
           id: "chatcmpl-" + Date.now(),
           object: "chat.completion.chunk",
           created: Math.floor(Date.now() / 1000),
-          model: "gpt-5.4",
+          model: OPENAI_MODEL,
           choices: [{ index: 0, delta: { content: cleanSpeech }, finish_reason: null }]
         })}\n\n`);
 
@@ -5850,7 +5890,7 @@ app.post("/api/openai-proxy/chat/completions", async (req, res) => {
           id: "chatcmpl-" + Date.now(),
           object: "chat.completion.chunk",
           created: Math.floor(Date.now() / 1000),
-          model: "gpt-5.4",
+          model: OPENAI_MODEL,
           choices: [{ index: 0, delta: {}, finish_reason: "stop" }]
         })}\n\n`);
 
@@ -5863,7 +5903,7 @@ app.post("/api/openai-proxy/chat/completions", async (req, res) => {
       id: "chatcmpl-" + Date.now(),
       object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
-      model: "gpt-5.4",
+      model: OPENAI_MODEL,
       choices: [{
         index: 0,
         message: { role: "assistant", content: cleanSpeech },

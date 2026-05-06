@@ -641,7 +641,7 @@
             method: "POST", headers: { "x-api-key": key, "Content-Type": "application/json" },
             body: JSON.stringify({ 
                 display_name: "Director Compass OpenAI Proxy", 
-                model_name: "gpt-5.4",               
+                model_name: "gpt-5.5",
                 secret_id: secretId,                       
                 base_url: renderUrl // ✅ FIX: Using base_url instead of webhook_url
             })
@@ -963,10 +963,10 @@ async function showUserDeepDive(userId) {
         if (!text || !activeAvatarSession) return;
 
         textInput.value = "";
-        document.getElementById('avatarStatus').innerText = "🟢 Thinking (GPT-5.4 + RAG)...";
+        document.getElementById('avatarStatus').innerText = "🟢 Thinking (GPT-5.5 + RAG)...";
 
         try {
-            // 1. Send the text to your GPT-5.4 Brain
+            // 1. Send the text to your configured OpenAI brain
             const res = await fetch('/api/admin/prototype-chat', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ secret, message: text })
