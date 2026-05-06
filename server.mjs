@@ -448,6 +448,7 @@ const HEYGEN_AVATAR_ID = process.env.HEYGEN_AVATAR_ID || "";
 const APP_URL = (process.env.APP_URL || process.env.PUBLIC_APP_URL || process.env.WEB_APP_URL || "https://compass.boardchair.com").replace(/\/+$/, "");
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || "";
 const ELEVENLABS_AGENT_ID = process.env.ELEVENLABS_AGENT_ID || "";
+const ELEVENLABS_NATIVE_TWILIO_WEBHOOK_URL = process.env.ELEVENLABS_NATIVE_TWILIO_WEBHOOK_URL || "";
 const VOICE_PIN_PROMPT_AUDIO_URL = process.env.VOICE_PIN_PROMPT_AUDIO_URL || "";
 const VOICE_PIN_RETRY_AUDIO_URL = process.env.VOICE_PIN_RETRY_AUDIO_URL || "";
 
@@ -2643,6 +2644,48 @@ async function registerElevenLabsCall({ req, fromNumber, toNumber, dynamicVariab
   }
 }
 
+function getNativeElevenLabsTwilioWebhookUrl() {
+  const configured = String(ELEVENLABS_NATIVE_TWILIO_WEBHOOK_URL || "").trim();
+  if (configured && configured.toLowerCase() === "auto" && ELEVENLABS_AGENT_ID) {
+    return `https://api.elevenlabs.io/v1/convai/agents/${encodeURIComponent(ELEVENLABS_AGENT_ID)}/twilio`;
+  }
+  return configured;
+}
+
+function redirectToNativeElevenLabsTwilio() {
+  const nativeWebhookUrl = getNativeElevenLabsTwilioWebhookUrl();
+  if (!nativeWebhookUrl) return "";
+
+  const VoiceResponse = twilio.twiml.VoiceResponse;
+  const twiml = new VoiceResponse();
+  twiml.redirect({ method: "POST" }, nativeWebhookUrl);
+  return twiml.toString();
+}
+
+async function getRecentVerifiedVoiceSessionByPhone(phone) {
+  if (!phone) return null;
+  try {
+    const since = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+    const { data, error } = await supabase
+      .from("voice_call_sessions")
+      .select("*")
+      .eq("phone_hash", hashPhone(phone))
+      .eq("verification_status", "verified")
+      .gte("created_at", since)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (error) {
+      console.warn("Recent verified voice session lookup failed:", error.message);
+      return null;
+    }
+    return data?.[0] || null;
+  } catch (e) {
+    console.warn("Recent verified voice session lookup crashed:", e.message);
+    return null;
+  }
+}
+
 async function connectGeneralOnlyCall(req, res, { phone, toNumber, callSid, reason, userId = null, firstName = "" }) {
   const dynamicVariables = {
     ...generalCallVariables({ phone, reason, firstName }),
@@ -2659,6 +2702,10 @@ async function connectGeneralOnlyCall(req, res, { phone, toNumber, callSid, reas
     failureReason: reason,
     dynamicContext: { access: "general_only", reason }
   });
+
+  const nativeTwiml = redirectToNativeElevenLabsTwilio();
+  if (nativeTwiml) return sendVoiceTwiML(res, nativeTwiml);
+
   const twiml = await registerElevenLabsCall({ req, fromNumber: phone, toNumber, dynamicVariables });
   return sendVoiceTwiML(res, twiml);
 }
@@ -2676,6 +2723,10 @@ async function connectVerifiedCall(req, res, { phone, toNumber, callSid, userId,
     failure_reason: null,
     dynamic_context: { access: "private", identity_status: privateVariables.identity_status }
   });
+
+  const nativeTwiml = redirectToNativeElevenLabsTwilio();
+  if (nativeTwiml) return sendVoiceTwiML(res, nativeTwiml);
+
   const twiml = await registerElevenLabsCall({ req, fromNumber: phone, toNumber, dynamicVariables });
   return sendVoiceTwiML(res, twiml);
 }
@@ -3154,7 +3205,9 @@ app.post("/elevenlabs/twilio-personalize", personalizeLimiter, validatePersonali
     }
 
     const callSid = String(req.body?.call_sid || req.body?.CallSid || req.body?.callSid || "").trim();
-    const verifiedSession = callSid ? await getVoiceCallSessionBySid(callSid) : null;
+    const verifiedSession = callSid
+      ? await getVoiceCallSessionBySid(callSid)
+      : await getRecentVerifiedVoiceSessionByPhone(phone);
     if (!verifiedSession || verifiedSession.verification_status !== "verified" || !verifiedSession.user_id) {
       const user = await findVoiceUserByPhone(phone);
       const firstName = user?.full_name && user.full_name.toLowerCase() !== "null" ? user.full_name.split(" ")[0] : "";
