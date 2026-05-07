@@ -46,6 +46,7 @@ const AUTH_IP_RATE_LIMIT_MAX = envPositiveInt("AUTH_IP_RATE_LIMIT_MAX", 30);
 const PHONE_OTP_MAX_PER_HOUR = envPositiveInt("PHONE_OTP_MAX_PER_HOUR", 12);
 const GLOBAL_SMS_MAX_PER_HOUR = envPositiveInt("GLOBAL_SMS_MAX_PER_HOUR", 200);
 const POST_CALL_TRANSCRIPT_SMS_DELAY_MS = envPositiveInt("POST_CALL_TRANSCRIPT_SMS_DELAY_MS", 30000);
+const GUEST_SIGNUP_SMS_FALLBACK_DELAY_MS = envPositiveInt("GUEST_SIGNUP_SMS_FALLBACK_DELAY_MS", 5 * 60 * 1000);
 
 if (!process.env.DATA_ENCRYPTION_KEY && !process.env.MESSAGE_ENCRYPTION_KEY) {
   console.warn("⚠️ DATA_ENCRYPTION_KEY is not set. Falling back to JWT_SECRET-derived encryption; set a dedicated 32+ byte key before production rollout.");
@@ -2794,6 +2795,7 @@ async function connectGeneralOnlyCall(req, res, { phone, toNumber, callSid, reas
     failureReason: reason,
     dynamicContext: { access: "general_only", reason }
   });
+  scheduleGuestSignupSmsFallback({ phone, callSid, reason });
 
   const nativeTwiml = redirectToNativeElevenLabsTwilio();
   if (nativeTwiml) return sendVoiceTwiML(res, nativeTwiml);
@@ -3423,15 +3425,58 @@ async function generateShortCallTopic(transcriptText) {
 
 async function sendGuestSignupSms(phone, transcriptText) {
   if (!phone || !process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_PHONE_NUMBER) return;
+  if (!checkGlobalSmsLimit()) {
+    console.warn("Guest signup SMS skipped because global SMS circuit breaker is active.");
+    return;
+  }
   try {
-    const topic = await generateShortCallTopic(transcriptText);
+    const hasTranscript = String(transcriptText || "").trim().length >= 5;
+    const topic = hasTranscript ? await generateShortCallTopic(transcriptText) : "";
     const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
     const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
-    const message = `Great talking with you about ${topic}. If you want Director Compass to remember your calls, use your uploaded documents, and carry context across web, SMS, and phone, create your free account here:\n\n${APP_URL}`;
+    const message = hasTranscript
+      ? `Great talking with you about ${topic}. If you want Director Compass to remember your calls, use your uploaded documents, and carry context across web, SMS, and phone, create your free account here:\n\n${APP_URL}`
+      : `Thanks for calling Director Compass. If you want me to remember future calls, use your uploaded documents, and carry context across web, SMS, and phone, create your free account here:\n\n${APP_URL}`;
     await twilioClient.messages.create({ body: message, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
+    console.log(` Guest signup SMS sent to ${maskPhone(outboundPhone)}`);
   } catch (e) {
     console.error("Guest signup SMS failed:", e.message);
   }
+}
+
+const guestSignupFallbackTimers = new Map();
+
+function scheduleGuestSignupSmsFallback({ phone, callSid, reason }) {
+  if (!phone || !callSid || !/no account is linked/i.test(String(reason || ""))) return;
+  if (guestSignupFallbackTimers.has(callSid)) return;
+
+  const timer = setTimeout(async () => {
+    guestSignupFallbackTimers.delete(callSid);
+    try {
+      const session = await getVoiceCallSessionBySid(callSid);
+      if (session?.post_call_processed_at) {
+        console.log(`Guest signup fallback skipped for ${maskPhone(phone)} because post-call already handled it.`);
+        return;
+      }
+
+      const user = await findVoiceUserByPhone(phone);
+      if (user?.id) {
+        if (!user.voice_pin_hash) await sendVoicePinSetupSms(phone);
+      } else {
+        await sendGuestSignupSms(phone, "");
+      }
+
+      await updateVoiceCallSession(callSid, {
+        post_call_processed_at: new Date().toISOString(),
+        failure_reason: session?.failure_reason || "guest_signup_fallback_sent"
+      });
+    } catch (e) {
+      console.error("Guest signup fallback failed:", e.message);
+    }
+  }, GUEST_SIGNUP_SMS_FALLBACK_DELAY_MS);
+
+  guestSignupFallbackTimers.set(callSid, timer);
+  console.log(`Guest signup fallback scheduled for ${maskPhone(phone)} in ${Math.round(GUEST_SIGNUP_SMS_FALLBACK_DELAY_MS / 1000)}s.`);
 }
 
 function transcriptAskedAboutMemoryAccess(transcriptText = "") {
@@ -3530,13 +3575,16 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
       console.log("🔒 POST-CALL: General-only or unverified voice call. Skipping user memory/transcript storage.");
       const fallbackVoiceUser = voiceSession?.user_id ? null : await findVoiceUserByPhone(phone);
       const effectiveVoiceUserId = voiceSession?.user_id || fallbackVoiceUser?.id || null;
+      const generalFollowupAlreadyHandled = !!voiceSession?.post_call_processed_at;
       if (voiceSession?.call_sid) {
         await updateVoiceCallSession(voiceSession.call_sid, {
           post_call_processed_at: new Date().toISOString(),
           failure_reason: voiceSession.failure_reason || "not_pin_verified"
         });
       }
-      if (!effectiveVoiceUserId) {
+      if (generalFollowupAlreadyHandled) {
+        console.log("General-only post-call follow-up already handled by fallback. Skipping duplicate SMS.");
+      } else if (!effectiveVoiceUserId) {
         await sendGuestSignupSms(phone, transcriptText);
       } else if (
         /voice pin is not set yet/i.test(String(voiceSession?.failure_reason || "")) ||
