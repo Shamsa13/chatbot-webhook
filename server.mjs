@@ -451,6 +451,7 @@ const ELEVENLABS_AGENT_ID = process.env.ELEVENLABS_AGENT_ID || "";
 const ELEVENLABS_NATIVE_TWILIO_WEBHOOK_URL = process.env.ELEVENLABS_NATIVE_TWILIO_WEBHOOK_URL || "";
 const VOICE_PIN_PROMPT_AUDIO_URL = process.env.VOICE_PIN_PROMPT_AUDIO_URL || "";
 const VOICE_PIN_RETRY_AUDIO_URL = process.env.VOICE_PIN_RETRY_AUDIO_URL || "";
+const VOICE_PIN_INCOMPLETE_AUDIO_URL = process.env.VOICE_PIN_INCOMPLETE_AUDIO_URL || "";
 
 const RELATIONAL_BOUNDARY_PROTOCOL = `RELATIONAL AND SEXUAL BOUNDARY PROTOCOL:
 You are a professional AI board advisor, not a romantic partner, dating partner, lover, therapist, or exclusive emotional attachment.
@@ -1520,7 +1521,7 @@ async function getRecentUserMessages(userId, limit = 12) {
     const role = m.direction === "agent" ? "assistant" : "user";
     const ch = (m.channel || "sms").toUpperCase();
     const channelLabel = ch === "CALL" ? "CALL" : ch === "WEB" ? "WEB" : ch === "WA" ? "WA" : "SMS";
-    return { role, content: (m.text || "").trim(), channel: channelLabel };
+    return { role, content: (m.text || "").trim(), channel: channelLabel, createdAt: m.created_at || null };
   });
 }
 
@@ -1528,7 +1529,16 @@ function formatRecentHistoryForCall(msgs) {
   if (!msgs || !msgs.length) return "No recent history.";
   return msgs.map((m) => {
       const who = m.role === "assistant" ? "Agent" : "User";
-      return `${who} (via ${m.channel}): ${m.content}`;
+      const when = m.createdAt ? new Date(m.createdAt).toLocaleString("en-US", {
+        timeZone: "America/Toronto",
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZoneName: "short"
+      }) : "time unknown";
+      return `${when} - ${who} (via ${m.channel}): ${m.content}`;
     }).join("\n").trim();
 }
 
@@ -2310,14 +2320,31 @@ function voiceResponseWithMessage(message) {
   return twiml.toString();
 }
 
+function getCurrentContextLine() {
+  return `Current date/time for this conversation: ${new Date().toLocaleString("en-US", {
+    timeZone: "America/Toronto",
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short"
+  })}. Use this when describing whether something happened today, yesterday, earlier this week, or on a specific date.`;
+}
+
 function addVoicePinPrompt(gather, { retry = false, incomplete = false } = {}) {
-  const audioUrl = retry ? VOICE_PIN_RETRY_AUDIO_URL : VOICE_PIN_PROMPT_AUDIO_URL;
+  const audioUrl = incomplete
+    ? VOICE_PIN_INCOMPLETE_AUDIO_URL
+    : retry
+      ? VOICE_PIN_RETRY_AUDIO_URL
+      : VOICE_PIN_PROMPT_AUDIO_URL;
   if (audioUrl) {
     gather.play(audioUrl);
   } else {
-    let prompt = "Before I access your private notes and documents, please say or enter your four digit voice PIN.";
-    if (retry) prompt = "That PIN did not work. Please say or enter your four digit voice PIN.";
-    if (incomplete) prompt = "I did not catch all four digits. Please say or enter your complete four digit voice PIN.";
+    let prompt = "To connect you with your Director Compass, please say or enter your four digit Voice PIN.";
+    if (retry) prompt = "That PIN did not work. Please say or enter your four digit Voice PIN again.";
+    if (incomplete) prompt = "I did not catch all four digits. Please say or enter your complete four digit Voice PIN.";
     gather.say({ voice: "alice" }, prompt);
   }
 }
@@ -2382,7 +2409,8 @@ function generalCallVariables({ phone, reason, firstName = "" } = {}) {
   const accountUnlockProtocol = [
     "GENERAL CALL ACCOUNT UNLOCK RULE:",
     "This call does not have private account context loaded.",
-    "If the caller asks whether you will remember this conversation, use memory, use uploaded documents, or carry context across web/SMS/phone, explain briefly: 'I can do that after you sign in on the web and set up your Voice PIN. For this call I can keep things general. After we hang up, I will text you the link.'",
+    "If the caller asks whether you will remember this conversation, save memory, use uploaded documents, create an account, set a PIN, or carry context across web/SMS/phone, explain it in one short spoken answer:",
+    "'After this call, I will text you a link to the web version of Director Compass. There, you can create an account and set a four digit Voice PIN. After that, I can remember our conversations across calls, SMS, web chat, and any documents you upload.'",
     "Do not claim that this general-only call will be saved to their private memory."
   ].join(" ");
   return {
@@ -2398,6 +2426,7 @@ function generalCallVariables({ phone, reason, firstName = "" } = {}) {
     upcoming_events: "No private event context is available for this call.",
     transcript_protocol: "Do not offer to email or save a transcript for this call unless the caller signs in and completes account security first.",
     identity_status: reason || "general_only",
+    current_datetime: getCurrentContextLine(),
     account_unlock_protocol: accountUnlockProtocol,
     relational_boundary_protocol: RELATIONAL_BOUNDARY_PROTOCOL
   };
@@ -2447,6 +2476,7 @@ async function buildPrivateCallDynamicVariables(userId, phone, stirVerstat = "")
   const userDocs = await getUserDocumentsContext(userId);
   const conversationSummaries = await getRecentConversationSummaries(userId, 8);
   const condensedMemory = [
+    getCurrentContextLine(),
     RELATIONAL_BOUNDARY_PROTOCOL,
     memorySummary ? memorySummary.substring(0, 3000) : "",
     userDocs || "",
@@ -2469,6 +2499,7 @@ async function buildPrivateCallDynamicVariables(userId, phone, stirVerstat = "")
     upcoming_events: voiceEventContext,
     transcript_protocol: transcriptInstruction,
     identity_status: stirVerstat ? `pin_verified_attestation_${String(stirVerstat).toLowerCase()}` : "pin_verified_attestation_not_provided_allowed",
+    current_datetime: getCurrentContextLine(),
     relational_boundary_protocol: RELATIONAL_BOUNDARY_PROTOCOL
   };
 }
@@ -4699,7 +4730,7 @@ app.put("/api/web/profile", authenticateToken, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-async function sendVoicePinConfirmationSms(phone) {
+async function sendVoicePinConfirmationSms(phone, action = "set") {
   if (!phone || !process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_PHONE_NUMBER) return;
   if (!checkGlobalSmsLimit()) {
     console.warn("Voice PIN confirmation SMS skipped because global SMS circuit breaker is active.");
@@ -4707,8 +4738,13 @@ async function sendVoicePinConfirmationSms(phone) {
   }
   const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
   const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
+  const actionText = action === "change"
+    ? "changed"
+    : action === "recover_confirm"
+      ? "reset"
+      : "set";
   await twilioClient.messages.create({
-    body: "Your Director Compass voice PIN is set and your phone number is secured. You can safely call this number anytime. For privacy, I may ask for your PIN before using private account context.",
+    body: `Your Director Compass Voice PIN has been ${actionText} and your phone number is secured. You can safely call this number anytime. For privacy, I may ask for your PIN before using private account context.`,
     from: process.env.TWILIO_PHONE_NUMBER,
     to: outboundPhone
   });
@@ -4780,7 +4816,7 @@ app.post("/api/web/voice-pin", authenticateToken, async (req, res) => {
       }).eq("id", req.user.userId);
       if (error) throw error;
 
-      sendVoicePinConfirmationSms(cleanPhone).catch(e => console.error("Voice PIN confirmation SMS failed:", e.message));
+      sendVoicePinConfirmationSms(cleanPhone, action).catch(e => console.error("Voice PIN confirmation SMS failed:", e.message));
       return res.json({ success: true, has_voice_pin: true, voice_pin_set_at: new Date().toISOString() });
     }
 
