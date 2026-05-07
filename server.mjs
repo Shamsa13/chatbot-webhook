@@ -2451,6 +2451,15 @@ function extractVoicePinInput(req) {
   return extractPinFromSpeech(req.body?.SpeechResult || req.body?.UnstableSpeechResult || "");
 }
 
+function getFirstTimeSmsIntroText() {
+  return "Hi, I’m your Director Compass AI assistant. I’m an AI of David Beatty’s voice built so you can personally leverage my 50 years of governance expertise and become a boardroom leader.\n\nI’m always available by phone or chat. Save this number and try it out by giving me a call.";
+}
+
+function isSimpleSmsGreeting(text = "") {
+  const clean = sanitizeInboundText(text, 80).toLowerCase().replace(/[.!?,\s]+$/g, "").trim();
+  return /^(hi|hello|hey|hey there|hi there|hello there|good morning|good afternoon|good evening)$/.test(clean);
+}
+
 function generalCallVariables({ phone, reason, firstName = "" } = {}) {
   const name = firstName || "there";
   const reasonText = reason || "private context is not available for this call";
@@ -3098,6 +3107,25 @@ app.post("/twilio/sms", validateTwilioWebhook, async (req, res) => {
 
     smartProfileExtractor(userId, body, history, userDb?.full_name || null).catch(e => console.error("Extractor Error:", e.message || e));  
     let pitchCounts = userDb?.event_pitch_counts || {};
+    const firstTimeSms = !userDb?.vcard_sent;
+    const firstTimeSmsIntro = getFirstTimeSmsIntroText();
+
+    if (firstTimeSms && isSimpleSmsGreeting(body)) {
+      await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
+      res.status(200).type("text/xml").send(twimlReply(firstTimeSmsIntro));
+      console.log(" First-time SMS intro sent without extra model paragraph.");
+
+      const { error: introMsgErr } = await supabase.from("messages").insert(prepareMessageRecord({
+        conversation_id: conversationId,
+        channel: currentChannel,
+        direction: "agent",
+        text: firstTimeSmsIntro,
+        provider: "openai",
+        twilio_message_sid: null
+      }));
+      if (introMsgErr) console.error("First-time SMS intro insert error:", introMsgErr);
+      return;
+    }
     
     const hasValidSmsEmail = userDb?.email && userDb.email.toLowerCase() !== 'null' && userDb.email.trim() !== '';
     
@@ -3107,8 +3135,8 @@ app.post("/twilio/sms", validateTwilioWebhook, async (req, res) => {
 
     // We inject recentSummaries into the profileContext so David actually reads them
    let firstTimeSmsRule = "";
-    if (!userDb?.vcard_sent) {
-        firstTimeSmsRule = `\n\nCRITICAL RULE: This is the user's FIRST TIME texting you. You MUST seamlessly blend this concept into your response: "Hi, I’m your Director Compass ai assistant. I’m an AI of David Beatty’s voice built so you can personally leverage his 50 years of governance expertise and become a boardroom leader. I’m always available by phone or chat. Save this number and try it out by giving me a call." Do NOT be robotic about it—answer their question naturally, but ensure those key introductory points are warmly included.`;
+    if (firstTimeSms) {
+        firstTimeSmsRule = `\n\nCRITICAL RULE: This is the user's FIRST TIME texting you. Start with this intro exactly once: "${firstTimeSmsIntro}" If the user asked a substantive question, answer it briefly after the intro. Do not add a generic extra paragraph like "I am here to assist..." or "What boardroom issue is on your mind?"`;
 
         // Mark it as sent so he never introduces himself again!
        // Mark it as sent so he never introduces himself again!
@@ -3500,17 +3528,19 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
 
     if (!voiceSession || voiceSession.verification_status !== "verified" || !voiceSession.user_id) {
       console.log("🔒 POST-CALL: General-only or unverified voice call. Skipping user memory/transcript storage.");
+      const fallbackVoiceUser = voiceSession?.user_id ? null : await findVoiceUserByPhone(phone);
+      const effectiveVoiceUserId = voiceSession?.user_id || fallbackVoiceUser?.id || null;
       if (voiceSession?.call_sid) {
         await updateVoiceCallSession(voiceSession.call_sid, {
           post_call_processed_at: new Date().toISOString(),
           failure_reason: voiceSession.failure_reason || "not_pin_verified"
         });
       }
-      if (voiceSession && !voiceSession.user_id) {
+      if (!effectiveVoiceUserId) {
         await sendGuestSignupSms(phone, transcriptText);
       } else if (
-        voiceSession?.user_id &&
-        /voice pin is not set yet/i.test(String(voiceSession.failure_reason || ""))
+        /voice pin is not set yet/i.test(String(voiceSession?.failure_reason || "")) ||
+        (fallbackVoiceUser?.id && !fallbackVoiceUser.voice_pin_hash)
       ) {
         await sendVoicePinSetupSms(phone);
       }
@@ -4015,30 +4045,12 @@ app.post("/api/auth/oauth/verify-phone-code", otpLimiter, async (req, res) => {
 
 
 
-//   Web-First Welcome SMS Logic (With Invalid Number Protection)
-async function triggerWebWelcomeSMS(userId, phone, name) {
+// Web-first welcome SMS is intentionally disabled. Mark it handled so the sweeper does not retry.
+async function triggerWebWelcomeSMS(userId) {
   try {
-    const { data: user } = await supabase.from("users").select("vcard_sent").eq("id", userId).single();
-    if (user?.vcard_sent) return;
-
-    if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
-      const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-      const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
-      const firstName = (name && name !== 'null') ? name.split(' ')[0] : "there";
-      
-      const msg1 = `Hi ${firstName}, it's your Director Compass! I saw you were just using the web portal. Did you know you can also text or call this exact number anytime? My memory is shared across all platforms, so we can always pick up right where we left off. Save this number and try it out!`;
-      
-      await twilioClient.messages.create({ body: msg1, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
-      
-      await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
-      console.log(` Sent Web-First Welcome SMS to ${outboundPhone}`);
-    }
+    await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
   } catch (e) { 
-    console.error("Web Welcome SMS Error:", e.message);
-    if (isNonRetryableTwilioSmsError(e)) {
-      console.log(`🛑 Non-retryable SMS failure for ${maskPhone(phone)}. Flagging welcome SMS as handled so the sweeper stops retrying.`);
-      await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
-    }
+    console.error("Web welcome cleanup error:", e.message);
   }
 }
 
@@ -4765,7 +4777,7 @@ async function sendVoicePinConfirmationSms(phone, action = "set") {
       ? "reset"
       : "set";
   await twilioClient.messages.create({
-    body: `Your Director Compass Voice PIN has been ${actionText} and your phone number is secured. You can safely call this number anytime. For privacy, I may ask for your PIN before using private account context.`,
+    body: `Your Director Compass Voice PIN has been ${actionText} and your phone number is secured. You can safely call or text this number anytime. For privacy, I will ask for your PIN before using private account context during calls.`,
     from: process.env.TWILIO_PHONE_NUMBER,
     to: outboundPhone
   });
