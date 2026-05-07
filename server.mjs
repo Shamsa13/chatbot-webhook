@@ -2463,13 +2463,13 @@ function isSimpleSmsGreeting(text = "") {
 
 function generalCallVariables({ phone, reason, firstName = "" } = {}) {
   const name = firstName || "there";
-  const reasonText = reason || "private context is not available for this call";
-  const generalOpening = "Before we begin, this call is in general mode, so I will not remember anything from this call or use your private memory, uploaded documents, or cross-platform history. After the call, I will text you a link to the web version of Director Compass. If you create an account and set a four digit Voice PIN, I can remember future conversations across calls, SMS, web chat, and your uploaded documents. How can I help today?";
+  const generalFirstGreeting = firstName
+    ? `Hi ${name}, I am your Director Compass. I can help with general board questions today. For me to remember what we talk about across text, calls, web chats, and documents uploaded on the web, you will need to create an account on the web and set up a four digit Voice PIN. After this call ends, I will send you a link to where you can do this. How can I help today?`
+    : "Hi, I am your Director Compass. I can help with general board questions today. For me to remember what we talk about across text, calls, web chats, and documents uploaded on the web, you will need to create an account on the web and set up a four digit Voice PIN. After this call ends, I will send you a link to where you can do this. How can I help today?";
   const accountUnlockProtocol = [
-    "GENERAL CALL ACCOUNT UNLOCK RULE:",
+    "GENERAL CALL OPENING RULE:",
     "This call does not have private account context loaded.",
-    "Your first spoken message must clearly explain that you will not remember this call, will not use private memory or uploaded documents, and will text a web signup link after the call.",
-    `Use this as the opening idea: "${generalOpening}"`,
+    `Your first spoken response must use this exact script: "${generalFirstGreeting}"`,
     "If the caller later asks whether you will remember this conversation, save memory, use uploaded documents, create an account, set a PIN, or carry context across web/SMS/phone, briefly restate the same answer.",
     "Do not claim that this general-only call will be saved to their private memory."
   ].join(" ");
@@ -2478,14 +2478,12 @@ function generalCallVariables({ phone, reason, firstName = "" } = {}) {
     caller_phone: firstName || "Unknown caller",
     channel: "call",
     recent_history: "No private history is available for this call.",
-    first_greeting: firstName
-      ? `Hi ${name}. ${generalOpening}`
-      : `Hi, I am your Director Compass. ${generalOpening}`,
+    first_greeting: generalFirstGreeting,
     user_name: firstName || "Unknown",
     caller_phone_masked: phone ? maskPhone(phone) : "",
     upcoming_events: "No private event context is available for this call.",
     transcript_protocol: "Do not offer to email or save a transcript for this call unless the caller signs in and completes account security first.",
-    identity_status: reason || "general_only",
+    identity_status: reason || "general_only_account_setup_required",
     current_datetime: getCurrentContextLine(),
     account_unlock_protocol: accountUnlockProtocol,
     relational_boundary_protocol: RELATIONAL_BOUNDARY_PROTOCOL
@@ -3335,7 +3333,7 @@ app.post("/elevenlabs/twilio-personalize", personalizeLimiter, validatePersonali
         dynamic_variables: generalCallVariables({
           phone,
           firstName,
-          reason: verifiedSession ? "the Voice PIN has not been verified" : "this call did not pass through Voice PIN verification"
+          reason: "general_only_account_setup_required"
         })
       });
     }
