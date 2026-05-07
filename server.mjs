@@ -45,6 +45,7 @@ function envPositiveInt(name, fallback) {
 const AUTH_IP_RATE_LIMIT_MAX = envPositiveInt("AUTH_IP_RATE_LIMIT_MAX", 30);
 const PHONE_OTP_MAX_PER_HOUR = envPositiveInt("PHONE_OTP_MAX_PER_HOUR", 12);
 const GLOBAL_SMS_MAX_PER_HOUR = envPositiveInt("GLOBAL_SMS_MAX_PER_HOUR", 200);
+const POST_CALL_TRANSCRIPT_SMS_DELAY_MS = envPositiveInt("POST_CALL_TRANSCRIPT_SMS_DELAY_MS", 30000);
 
 if (!process.env.DATA_ENCRYPTION_KEY && !process.env.MESSAGE_ENCRYPTION_KEY) {
   console.warn("⚠️ DATA_ENCRYPTION_KEY is not set. Falling back to JWT_SECRET-derived encryption; set a dedicated 32+ byte key before production rollout.");
@@ -525,6 +526,15 @@ function checkGlobalSmsLimit() {
   }
   globalSmsCap.count++;
   return true;
+}
+
+function isNonRetryableTwilioSmsError(error) {
+  const code = String(error?.code || "");
+  const message = String(error?.message || "");
+  return code === "21211" ||
+    code === "21408" ||
+    /not a valid phone number/i.test(message) ||
+    /permission to send an sms has not been enabled for the region/i.test(message);
 }
 
 // 🔒 PER-PHONE VERIFY ATTEMPT TRACKER — Stops OTP brute force attacks
@@ -1888,6 +1898,44 @@ async function triggerGoogleAppsScript(email, name, transcriptId, description, a
   }
 }
 
+async function triggerGoogleAppsScriptInstantFetch(transcriptId, audit = {}) {
+  if (!GOOGLE_SCRIPT_WEBHOOK_URL || !transcriptId) return;
+  try {
+    console.log("🚀 Triggering Google Apps Script instant transcript fetch...");
+    const gsResponse = await fetch(GOOGLE_SCRIPT_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "fetch_transcripts", transcriptId })
+    });
+    const gsText = await gsResponse.text();
+    console.log(` Google Script Response: ${gsText.substring(0, 200)}`);
+    const gsResult = parseGoogleScriptResult(gsResponse.status, gsText);
+    if (!gsResult.ok) {
+      logError({
+        userId: audit.userId,
+        channel: audit.channel || "call",
+        stage: "Google Apps Script Instant Fetch",
+        message: gsResult.message,
+        details: {
+          statusCode: gsResult.statusCode,
+          scriptStatus: gsResult.scriptStatus,
+          transcriptId,
+          responsePreview: gsResult.preview
+        }
+      });
+    }
+  } catch (gsErr) {
+    console.error("❌ Google Script trigger FAILED:", gsErr.message);
+    logError({
+      userId: audit.userId,
+      channel: audit.channel || "call",
+      stage: "Google Apps Script Instant Fetch",
+      message: gsErr.message,
+      details: { transcriptId }
+    });
+  }
+}
+
 async function incrementEmailedTranscripts(userId) {
   try {
     const { data } = await supabase.from("users").select("transcripts_emailed").eq("id", userId).single();
@@ -2604,6 +2652,10 @@ function extractElevenCallSid(body) {
   return String(findDeepValue(body, ["twilio_call_sid", "call_sid", "CallSid", "callSid"]) || "").trim();
 }
 
+function extractElevenConversationId(body) {
+  return String(findDeepValue(body, ["conversation_id", "conversationId", "elevenlabs_conversation_id"]) || "").trim();
+}
+
 async function findVoiceCallSessionForPostCall({ body, transcriptId, phone }) {
   const callSid = extractElevenCallSid(body);
   if (callSid) {
@@ -3213,6 +3265,8 @@ app.post("/elevenlabs/twilio-personalize", personalizeLimiter, validatePersonali
     if (!phone) return res.status(200).json({ dynamic_variables: { memory_summary: "", caller_phone: "", channel: "call", recent_history: "", first_greeting: "" } });
 
     const stirVerstat = getStirVerstat(req);
+    const callSid = String(req.body?.call_sid || req.body?.CallSid || req.body?.callSid || "").trim();
+    const personalizeConversationId = extractElevenConversationId(req.body);
     if (!isCallerAttestationAllowed(stirVerstat)) {
       console.warn(`🚫 Voice personalization withheld for ${maskPhone(phone)} due to failed STIR/SHAKEN validation: ${stirVerstat}`);
       logError({
@@ -3235,10 +3289,13 @@ app.post("/elevenlabs/twilio-personalize", personalizeLimiter, validatePersonali
       });
     }
 
-    const callSid = String(req.body?.call_sid || req.body?.CallSid || req.body?.callSid || "").trim();
     const verifiedSession = callSid
       ? await getVoiceCallSessionBySid(callSid)
       : await getRecentVerifiedVoiceSessionByPhone(phone);
+    if (verifiedSession?.call_sid && personalizeConversationId) {
+      updateVoiceCallSession(verifiedSession.call_sid, { elevenlabs_conversation_id: personalizeConversationId })
+        .catch(e => console.error("Voice session conversation id update failed:", e.message));
+    }
     if (!verifiedSession || verifiedSession.verification_status !== "verified" || !verifiedSession.user_id) {
       const user = await findVoiceUserByPhone(phone);
       const firstName = user?.full_name && user.full_name.toLowerCase() !== "null" ? user.full_name.split(" ")[0] : "";
@@ -3567,42 +3624,7 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
         console.log(" Transcript saved to user record");
       }
 
-      if (GOOGLE_SCRIPT_WEBHOOK_URL) {
-        console.log("🚀 Triggering Google Apps Script...");
-        try {
-          const gsResponse = await fetch(GOOGLE_SCRIPT_WEBHOOK_URL, { 
-            method: "POST", 
-            headers: { "Content-Type": "application/json" }, 
-            body: JSON.stringify({ action: "fetch_transcripts", transcriptId }) 
-          });
-          const gsText = await gsResponse.text();
-          console.log(` Google Script Response: ${gsText.substring(0, 200)}`);
-          const gsResult = parseGoogleScriptResult(gsResponse.status, gsText);
-          if (!gsResult.ok) {
-            logError({
-              userId,
-              channel: "call",
-              stage: "Google Apps Script Instant Fetch",
-              message: gsResult.message,
-              details: {
-                statusCode: gsResult.statusCode,
-                scriptStatus: gsResult.scriptStatus,
-                transcriptId,
-                responsePreview: gsResult.preview
-              }
-            });
-          }
-        } catch (gsErr) {
-          console.error("❌ Google Script trigger FAILED:", gsErr.message);
-          logError({
-            userId,
-            channel: "call",
-            stage: "Google Apps Script Instant Fetch",
-            message: gsErr.message,
-            details: { transcriptId }
-          });
-        }
-      }
+      triggerGoogleAppsScriptInstantFetch(transcriptId, { userId, channel: "call" });
 
       if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
         const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
@@ -3661,7 +3683,7 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
   } catch (smsErr) {
     console.error("❌ Failed to send delayed SMS:", smsErr.message);
   }
-}, 120000);
+}, POST_CALL_TRANSCRIPT_SMS_DELAY_MS);
       }
     }
 
@@ -4013,9 +4035,8 @@ async function triggerWebWelcomeSMS(userId, phone, name) {
     }
   } catch (e) { 
     console.error("Web Welcome SMS Error:", e.message);
-    // If Twilio says the number is fake/invalid (code 21211), mark it sent so we stop retrying forever
-    if (e.code === 21211) {
-      console.log(`🛑 Invalid phone number detected (${phone}). Flagging to ignore in future sweeps.`);
+    if (isNonRetryableTwilioSmsError(e)) {
+      console.log(`🛑 Non-retryable SMS failure for ${maskPhone(phone)}. Flagging welcome SMS as handled so the sweeper stops retrying.`);
       await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
     }
   }
@@ -4130,7 +4151,7 @@ setInterval(async () => {
             console.log(`✅ Sent 3-Day Web Upsell SMS to ${outboundPhone}`);
           } catch (e) {
             console.error("Upsell SMS failed for " + outboundPhone, e.message);
-            if (e.code === 21211) await supabase.from("users").update({ web_upsell_sent: true }).eq("id", u.id);
+            if (isNonRetryableTwilioSmsError(e)) await supabase.from("users").update({ web_upsell_sent: true }).eq("id", u.id);
           }
         }
       }
