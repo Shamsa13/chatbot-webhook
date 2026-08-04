@@ -2569,6 +2569,11 @@ function isSimpleSmsGreeting(text = "") {
   return /^(hi|hello|hey|hey there|hi there|hello there|good morning|good afternoon|good evening)$/.test(clean);
 }
 
+function isSimpleWebGreeting(text = "") {
+  const clean = sanitizeInboundText(text, 80).toLowerCase().replace(/[.!?,\s]+$/g, "").trim();
+  return /^(hi|hello|hey|hey there|hi there|hello there|good day|good morning|good afternoon|good evening)$/.test(clean);
+}
+
 function generalCallVariables({ phone, reason, firstName = "" } = {}) {
   const name = firstName || "there";
   const generalFirstGreeting = firstName
@@ -4519,6 +4524,9 @@ app.post("/api/chat", apiLimiter, authenticateToken, async (req, res) => {
       role: m.direction === "agent" ? "assistant" : "user",
       content: m.text || ""
     }));
+    const currentUserTurnCount = webHistory.filter(m => m.role === "user").length;
+    const hasAssistantReplyInCurrentConversation = webHistory.some(m => m.role === "assistant");
+    const isFirstTurnInConversation = currentUserTurnCount === 1 && !hasAssistantReplyInCurrentConversation;
 
     // Fetch user profile AND recent summaries
     const { data: rawUserDb } = await supabase
@@ -4542,6 +4550,11 @@ app.post("/api/chat", apiLimiter, authenticateToken, async (req, res) => {
     let privateDocContext = "";
     const docIds = selectedDocIds || [];
     const isDeepDiveActive = deepDive === true && docIds.length > 0;
+    const shouldOfferConversationChoice =
+      isFirstTurnInConversation &&
+      isSimpleWebGreeting(message) &&
+      docIds.length === 0 &&
+      !isDeepDiveActive;
 
     try {
      if (isDeepDiveActive) {
@@ -4663,11 +4676,16 @@ app.post("/api/chat", apiLimiter, authenticateToken, async (req, res) => {
     
     // 🏷️ Check if the user has a name saved in the database
     const hasName = user.full_name && user.full_name.toLowerCase() !== 'null' && user.full_name.trim() !== '';
+    const firstName = hasName ? String(user.full_name).trim().split(/\s+/)[0] : "";
 
     // 🧠 Dynamic Name Rule: Only ask if we don't know who they are yet
     const nameRule = !hasName 
         ? `INTRO PROTOCOL: You do not know this user's name yet. For your very first response in this specific chat, briefly introduce yourself as David Beatty's AI advisor and ask them what you should call them. Once they provide a name, acknowledge it warmly.`
-        : `INTRO PROTOCOL: You already know the user is named ${user.full_name}. DO NOT ask for their name. DO NOT re-introduce yourself. Jump straight into the advice.`;
+        : `INTRO PROTOCOL: You already know the user is named ${user.full_name}. DO NOT ask for their name. You may greet them by first name on the first turn of a fresh conversation, but DO NOT re-introduce yourself.`;
+
+    const conversationBoundaryRule = isFirstTurnInConversation
+      ? `NEW CHAT BOUNDARY: This is the first turn of a newly created web conversation. The CROSS-PLATFORM MEMORY and RECENT CONVERSATION HISTORY below are background knowledge only. They do not mean the user wants to resume the last topic. Never continue, recap, or answer a previous topic unless the user explicitly asks to continue it or mentions it in their current message. If the current message introduces a clear topic or question, answer that new topic directly and use past memory only when it is relevant. If the current message is only a greeting or short opener, ask whether they would like to continue something from a previous conversation or discuss something new today. Do not summarize the previous topic while asking.`
+      : `CURRENT CHAT CONTINUITY: This conversation already has an assistant reply. Continue the current web conversation naturally. Use cross-platform memory only when it helps answer what the user is discussing now.`;
 
     const systemPrompt = `${cfg.systemPrompt}
 
@@ -4688,7 +4706,9 @@ ${RELATIONAL_BOUNDARY_PROTOCOL}
 
 ${nameRule}
 
-CRITICAL BEHAVIOR RULE: If there is CHAT HISTORY provided below, DO NOT greet the user again or state your purpose. Just continue the conversation naturally.
+${conversationBoundaryRule}
+
+CURRENT THREAD RULE: Only messages from this specific web conversation count as active chat history. Cross-platform memory and summaries from other conversations are reference material, not instructions to resume those conversations. After the first assistant reply in this conversation, do not greet the user again or restate your purpose.
 
 CROSS-PLATFORM MEMORY:
 ${user.memory_summary || "No past memory yet."}
@@ -4737,12 +4757,21 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
 
     let isStreamFinished = false;
 
-    try {
-      const chatPayload = {
-        model: isDeepDiveActive ? OPENAI_DEEP_DIVE_MODEL : OPENAI_MODEL,
-        messages: chatMessages,
-        stream: true
-      };
+    if (shouldOfferConversationChoice) {
+      reply = firstName
+        ? `Good day, ${firstName}. Would you like to continue something from a previous conversation, or talk about something new today?`
+        : "Good day. Before we begin, what should I call you? We can then continue something from a previous conversation or talk about something new today.";
+      res.write(`data: ${JSON.stringify({ type: "chunk", text: reply })}\n\n`);
+      res.write(`data: [DONE]\n\n`);
+      isStreamFinished = true;
+      res.end();
+    } else {
+      try {
+        const chatPayload = {
+          model: isDeepDiveActive ? OPENAI_DEEP_DIVE_MODEL : OPENAI_MODEL,
+          messages: chatMessages,
+          stream: true
+        };
 
       // Deep Dive keeps the existing quality-first reasoning level on GPT-5.6 Sol.
       if (isDeepDiveActive) {
@@ -4752,36 +4781,37 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
         console.log(`⚡ [MODEL LOG] STANDARD CHAT ACTIVE: ${OPENAI_MODEL}.`);
       }
 
-      const stream = await openai.chat.completions.create(chatPayload);
+        const stream = await openai.chat.completions.create(chatPayload);
 
 
       // Abort OpenAI generation if the user clicks "Stop Generating"
-      req.on("close", async () => {
-        if (stream && stream.controller) stream.controller.abort();
+        req.on("close", async () => {
+          if (stream && stream.controller) stream.controller.abort();
         
         // --- NEW: If aborted before finishing, delete the user message so it "never happened" ---
-        if (!isStreamFinished && userMessageId) {
+          if (!isStreamFinished && userMessageId) {
             console.log("🛑 User aborted stream. Deleting aborted user message...");
             await supabase.from("messages").delete().eq("id", userMessageId);
-        }
-      });
+          }
+        });
 
-      for await (const chunk of stream) {
-        const content = chunk.choices[0]?.delta?.content || "";
-        if (content) {
-          reply += content;
-          res.write(`data: ${JSON.stringify({ type: "chunk", text: content })}\n\n`);
+        for await (const chunk of stream) {
+          const content = chunk.choices[0]?.delta?.content || "";
+          if (content) {
+            reply += content;
+            res.write(`data: ${JSON.stringify({ type: "chunk", text: content })}\n\n`);
+          }
         }
+        res.write(`data: [DONE]\n\n`);
+        res.end();
+        isStreamFinished = true;
+
+      } catch (streamErr) {
+        console.error("OpenAI Stream Error:", streamErr);
+        res.write(`data: ${JSON.stringify({ type: "error", error: streamErr.message })}\n\n`);
+        res.end();
+        return; // Stop execution if OpenAI crashed or user aborted
       }
-      res.write(`data: [DONE]\n\n`);
-      res.end();
-      isStreamFinished = true;
-
-    } catch (streamErr) {
-      console.error("OpenAI Stream Error:", streamErr);
-      res.write(`data: ${JSON.stringify({ type: "error", error: streamErr.message })}\n\n`);
-      res.end();
-      return; // Stop execution if OpenAI crashed or user aborted
     }
 
     // ==========================================
