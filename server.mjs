@@ -444,6 +444,7 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBL
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const GOOGLE_SCRIPT_WEBHOOK_URL = process.env.GOOGLE_SCRIPT_WEBHOOK_URL || "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.5";
+const OPENAI_DEEP_DIVE_MODEL = process.env.OPENAI_DEEP_DIVE_MODEL || "gpt-5.6-sol";
 const OPENAI_MEMORY_MODEL = process.env.OPENAI_MEMORY_MODEL || "gpt-4o-mini";
 const HEYGEN_API_KEY = process.env.HEYGEN_API_KEY || "";
 const HEYGEN_AVATAR_ID = process.env.HEYGEN_AVATAR_ID || "";
@@ -454,6 +455,9 @@ const ELEVENLABS_NATIVE_TWILIO_WEBHOOK_URL = process.env.ELEVENLABS_NATIVE_TWILI
 const VOICE_PIN_PROMPT_AUDIO_URL = process.env.VOICE_PIN_PROMPT_AUDIO_URL || "";
 const VOICE_PIN_RETRY_AUDIO_URL = process.env.VOICE_PIN_RETRY_AUDIO_URL || "";
 const VOICE_PIN_INCOMPLETE_AUDIO_URL = process.env.VOICE_PIN_INCOMPLETE_AUDIO_URL || "";
+const VOICE_PIN_ERROR_AUDIO_URL = process.env.VOICE_PIN_ERROR_AUDIO_URL || "";
+const VOICE_CALL_VERIFY_ERROR_AUDIO_URL = process.env.VOICE_CALL_VERIFY_ERROR_AUDIO_URL || "";
+const VOICE_SERVICE_ERROR_AUDIO_URL = process.env.VOICE_SERVICE_ERROR_AUDIO_URL || "";
 
 const RELATIONAL_BOUNDARY_PROTOCOL = `RELATIONAL AND SEXUAL BOUNDARY PROTOCOL:
 You are a professional AI board advisor, not a romantic partner, dating partner, lover, therapist, or exclusive emotional attachment.
@@ -978,14 +982,69 @@ setInterval(refreshEventsCache, 60 * 60 * 1000);
 console.log("ENV CHECK", {
   openaiKeyLen: OPENAI_API_KEY.length,
   model: OPENAI_MODEL,
+  deepDiveModel: OPENAI_DEEP_DIVE_MODEL,
   memoryModel: OPENAI_MEMORY_MODEL,
   supabaseUrl: SUPABASE_URL
 });
 // ============================================
 // SESSION INACTIVITY TRACKER
-// Fires conversation summary after 5 min idle
+// A new session starts after the prior session has been idle for 10 minutes.
 // ============================================
+const SESSION_INACTIVITY_MS = 10 * 60 * 1000;
 const sessionTimers = new Map(); // key: `${userId}:${channel}` -> { timer, conversationId, turns[] }
+
+async function notifySessionStartIfNeeded({ userId, conversationId, channel, phone = "" }) {
+  const normalizedChannel = String(channel || "").toLowerCase();
+  if (!userId || !conversationId || !["web", "sms", "wa"].includes(normalizedChannel)) return false;
+
+  const key = `${userId}:${normalizedChannel}`;
+  if (sessionTimers.has(key)) return false;
+
+  // Reserve the session immediately so simultaneous messages cannot send duplicate notifications.
+  const session = {
+    conversationId,
+    turns: [],
+    timer: null,
+    startedAt: Date.now()
+  };
+
+  session.timer = setTimeout(() => {
+    if (sessionTimers.get(key) === session && session.turns.length === 0) {
+      sessionTimers.delete(key);
+    }
+  }, SESSION_INACTIVITY_MS);
+  sessionTimers.set(key, session);
+
+  try {
+    let displayName = "Unknown user";
+    let sessionPhone = phone;
+
+    const { data: rawUser, error } = await supabase
+      .from("users")
+      .select("full_name, phone")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (error) {
+      console.error("Session Slack user lookup failed:", error.message);
+    } else if (rawUser) {
+      const user = decryptUserRecord(rawUser);
+      displayName = String(user?.full_name || "").trim() || displayName;
+      sessionPhone = sessionPhone || user?.phone || "";
+    }
+
+    await sendSessionStartToSlack({
+      channel: normalizedChannel,
+      displayName,
+      phone: sessionPhone,
+      conversationId
+    });
+  } catch (e) {
+    console.error("Session Slack notification failed:", e.message);
+  }
+
+  return true;
+}
 
 function scheduleSessionSummary(userId, conversationId, channel, userText, assistantText) {
   const key = `${userId}:${channel}`;
@@ -995,7 +1054,7 @@ function scheduleSessionSummary(userId, conversationId, channel, userText, assis
   
   if (session) {
     // Session exists — cancel the old timer and append the new turn
-    clearTimeout(session.timer);
+    if (session.timer) clearTimeout(session.timer);
     session.turns.push({ userText, assistantText });
     session.conversationId = conversationId; // keep updated
   } else {
@@ -1008,9 +1067,9 @@ function scheduleSessionSummary(userId, conversationId, channel, userText, assis
     sessionTimers.set(key, session);
   }
 
-  // Set a fresh 5-minute inactivity timer
-// Set a fresh 10-minute inactivity timer
+  // Set a fresh 10-minute inactivity timer.
   session.timer = setTimeout(async () => {
+    if (sessionTimers.get(key) !== session) return;
     sessionTimers.delete(key); // Clear from map — next message = fresh session
     
     //   NEW: Threshold Check (6 turns = 12 messages total)
@@ -1040,7 +1099,7 @@ function scheduleSessionSummary(userId, conversationId, channel, userText, assis
     } catch (e) {
       console.error(`❌ Session summary failed for ${key}:`, e.message);
     }
-  }, 10 * 60 * 1000); // 5 minutes
+  }, SESSION_INACTIVITY_MS);
 
   sessionTimers.set(key, session);
   console.log(`🕐 Session timer reset for ${key} (${session.turns.length} turns buffered)`);
@@ -1098,18 +1157,59 @@ function sendVoiceTwiML(res, twiml) {
   return res.status(200).type("text/xml").send(twiml);
 }
 
-//   NEW: Function to push messages directly to your Slack channel
-async function sendToSlack(message) {
-  if (!SLACK_WEBHOOK_URL) return; // Skips if you haven't added the URL to Render yet
+async function postToSlack(message) {
+  if (!SLACK_WEBHOOK_URL) return false;
+
   try {
-    await fetch(SLACK_WEBHOOK_URL, {
+    const response = await fetch(SLACK_WEBHOOK_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: `🚨 *Director Compass Error Alert* 🚨\n${message}` })
+      body: JSON.stringify({ text: message })
     });
+
+    if (!response.ok) {
+      console.error("Slack webhook failed:", response.status, (await response.text()).slice(0, 300));
+      return false;
+    }
+
+    return true;
   } catch (e) {
     console.error("Slack webhook failed:", e.message);
+    return false;
   }
+}
+
+async function sendToSlack(message) {
+  return postToSlack(`🚨 *Director Compass Error Alert* 🚨\n${message}`);
+}
+
+function cleanSlackValue(value, fallback = "Not available") {
+  const clean = String(value || "").replace(/\s+/g, " ").trim().slice(0, 160);
+  return (clean || fallback).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+async function sendSessionStartToSlack({ channel, displayName, phone, conversationId }) {
+  const channelLabel = channel === "wa" ? "WhatsApp" : channel === "sms" ? "SMS" : "Web";
+  const startedAt = new Date().toLocaleString("en-CA", {
+    timeZone: "America/Toronto",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short"
+  });
+
+  const lines = [
+    "🔔 *New Director Compass Session*",
+    `*Channel:* ${channelLabel}`,
+    `*User:* ${cleanSlackValue(displayName)}`,
+    `*Phone:* ${phone ? cleanSlackValue(maskPhone(phone)) : "Not available"}`,
+    `*Started:* ${startedAt}`,
+    `*Conversation ID:* \`${cleanSlackValue(conversationId)}\``
+  ];
+
+  return postToSlack(lines.join("\n"));
 }
 
 function formatAlertDetails(details) {
@@ -2362,10 +2462,18 @@ function validateTwilioWebhook(req, res, next) {
   next();
 }
 
-function voiceResponseWithMessage(message) {
+const VOICE_PIN_ERROR_MESSAGE = "I could not verify the PIN. I can help with general questions only.";
+const VOICE_CALL_VERIFY_ERROR_MESSAGE = "We could not verify this call. I can help with general questions only.";
+const VOICE_SERVICE_ERROR_MESSAGE = "The voice assistant is temporarily unavailable. Please try again soon.";
+
+function voiceResponseWithMessage(message, audioUrl = "") {
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
-  twiml.say({ voice: "alice" }, message);
+  if (audioUrl) {
+    twiml.play(audioUrl);
+  } else {
+    twiml.say({ voice: "alice" }, message);
+  }
   return twiml.toString();
 }
 
@@ -2703,7 +2811,7 @@ async function findVoiceCallSessionForPostCall({ body, transcriptId, phone }) {
 
 async function registerElevenLabsCall({ req, fromNumber, toNumber, dynamicVariables }) {
   if (!ELEVENLABS_API_KEY || !ELEVENLABS_AGENT_ID) {
-    return voiceResponseWithMessage("The voice assistant is not fully configured yet. Please try again later.");
+    return voiceResponseWithMessage(VOICE_SERVICE_ERROR_MESSAGE, VOICE_SERVICE_ERROR_AUDIO_URL);
   }
 
   const response = await fetch("https://api.elevenlabs.io/v1/convai/twilio/register-call", {
@@ -2726,7 +2834,7 @@ async function registerElevenLabsCall({ req, fromNumber, toNumber, dynamicVariab
   const text = await response.text();
   if (!response.ok) {
     console.error("ElevenLabs register-call failed:", response.status, text.slice(0, 500));
-    return voiceResponseWithMessage("The voice assistant is temporarily unavailable. Please try again soon.");
+    return voiceResponseWithMessage(VOICE_SERVICE_ERROR_MESSAGE, VOICE_SERVICE_ERROR_AUDIO_URL);
   }
 
   try {
@@ -2833,7 +2941,7 @@ app.post("/twilio/voice", validateTwilioWebhook, async (req, res) => {
     const stirVerstat = getStirVerstat(req);
 
     if (!phone || !callSid) {
-      return sendVoiceTwiML(res, voiceResponseWithMessage("We could not read this call. Please try again."));
+      return sendVoiceTwiML(res, voiceResponseWithMessage(VOICE_CALL_VERIFY_ERROR_MESSAGE, VOICE_CALL_VERIFY_ERROR_AUDIO_URL));
     }
 
     if (!isCallerAttestationAllowed(stirVerstat)) {
@@ -2892,7 +3000,7 @@ app.post("/twilio/voice", validateTwilioWebhook, async (req, res) => {
   } catch (e) {
     console.error("Voice pre-gate error:", e.message);
     logError({ channel: "call", stage: "Twilio Voice Pregate", message: e.message });
-    return sendVoiceTwiML(res, voiceResponseWithMessage("The voice assistant is temporarily unavailable. Please try again soon."));
+    return sendVoiceTwiML(res, voiceResponseWithMessage(VOICE_SERVICE_ERROR_MESSAGE, VOICE_SERVICE_ERROR_AUDIO_URL));
   }
 });
 
@@ -2905,7 +3013,7 @@ app.post("/twilio/voice-pin", validateTwilioWebhook, async (req, res) => {
     const submittedPin = extractVoicePinInput(req);
 
     if (!phone || !callSid) {
-      return sendVoiceTwiML(res, voiceResponseWithMessage("We could not verify this call. I can help with general questions only."));
+      return sendVoiceTwiML(res, voiceResponseWithMessage(VOICE_CALL_VERIFY_ERROR_MESSAGE, VOICE_CALL_VERIFY_ERROR_AUDIO_URL));
     }
 
     const session = await getVoiceCallSessionBySid(callSid);
@@ -3004,7 +3112,7 @@ app.post("/twilio/voice-pin", validateTwilioWebhook, async (req, res) => {
   } catch (e) {
     console.error("Voice PIN verification error:", e.message);
     logError({ channel: "call", stage: "Twilio Voice PIN", message: e.message });
-    return sendVoiceTwiML(res, voiceResponseWithMessage("I could not verify the PIN. I can help with general questions only."));
+    return sendVoiceTwiML(res, voiceResponseWithMessage(VOICE_PIN_ERROR_MESSAGE, VOICE_PIN_ERROR_AUDIO_URL));
   }
 });
 
@@ -3053,6 +3161,13 @@ app.post("/twilio/sms", validateTwilioWebhook, async (req, res) => {
       }
       throw new Error("messages insert failed: " + inErr.message);
     }
+
+    notifySessionStartIfNeeded({
+      userId,
+      conversationId,
+      channel: currentChannel,
+      phone: cleanPhone
+    }).catch(e => console.error("SMS session notification failed:", e.message));
 
     if (/^lock$/i.test(body)) {
       const lockedOk = await setSmsLocked(userId, true);
@@ -4378,6 +4493,12 @@ app.post("/api/chat", apiLimiter, authenticateToken, async (req, res) => {
     if (userErr) console.error("🚨 DB REJECTED USER MSG:", userErr.message);     
     const userMessageId = userMsgData?.id;   
 
+    notifySessionStartIfNeeded({
+      userId,
+      conversationId,
+      channel: "web"
+    }).catch(e => console.error("Web session notification failed:", e.message));
+
     // 🔒 PROMPT INJECTION SCAN — Log suspicious messages but do not block (to avoid false positives)
     const injectionScan = scanForInjection(message);
     if (!injectionScan.isClean) {
@@ -4420,10 +4541,10 @@ app.post("/api/chat", apiLimiter, authenticateToken, async (req, res) => {
     // User document vector search OR Deep Dive
     let privateDocContext = "";
     const docIds = selectedDocIds || [];
-    let currentChatModel = OPENAI_MODEL; // Default to gpt-4o
+    const isDeepDiveActive = deepDive === true && docIds.length > 0;
 
     try {
-     if (deepDive && docIds.length > 0) {
+     if (isDeepDiveActive) {
         // 🤿 DEEP DIVE MODE ACTIVATED
         console.log("🤿 DEEP DIVE ACTIVATED! Fetching full documents...");
         
@@ -4602,7 +4723,7 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
       { role: "user", content: message }
     ];
 
-    if (deepDive && docIds.length > 0) {
+    if (isDeepDiveActive) {
       const deepDiveUsage = await checkAndRecordDeepDiveUsage(userId);
       if (!deepDiveUsage.allowed) {
           reply = `You have reached your daily limit of ${DEEP_DIVE_DAILY_LIMIT} Deep Dive queries. Please toggle Deep Dive off to continue chatting, or try again tomorrow.`;
@@ -4618,17 +4739,17 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
 
     try {
       const chatPayload = {
-        model: OPENAI_MODEL || "gpt-5.5",
+        model: isDeepDiveActive ? OPENAI_DEEP_DIVE_MODEL : OPENAI_MODEL,
         messages: chatMessages,
         stream: true
       };
 
-      // Deep Dive intentionally uses maximum reasoning for best-quality analysis.
-      if (deepDive) {
+      // Deep Dive keeps the existing quality-first reasoning level on GPT-5.6 Sol.
+      if (isDeepDiveActive) {
         chatPayload.reasoning_effort = "xhigh"; 
-        console.log("🤿 [MODEL LOG] DEEP DIVE ACTIVE: capped context + xhigh reasoning triggered.");
+        console.log(`🤿 [MODEL LOG] DEEP DIVE ACTIVE: ${OPENAI_DEEP_DIVE_MODEL} + xhigh reasoning.`);
       } else {
-        console.log("⚡ [MODEL LOG] STANDARD CHAT ACTIVE: Normal processing speed.");
+        console.log(`⚡ [MODEL LOG] STANDARD CHAT ACTIVE: ${OPENAI_MODEL}.`);
       }
 
       const stream = await openai.chat.completions.create(chatPayload);
