@@ -47,6 +47,8 @@ const PHONE_OTP_MAX_PER_HOUR = envPositiveInt("PHONE_OTP_MAX_PER_HOUR", 12);
 const GLOBAL_SMS_MAX_PER_HOUR = envPositiveInt("GLOBAL_SMS_MAX_PER_HOUR", 200);
 const POST_CALL_TRANSCRIPT_SMS_DELAY_MS = envPositiveInt("POST_CALL_TRANSCRIPT_SMS_DELAY_MS", 30000);
 const GUEST_SIGNUP_SMS_FALLBACK_DELAY_MS = envPositiveInt("GUEST_SIGNUP_SMS_FALLBACK_DELAY_MS", 5 * 60 * 1000);
+const ERROR_ALERT_DEDUPE_MS = envPositiveInt("ERROR_ALERT_DEDUPE_MS", 5 * 60 * 1000);
+const SLACK_ALERT_TIMEOUT_MS = envPositiveInt("SLACK_ALERT_TIMEOUT_MS", 5000);
 
 if (!process.env.DATA_ENCRYPTION_KEY && !process.env.MESSAGE_ENCRYPTION_KEY) {
   console.warn("⚠️ DATA_ENCRYPTION_KEY is not set. Falling back to JWT_SECRET-derived encryption; set a dedicated 32+ byte key before production rollout.");
@@ -426,6 +428,26 @@ app.use((req, res, next) => {
   next();
 });
 
+// Give each request a traceable ID and catch any user-facing HTTP 5xx response.
+// Route-specific handlers can mark an error as reported when they have better context.
+app.use((req, res, next) => {
+  const incomingId = String(req.headers["x-request-id"] || "").trim();
+  req.requestId = /^[a-zA-Z0-9._:-]{8,128}$/.test(incomingId) ? incomingId : crypto.randomUUID();
+  res.setHeader("X-Request-Id", req.requestId);
+
+  res.on("finish", () => {
+    if (res.statusCode < 500 || res.locals.userBlockingErrorReported || req.userBlockingErrorReported) return;
+    void reportUserBlockingError(req, res, {
+      channel: inferAlertChannel(req),
+      stage: "HTTP Response",
+      message: `Request ended with HTTP ${res.statusCode} before a successful response was delivered.`,
+      statusCode: res.statusCode
+    });
+  });
+
+  next();
+});
+
 app.use(express.static('public'));
 app.use(express.json({ 
   limit: '50mb',
@@ -531,6 +553,14 @@ function checkGlobalSmsLimit() {
   }
   globalSmsCap.count++;
   return true;
+}
+
+function hasTwilioSmsConfig() {
+  return !!(
+    process.env.TWILIO_ACCOUNT_SID &&
+    process.env.TWILIO_AUTH_TOKEN &&
+    process.env.TWILIO_PHONE_NUMBER
+  );
 }
 
 function isNonRetryableTwilioSmsError(error) {
@@ -1116,7 +1146,12 @@ function normalizeFrom(fromRaw = "") {
 function twimlReply(text) {
   const MessagingResponse = twilio.twiml.MessagingResponse;
   const twiml = new MessagingResponse();
-  twiml.message(text);
+  const statusCallback = `${APP_URL}/twilio/sms-status`;
+  twiml.message({
+    action: statusCallback,
+    method: "POST",
+    statusCallback
+  }, text);
   return twiml.toString();
 }
 
@@ -1160,11 +1195,14 @@ function sendVoiceTwiML(res, twiml) {
 async function postToSlack(message) {
   if (!SLACK_WEBHOOK_URL) return false;
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SLACK_ALERT_TIMEOUT_MS);
   try {
     const response = await fetch(SLACK_WEBHOOK_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: message })
+      body: JSON.stringify({ text: message }),
+      signal: controller.signal
     });
 
     if (!response.ok) {
@@ -1176,6 +1214,8 @@ async function postToSlack(message) {
   } catch (e) {
     console.error("Slack webhook failed:", e.message);
     return false;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -1212,34 +1252,196 @@ async function sendSessionStartToSlack({ channel, displayName, phone, conversati
   return postToSlack(lines.join("\n"));
 }
 
+const recentOperationalAlerts = new Map();
+const SLACK_SENSITIVE_DETAIL_KEYS = new Set([
+  "authorization", "cookie", "set-cookie", "token", "secret", "password", "pin", "otp",
+  "email", "phone", "body", "text", "content", "transcript", "prompt", "memory",
+  "messagepreview", "filename", "documentname", "full_text", "useragent", "ip"
+]);
+
+function escapeSlackText(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function sanitizeSlackText(value, maxLength = 500) {
+  return escapeSlackText(String(value || "")
+    .replace(/https?:\/\/[^\s]+/gi, url => url.split("?")[0])
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[email redacted]")
+    .replace(/\+?\d[\d\s().-]{7,}\d/g, "[phone redacted]")
+    .replace(/(bearer\s+)[^\s]+/gi, "$1[redacted]")
+    .replace(/\b(?:sk|eyJ|AC)[A-Za-z0-9._-]{12,}\b/g, "[credential redacted]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength)) || "Not available";
+}
+
+function sanitizeAlertDetails(value, depth = 0, seen = new WeakSet()) {
+  if (value === null || value === undefined) return value;
+  if (depth > 3) return "[truncated]";
+  if (typeof value === "string") return sanitizeSlackText(value, 300);
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (value instanceof Error) {
+    return {
+      name: sanitizeSlackText(value.name, 80),
+      message: sanitizeSlackText(value.message, 300),
+      code: sanitizeSlackText(value.code || "", 80)
+    };
+  }
+  if (Array.isArray(value)) return value.slice(0, 10).map(item => sanitizeAlertDetails(item, depth + 1, seen));
+  if (typeof value !== "object") return sanitizeSlackText(String(value), 300);
+  if (seen.has(value)) return "[circular]";
+  seen.add(value);
+
+  const out = {};
+  for (const [key, item] of Object.entries(value).slice(0, 25)) {
+    const normalizedKey = String(key).replace(/[^a-z0-9_-]/gi, "").toLowerCase();
+    out[key] = SLACK_SENSITIVE_DETAIL_KEYS.has(normalizedKey)
+      ? "[redacted]"
+      : sanitizeAlertDetails(item, depth + 1, seen);
+  }
+  return out;
+}
+
 function formatAlertDetails(details) {
   if (!details) return "None";
   let text;
   try {
-    text = JSON.stringify(details);
+    text = JSON.stringify(sanitizeAlertDetails(details));
   } catch {
-    text = String(details);
+    text = sanitizeSlackText(String(details), 1500);
   }
   return text.length > 1500 ? `${text.slice(0, 1500)}... [truncated]` : text;
 }
 
-// Saves to Supabase and, by default, pings Slack for true error/security events.
-async function logError({ phone, userId, conversationId, channel, stage, message, details, notify = true }) {
-  try {
-    await supabase.from("error_logs").insert({
-      phone: phone ? encryptField(phone) : null, user_id: userId || null, conversation_id: conversationId || null,
-      channel: channel || "unknown", stage: stage || "unknown",
-      message: message || "unknown", details: details ? JSON.stringify(details) : null 
-    });
+function inferAlertChannel(req) {
+  const route = String(req?.path || req?.originalUrl || "").toLowerCase();
+  if (route.includes("/twilio/sms")) return "sms";
+  if (route.includes("/twilio/voice") || route.includes("/elevenlabs/")) return "call";
+  if (route.startsWith("/api/")) return "web";
+  return "system";
+}
 
-    if (notify) {
-      const slackMessage = `*Channel:* ${(channel || "unknown").toUpperCase()}\n*Stage:* ${stage || "unknown"}\n*Error:* ${message || "unknown"}\n*Details:* ${formatAlertDetails(details)}`;
-      await sendToSlack(slackMessage);
+function extractAlertPhone(req) {
+  const rawPhone = req?.body?.From || req?.body?.from || req?.body?.phone || "";
+  return rawPhone ? normalizeFrom(rawPhone) : "";
+}
+
+function reserveOperationalAlert({ channel, stage, message, route, statusCode }) {
+  const fingerprint = crypto.createHash("sha256")
+    .update([channel, stage, sanitizeSlackText(message, 300), route, statusCode].join("|"))
+    .digest("hex");
+  const now = Date.now();
+  const lastSentAt = recentOperationalAlerts.get(fingerprint) || 0;
+  if (now - lastSentAt < ERROR_ALERT_DEDUPE_MS) return null;
+
+  recentOperationalAlerts.set(fingerprint, now);
+  if (recentOperationalAlerts.size > 500) {
+    for (const [key, sentAt] of recentOperationalAlerts) {
+      if (now - sentAt > ERROR_ALERT_DEDUPE_MS) recentOperationalAlerts.delete(key);
     }
-
-  } catch (e) {
-    console.error("CRITICAL: error_logs insert failed", e?.message || e);
   }
+  return { fingerprint, reservedAt: now };
+}
+
+async function sendOperationalErrorToSlack({
+  phone, userId, conversationId, channel, stage, message, details,
+  route, method, statusCode, requestId, userBlocking = false
+}) {
+  if (!SLACK_WEBHOOK_URL) return false;
+  const reservation = reserveOperationalAlert({ channel, stage, message, route, statusCode });
+  if (!reservation) {
+    console.warn(`Duplicate Slack error alert suppressed for ${channel || "unknown"}/${stage || "unknown"}.`);
+    return false;
+  }
+
+  const occurredAt = new Date().toLocaleString("en-CA", {
+    timeZone: "America/Toronto",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZoneName: "short"
+  });
+  const lines = [
+    userBlocking ? "🚨 *Director Compass User Blocking Error*" : "🚨 *Director Compass Error Alert*",
+    `*Channel:* ${cleanSlackValue(String(channel || "unknown").toUpperCase())}`,
+    `*Stage:* ${cleanSlackValue(stage || "unknown")}`,
+    `*Route:* ${cleanSlackValue(`${method || "UNKNOWN"} ${route || "background task"}`)}`,
+    `*HTTP status:* ${cleanSlackValue(statusCode || "Not available")}`,
+    `*User:* ${userId ? `\`${cleanSlackValue(String(userId).slice(0, 16))}\`` : "Not available"}`,
+    `*Phone:* ${phone ? cleanSlackValue(maskPhone(phone)) : "Not available"}`,
+    `*Conversation:* ${conversationId ? `\`${cleanSlackValue(String(conversationId).slice(0, 80))}\`` : "Not available"}`,
+    `*Request ID:* ${requestId ? `\`${cleanSlackValue(requestId)}\`` : "Not available"}`,
+    `*Error:* ${sanitizeSlackText(message || "Unknown error", 500)}`,
+    `*Details:* ${formatAlertDetails(details)}`,
+    `*Occurred:* ${occurredAt}`
+  ];
+  const sent = await postToSlack(lines.join("\n"));
+  if (!sent && recentOperationalAlerts.get(reservation.fingerprint) === reservation.reservedAt) {
+    recentOperationalAlerts.delete(reservation.fingerprint);
+  }
+  return sent;
+}
+
+function reportUserBlockingError(req, res, {
+  phone, userId, conversationId, channel, stage, message, error, details, statusCode
+} = {}) {
+  if (req) req.userBlockingErrorReported = true;
+  if (res?.locals) res.locals.userBlockingErrorReported = true;
+  const route = String(req?.originalUrl || req?.path || "").split("?")[0] || "background task";
+  const resolvedStatus = statusCode || (res?.statusCode >= 400 ? res.statusCode : 500);
+  return logError({
+    phone: phone || extractAlertPhone(req),
+    userId: userId || req?.user?.userId || null,
+    conversationId: conversationId || req?.body?.conversationId || req?.body?.conversation_id || null,
+    channel: channel || inferAlertChannel(req),
+    stage: stage || "Request Processing",
+    message: message || error?.message || String(error || "Unknown error"),
+    details: {
+      ...(details && typeof details === "object" ? details : {}),
+      error_code: error?.code || null
+    },
+    notify: true,
+    userBlocking: true,
+    route,
+    method: req?.method || "BACKGROUND",
+    statusCode: resolvedStatus,
+    requestId: req?.requestId || null
+  });
+}
+
+// Saves to Supabase and independently alerts Slack for true error/security events.
+async function logError({
+  phone, userId, conversationId, channel, stage, message, details, notify = true,
+  route = "background task", method = "BACKGROUND", statusCode = null, requestId = null,
+  userBlocking = false
+}) {
+  const databaseTask = (async () => {
+    try {
+      const { error } = await supabase.from("error_logs").insert({
+        phone: phone ? encryptField(phone) : null, user_id: userId || null, conversation_id: conversationId || null,
+        channel: channel || "unknown", stage: stage || "unknown",
+        message: message || "unknown", details: details ? JSON.stringify(details) : null
+      });
+      if (error) throw error;
+    } catch (e) {
+      console.error("CRITICAL: error_logs insert failed", e?.message || e);
+    }
+  })();
+
+  const slackTask = notify
+    ? sendOperationalErrorToSlack({
+      phone, userId, conversationId, channel, stage, message, details,
+      route, method, statusCode, requestId, userBlocking
+    })
+    : Promise.resolve(false);
+
+  await Promise.allSettled([databaseTask, slackTask]);
 }
 
 function getRequestIp(req) {
@@ -2429,16 +2631,22 @@ app.get("/health", (req, res) => res.status(200).send("ok"));
 // 🔒 TWILIO WEBHOOK SIGNATURE VALIDATION
 function validateTwilioWebhook(req, res, next) {
   const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const webhookChannel = req.path.startsWith("/twilio/voice") ? "call" : "sms";
   if (!authToken) {
     console.error("FATAL: TWILIO_AUTH_TOKEN not configured — cannot validate webhook signatures");
-    logError({ channel: "sms", stage: "Twilio Signature Validation", message: "TWILIO_AUTH_TOKEN not configured" });
+    void reportUserBlockingError(req, res, {
+      channel: webhookChannel,
+      stage: "Twilio Signature Validation",
+      message: "TWILIO_AUTH_TOKEN is not configured.",
+      statusCode: 500
+    });
     return res.status(500).type("text/xml").send("<Response></Response>");
   }
 
   const twilioSignature = req.headers['x-twilio-signature'];
   if (!twilioSignature) {
     console.error("❌ Twilio webhook rejected: Missing X-Twilio-Signature header. IP:", req.ip);
-    logError({ channel: "sms", stage: "Twilio Signature Validation", message: "Missing X-Twilio-Signature header", details: { ip: req.ip, userAgent: req.headers['user-agent'] } });
+    logError({ channel: webhookChannel, stage: "Twilio Signature Validation", message: "Missing X-Twilio-Signature header", details: { ip: req.ip, userAgent: req.headers['user-agent'] } });
     return res.status(403).type("text/xml").send("<Response></Response>");
   }
 
@@ -2454,7 +2662,7 @@ function validateTwilioWebhook(req, res, next) {
 
   if (!isValid) {
     console.error("❌ Twilio webhook rejected: Invalid signature. IP:", req.ip);
-    logError({ channel: "sms", stage: "Twilio Signature Validation", message: "Invalid Twilio webhook signature — possible forgery attempt", details: { ip: req.ip, url: webhookUrl } });
+    logError({ channel: webhookChannel, stage: "Twilio Signature Validation", message: "Invalid Twilio webhook signature — possible forgery attempt", details: { ip: req.ip, url: webhookUrl } });
     return res.status(403).type("text/xml").send("<Response></Response>");
   }
 
@@ -2816,6 +3024,17 @@ async function findVoiceCallSessionForPostCall({ body, transcriptId, phone }) {
 
 async function registerElevenLabsCall({ req, fromNumber, toNumber, dynamicVariables }) {
   if (!ELEVENLABS_API_KEY || !ELEVENLABS_AGENT_ID) {
+    void reportUserBlockingError(req, null, {
+      phone: fromNumber,
+      channel: "call",
+      stage: "ElevenLabs Call Connection",
+      message: "The ElevenLabs call connection is missing required server configuration.",
+      statusCode: 503,
+      details: {
+        has_elevenlabs_api_key: !!ELEVENLABS_API_KEY,
+        has_elevenlabs_agent_id: !!ELEVENLABS_AGENT_ID
+      }
+    });
     return voiceResponseWithMessage(VOICE_SERVICE_ERROR_MESSAGE, VOICE_SERVICE_ERROR_AUDIO_URL);
   }
 
@@ -2839,6 +3058,14 @@ async function registerElevenLabsCall({ req, fromNumber, toNumber, dynamicVariab
   const text = await response.text();
   if (!response.ok) {
     console.error("ElevenLabs register-call failed:", response.status, text.slice(0, 500));
+    void reportUserBlockingError(req, null, {
+      phone: fromNumber,
+      channel: "call",
+      stage: "ElevenLabs Call Connection",
+      message: `ElevenLabs register-call returned HTTP ${response.status}.`,
+      statusCode: 502,
+      details: { provider_status: response.status }
+    });
     return voiceResponseWithMessage(VOICE_SERVICE_ERROR_MESSAGE, VOICE_SERVICE_ERROR_AUDIO_URL);
   }
 
@@ -2946,6 +3173,14 @@ app.post("/twilio/voice", validateTwilioWebhook, async (req, res) => {
     const stirVerstat = getStirVerstat(req);
 
     if (!phone || !callSid) {
+      void reportUserBlockingError(req, res, {
+        phone,
+        conversationId: callSid || null,
+        channel: "call",
+        stage: "Twilio Voice Pregate",
+        message: "Twilio voice request was missing the caller phone or CallSid.",
+        statusCode: 200
+      });
       return sendVoiceTwiML(res, voiceResponseWithMessage(VOICE_CALL_VERIFY_ERROR_MESSAGE, VOICE_CALL_VERIFY_ERROR_AUDIO_URL));
     }
 
@@ -3004,7 +3239,12 @@ app.post("/twilio/voice", validateTwilioWebhook, async (req, res) => {
     return sendVoiceTwiML(res, voicePinGatherTwiML(req));
   } catch (e) {
     console.error("Voice pre-gate error:", e.message);
-    logError({ channel: "call", stage: "Twilio Voice Pregate", message: e.message });
+    void reportUserBlockingError(req, res, {
+      channel: "call",
+      stage: "Twilio Voice Pregate",
+      error: e,
+      statusCode: 200
+    });
     return sendVoiceTwiML(res, voiceResponseWithMessage(VOICE_SERVICE_ERROR_MESSAGE, VOICE_SERVICE_ERROR_AUDIO_URL));
   }
 });
@@ -3018,6 +3258,14 @@ app.post("/twilio/voice-pin", validateTwilioWebhook, async (req, res) => {
     const submittedPin = extractVoicePinInput(req);
 
     if (!phone || !callSid) {
+      void reportUserBlockingError(req, res, {
+        phone,
+        conversationId: callSid || null,
+        channel: "call",
+        stage: "Twilio Voice PIN",
+        message: "Twilio Voice PIN request was missing the caller phone or CallSid.",
+        statusCode: 200
+      });
       return sendVoiceTwiML(res, voiceResponseWithMessage(VOICE_CALL_VERIFY_ERROR_MESSAGE, VOICE_CALL_VERIFY_ERROR_AUDIO_URL));
     }
 
@@ -3116,9 +3364,105 @@ app.post("/twilio/voice-pin", validateTwilioWebhook, async (req, res) => {
     });
   } catch (e) {
     console.error("Voice PIN verification error:", e.message);
-    logError({ channel: "call", stage: "Twilio Voice PIN", message: e.message });
+    void reportUserBlockingError(req, res, {
+      channel: "call",
+      stage: "Twilio Voice PIN",
+      error: e,
+      statusCode: 200
+    });
     return sendVoiceTwiML(res, voiceResponseWithMessage(VOICE_PIN_ERROR_MESSAGE, VOICE_PIN_ERROR_AUDIO_URL));
   }
+});
+
+// Configure this as Twilio's "Call status changes" webhook to catch provider-side failures.
+app.post("/twilio/voice-status", validateTwilioWebhook, async (req, res) => {
+  const callStatus = String(req.body?.CallStatus || "").trim().toLowerCase();
+  const errorCode = String(req.body?.ErrorCode || "").trim();
+  const failureStatuses = new Set(["failed", "busy", "no-answer", "canceled"]);
+
+  if (errorCode || failureStatuses.has(callStatus)) {
+    void reportUserBlockingError(req, res, {
+      phone: normalizeFrom(req.body?.From || ""),
+      conversationId: String(req.body?.CallSid || "").trim() || null,
+      channel: "call",
+      stage: "Twilio Call Status",
+      message: errorCode
+        ? `Twilio reported call error ${errorCode}.`
+        : `Twilio reported a ${callStatus || "failed"} call.`,
+      statusCode: 200,
+      details: {
+        call_status: callStatus || null,
+        twilio_error_code: errorCode || null,
+        sip_response_code: req.body?.SipResponseCode || null,
+        call_duration_seconds: req.body?.CallDuration || null
+      }
+    });
+  }
+
+  return res.status(200).type("text/xml").send("<Response></Response>");
+});
+
+// Twilio invokes this when the primary incoming voice webhook fails or returns invalid TwiML.
+app.post("/twilio/voice-fallback", validateTwilioWebhook, async (req, res) => {
+  void reportUserBlockingError(req, res, {
+    phone: normalizeFrom(req.body?.From || ""),
+    conversationId: String(req.body?.CallSid || "").trim() || null,
+    channel: "call",
+    stage: "Twilio Voice Webhook Fallback",
+    message: req.body?.ErrorCode
+      ? `Twilio invoked the voice fallback after error ${req.body.ErrorCode}.`
+      : "Twilio invoked the voice fallback because the primary call webhook failed.",
+    statusCode: 200,
+    details: {
+      twilio_error_code: req.body?.ErrorCode || null,
+      failed_url: req.body?.ErrorUrl || null
+    }
+  });
+  return sendVoiceTwiML(res, voiceResponseWithMessage(VOICE_SERVICE_ERROR_MESSAGE, VOICE_SERVICE_ERROR_AUDIO_URL));
+});
+
+// Twilio invokes this when the primary incoming messaging webhook fails.
+app.post("/twilio/sms-fallback", validateTwilioWebhook, async (req, res) => {
+  void reportUserBlockingError(req, res, {
+    phone: normalizeFrom(req.body?.From || ""),
+    conversationId: String(req.body?.MessageSid || "").trim() || null,
+    channel: "sms",
+    stage: "Twilio Messaging Webhook Fallback",
+    message: req.body?.ErrorCode
+      ? `Twilio invoked the messaging fallback after error ${req.body.ErrorCode}.`
+      : "Twilio invoked the messaging fallback because the primary SMS webhook failed.",
+    statusCode: 200,
+    details: {
+      twilio_error_code: req.body?.ErrorCode || null,
+      failed_url: req.body?.ErrorUrl || null
+    }
+  });
+  return res.status(200).type("text/xml").send(twimlReply("I am having trouble responding right now. Please try again shortly."));
+});
+
+// Delivery callbacks catch messages that Twilio accepted but could not deliver later.
+app.post("/twilio/sms-status", validateTwilioWebhook, async (req, res) => {
+  const messageStatus = String(req.body?.MessageStatus || req.body?.SmsStatus || "").trim().toLowerCase();
+  const failedStatuses = new Set(["failed", "undelivered"]);
+
+  if (failedStatuses.has(messageStatus)) {
+    void reportUserBlockingError(req, res, {
+      phone: normalizeFrom(req.body?.To || ""),
+      conversationId: String(req.body?.MessageSid || req.body?.SmsSid || "").trim() || null,
+      channel: "sms",
+      stage: "Twilio SMS Delivery",
+      message: req.body?.ErrorCode
+        ? `Twilio could not deliver a message and reported error ${req.body.ErrorCode}.`
+        : `Twilio reported the message as ${messageStatus}.`,
+      statusCode: 200,
+      details: {
+        message_status: messageStatus,
+        twilio_error_code: req.body?.ErrorCode || null
+      }
+    });
+  }
+
+  return res.status(200).type("text/xml").send("<Response></Response>");
 });
 
 app.post("/twilio/sms", validateTwilioWebhook, async (req, res) => {
@@ -3367,7 +3711,13 @@ app.post("/twilio/sms", validateTwilioWebhook, async (req, res) => {
 
   } catch (err) {
     console.error("ERROR sms", err.message);
-    logError({ phone: cleanPhone, channel: "sms", stage: "Twilio Processing", message: err.message }); // 🚨 SLACK ALERT
+    void reportUserBlockingError(req, res, {
+      phone: cleanPhone,
+      channel: currentChannel,
+      stage: "Twilio Message Processing",
+      error: err,
+      statusCode: 200
+    });
     if (!res.headersSent) {
       res.status(200).type("text/xml").send(twimlReply("Just a moment..."));
     }
@@ -3463,6 +3813,12 @@ app.post("/elevenlabs/twilio-personalize", personalizeLimiter, validatePersonali
 
   } catch (err) {
     console.error("ERROR eleven personalize", err?.message || String(err));
+    void reportUserBlockingError(req, res, {
+      channel: "call",
+      stage: "ElevenLabs Personalization",
+      error: err,
+      statusCode: 200
+    });
     return res.status(200).json({ dynamic_variables: { memory_summary: "", caller_phone: "", channel: "call", recent_history: "", first_greeting: "" } });
   }
 });
@@ -3475,7 +3831,12 @@ function verifyElevenLabsSignature(req, res, next) {
   
   if (!secret) {
     console.error("🚨 FATAL: ELEVENLABS_WEBHOOK_SECRET not configured");
-    logError({ channel: "call", stage: "ElevenLabs HMAC Verification", message: "ELEVENLABS_WEBHOOK_SECRET is not set." });
+    void reportUserBlockingError(req, res, {
+      channel: "call",
+      stage: "ElevenLabs HMAC Verification",
+      message: "ELEVENLABS_WEBHOOK_SECRET is not set.",
+      statusCode: 500
+    });
     return res.status(500).json({ error: "Server security misconfiguration." });
   }
 
@@ -3522,7 +3883,13 @@ function verifyElevenLabsSignature(req, res, next) {
     
   } catch (e) {
     console.error("🚨 HMAC error:", e.message);
-    logError({ channel: "call", stage: "ElevenLabs HMAC Verification", message: "HMAC crashed: " + e.message });
+    void reportUserBlockingError(req, res, {
+      channel: "call",
+      stage: "ElevenLabs HMAC Verification",
+      message: "HMAC verification crashed: " + e.message,
+      error: e,
+      statusCode: 500
+    });
     return res.status(500).json({ error: "Signature verification failed." });
   }
 }
@@ -3544,9 +3911,28 @@ async function generateShortCallTopic(transcriptText) {
 }
 
 async function sendGuestSignupSms(phone, transcriptText) {
-  if (!phone || !process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_PHONE_NUMBER) return;
+  if (!phone) return;
+  if (!hasTwilioSmsConfig()) {
+    await logError({
+      phone,
+      channel: "call",
+      stage: "Guest Signup SMS",
+      message: "Twilio SMS configuration is missing.",
+      statusCode: 503,
+      userBlocking: true
+    });
+    return;
+  }
   if (!checkGlobalSmsLimit()) {
     console.warn("Guest signup SMS skipped because global SMS circuit breaker is active.");
+    await logError({
+      phone,
+      channel: "call",
+      stage: "Guest Signup SMS",
+      message: "Guest signup SMS was blocked by the global SMS circuit breaker.",
+      statusCode: 503,
+      userBlocking: true
+    });
     return;
   }
   try {
@@ -3557,10 +3943,23 @@ async function sendGuestSignupSms(phone, transcriptText) {
     const message = hasTranscript
       ? `Great talking with you about ${topic}. If you want Director Compass to remember your calls, use your uploaded documents, and carry context across web, SMS, and phone, create your free account here:\n\n${APP_URL}`
       : `Thanks for calling Director Compass. If you want me to remember future calls, use your uploaded documents, and carry context across web, SMS, and phone, create your free account here:\n\n${APP_URL}`;
-    await twilioClient.messages.create({ body: message, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
+    await twilioClient.messages.create({
+      body: message,
+      from: process.env.TWILIO_PHONE_NUMBER,
+      to: outboundPhone,
+      statusCallback: `${APP_URL}/twilio/sms-status`
+    });
     console.log(` Guest signup SMS sent to ${maskPhone(outboundPhone)}`);
   } catch (e) {
     console.error("Guest signup SMS failed:", e.message);
+    await logError({
+      phone,
+      channel: "call",
+      stage: "Guest Signup SMS",
+      message: e.message,
+      statusCode: 500,
+      userBlocking: true
+    });
   }
 }
 
@@ -3592,6 +3991,15 @@ function scheduleGuestSignupSmsFallback({ phone, callSid, reason }) {
       });
     } catch (e) {
       console.error("Guest signup fallback failed:", e.message);
+      await logError({
+        phone,
+        conversationId: callSid,
+        channel: "call",
+        stage: "Guest Signup SMS Fallback",
+        message: e.message,
+        statusCode: 500,
+        userBlocking: true
+      });
     }
   }, GUEST_SIGNUP_SMS_FALLBACK_DELAY_MS);
 
@@ -3604,14 +4012,38 @@ function transcriptAskedAboutMemoryAccess(transcriptText = "") {
 }
 
 async function sendVoicePinSetupSms(phone) {
-  if (!phone || !process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_PHONE_NUMBER) return;
+  if (!phone) return;
+  if (!hasTwilioSmsConfig()) {
+    await logError({
+      phone,
+      channel: "call",
+      stage: "Voice PIN Setup SMS",
+      message: "Twilio SMS configuration is missing.",
+      statusCode: 503,
+      userBlocking: true
+    });
+    return;
+  }
   try {
     const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
     const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
     const message = `To unlock private memory, uploaded documents, and cross-platform context on calls, sign in and set up your Director Compass Voice PIN here:\n\n${APP_URL}`;
-    await twilioClient.messages.create({ body: message, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
+    await twilioClient.messages.create({
+      body: message,
+      from: process.env.TWILIO_PHONE_NUMBER,
+      to: outboundPhone,
+      statusCallback: `${APP_URL}/twilio/sms-status`
+    });
   } catch (e) {
     console.error("Voice PIN setup SMS failed:", e.message);
+    await logError({
+      phone,
+      channel: "call",
+      stage: "Voice PIN Setup SMS",
+      message: e.message,
+      statusCode: 500,
+      userBlocking: true
+    });
   }
 }
 
@@ -3650,6 +4082,14 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
     
     if (!phone) {
       console.error("❌ POST-CALL: Could not extract phone number");
+      await logError({
+        conversationId: transcriptId,
+        channel: "call",
+        stage: "ElevenLabs Post-call Payload",
+        message: "The post-call webhook did not contain a caller phone number.",
+        statusCode: 422,
+        userBlocking: true
+      });
       await markWebhookEventStatus("elevenlabs_post_call", transcriptId, "skipped_no_phone", { payload_hash: transcriptPayloadHash });
       return;
     }
@@ -3659,6 +4099,15 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
 
     if (!transcriptText) {
       console.error("❌ POST-CALL: No transcript text could be extracted");
+      await logError({
+        phone,
+        conversationId: transcriptId,
+        channel: "call",
+        stage: "ElevenLabs Post-call Payload",
+        message: "The post-call webhook did not contain a readable transcript.",
+        statusCode: 422,
+        userBlocking: true
+      });
       await markWebhookEventStatus("elevenlabs_post_call", transcriptId, "skipped_no_transcript", { payload_hash: transcriptPayloadHash });
       return;
     }
@@ -3818,13 +4267,23 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
       
       if (updateErr) {
         console.error("❌ Failed to save transcript_data:", updateErr.message);
+        void logError({
+          phone,
+          userId,
+          conversationId: transcriptId,
+          channel: "call",
+          stage: "Transcript Record Save",
+          message: updateErr.message,
+          statusCode: 500,
+          userBlocking: true
+        });
       } else {
         console.log(" Transcript saved to user record");
       }
 
       triggerGoogleAppsScriptInstantFetch(transcriptId, { userId, channel: "call" });
 
-      if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
+      if (hasTwilioSmsConfig()) {
         const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
         const outboundPhone = phone.startsWith("+") ? phone : "+" + phone;
         
@@ -3850,7 +4309,12 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
         introMsg = `Hi, I'm your Director Compass ai assistant. I'm an AI of David Beatty's voice built so you can personally leverage his 50 years of governance expertise and become a boardroom leader. I'm always available by phone or chat, so save this number and try it out by sending me a text. Before we dive in, what should I call you?`;
       }
 
-      await twilioClient.messages.create({ body: introMsg, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
+      await twilioClient.messages.create({
+        body: introMsg,
+        from: process.env.TWILIO_PHONE_NUMBER,
+        to: outboundPhone,
+        statusCallback: `${APP_URL}/twilio/sms-status`
+      });
       await supabase.from("messages").insert(prepareMessageRecord({ conversation_id: smsConversationId, channel: "sms", direction: "agent", text: introMsg, provider: "twilio" }));
       await supabase.from("users").update({ vcard_sent: true }).eq("id", userId);
       console.log(" Call-first welcome SMS sent!");
@@ -3874,14 +4338,40 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
       transcriptMsg = `Great chat about ${cleanTopic}${nameInsert}. What's the best email address to send the transcript to?`;
     }
 
-    await twilioClient.messages.create({ body: transcriptMsg, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
+    await twilioClient.messages.create({
+      body: transcriptMsg,
+      from: process.env.TWILIO_PHONE_NUMBER,
+      to: outboundPhone,
+      statusCallback: `${APP_URL}/twilio/sms-status`
+    });
     await supabase.from("messages").insert(prepareMessageRecord({ conversation_id: smsConversationId, channel: "sms", direction: "agent", text: transcriptMsg, provider: "twilio" }));
 
     console.log(" Transcript offer SMS sent!");
   } catch (smsErr) {
     console.error("❌ Failed to send delayed SMS:", smsErr.message);
+    await logError({
+      phone: outboundPhone,
+      userId,
+      conversationId: transcriptId,
+      channel: "call",
+      stage: "Post-call Transcript Offer SMS",
+      message: smsErr.message,
+      statusCode: 500,
+      userBlocking: true
+    });
   }
 }, POST_CALL_TRANSCRIPT_SMS_DELAY_MS);
+      } else {
+        void logError({
+          phone,
+          userId,
+          conversationId: transcriptId,
+          channel: "call",
+          stage: "Post-call Transcript Offer SMS",
+          message: "Twilio SMS configuration is missing.",
+          statusCode: 503,
+          userBlocking: true
+        });
       }
     }
 
@@ -3896,8 +4386,18 @@ app.post("/elevenlabs/post-call", verifyElevenLabsSignature, async (req, res) =>
 
   } catch (err) {
     console.error("❌ POST-CALL PROCESSING ERROR:", err?.message || err);
-    await markWebhookEventStatus("elevenlabs_post_call", postCallTranscriptId, "failed", { error: err?.message || String(err) });
-    logError({ channel: "call", stage: "ElevenLabs Transcript Processing", message: err?.message || String(err) }); // 🚨 SLACK ALERT
+    await reportUserBlockingError(req, res, {
+      conversationId: postCallTranscriptId,
+      channel: "call",
+      stage: "ElevenLabs Transcript Processing",
+      error: err,
+      statusCode: 200
+    });
+    try {
+      await markWebhookEventStatus("elevenlabs_post_call", postCallTranscriptId, "failed", { error: err?.message || String(err) });
+    } catch (statusErr) {
+      console.error("Failed to mark post-call webhook as failed:", statusErr.message);
+    }
   }
 });
 
@@ -3952,22 +4452,45 @@ async function sendVerificationCodeToPhone(rawPhone, { hideDisallowed = false, r
     throw error;
   }
 
-  let twilioMessageSid = null;
-  if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER) {
-    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-    const outboundPhone = cleanPhone.startsWith("+") ? cleanPhone : "+" + cleanPhone;
+  if (!hasTwilioSmsConfig()) {
+    const failureMessage = "Twilio SMS configuration is missing.";
+    await auditOtpSend({ req, phone: cleanPhone, userId, flow, success: false, failureReason: failureMessage, authUserId });
+    void reportUserBlockingError(req, null, {
+      phone: cleanPhone,
+      userId,
+      channel: "web",
+      stage: "OTP SMS Delivery",
+      message: failureMessage,
+      statusCode: 503
+    });
+    const configError = new Error("Verification SMS is temporarily unavailable.");
+    configError.status = 500;
+    throw configError;
+  }
 
-    try {
-      const twilioMessage = await twilioClient.messages.create({
-        body: `${otpCode} is your Director Compass web login code. It expires in 10 minutes. Only enter this at compass.boardchair.com.`,
-        from: process.env.TWILIO_PHONE_NUMBER,
-        to: outboundPhone
-      });
-      twilioMessageSid = twilioMessage?.sid || null;
-    } catch (twilioErr) {
-      await auditOtpSend({ req, phone: cleanPhone, userId, flow, success: false, failureReason: twilioErr.message, twilioMessageSid, authUserId });
-      throw twilioErr;
-    }
+  let twilioMessageSid = null;
+  const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+  const outboundPhone = cleanPhone.startsWith("+") ? cleanPhone : "+" + cleanPhone;
+
+  try {
+    const twilioMessage = await twilioClient.messages.create({
+      body: `${otpCode} is your Director Compass web login code. It expires in 10 minutes. Only enter this at compass.boardchair.com.`,
+      from: process.env.TWILIO_PHONE_NUMBER,
+      to: outboundPhone,
+      statusCallback: `${APP_URL}/twilio/sms-status`
+    });
+    twilioMessageSid = twilioMessage?.sid || null;
+  } catch (twilioErr) {
+    await auditOtpSend({ req, phone: cleanPhone, userId, flow, success: false, failureReason: twilioErr.message, twilioMessageSid, authUserId });
+    void reportUserBlockingError(req, null, {
+      phone: cleanPhone,
+      userId,
+      channel: "web",
+      stage: "OTP SMS Delivery",
+      error: twilioErr,
+      statusCode: 502
+    });
+    throw twilioErr;
   }
 
   await auditOtpSend({ req, phone: cleanPhone, userId, flow, success: true, twilioMessageSid, authUserId });
@@ -4326,7 +4849,12 @@ setInterval(async () => {
           const outboundPhone = u.phone.startsWith("+") ? u.phone : "+" + u.phone;
           
           try {
-            await twilioClient.messages.create({ body: msg, from: process.env.TWILIO_PHONE_NUMBER, to: outboundPhone });
+            await twilioClient.messages.create({
+              body: msg,
+              from: process.env.TWILIO_PHONE_NUMBER,
+              to: outboundPhone,
+              statusCallback: `${APP_URL}/twilio/sms-status`
+            });
             await supabase.from("users").update({ web_upsell_sent: true }).eq("id", u.id);
             console.log(`✅ Sent 3-Day Web Upsell SMS to ${outboundPhone}`);
           } catch (e) {
@@ -4808,6 +5336,14 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
 
       } catch (streamErr) {
         console.error("OpenAI Stream Error:", streamErr);
+        void reportUserBlockingError(req, res, {
+          userId,
+          conversationId,
+          channel: "web",
+          stage: "OpenAI Streaming Response",
+          error: streamErr,
+          statusCode: 200
+        });
         res.write(`data: ${JSON.stringify({ type: "error", error: streamErr.message })}\n\n`);
         res.end();
         return; // Stop execution if OpenAI crashed or user aborted
@@ -4873,7 +5409,12 @@ Respond helpfully. Use uploaded documents to answer questions if relevant.`;
 
   } catch (err) {
     console.error("❌ Chat Error:", err.message);
-    logError({ channel: "web", stage: "OpenAI Generation", message: err.message });
+    void reportUserBlockingError(req, res, {
+      channel: "web",
+      stage: "Web Chat Response",
+      error: err,
+      statusCode: res.headersSent ? 200 : 500
+    });
     if (!res.headersSent) res.status(500).json({ error: "Failed to generate reply: " + err.message });
   }
 });
@@ -4901,6 +5442,12 @@ app.post("/api/transcribe", apiLimiter, authenticateToken, upload.single("audio"
     res.json({ success: true, text: transcription.text });
   } catch (err) {
     console.error("Transcription Error:", err.message);
+    void reportUserBlockingError(req, res, {
+      channel: "web",
+      stage: "Voice Transcription",
+      error: err,
+      statusCode: 500
+    });
     res.status(500).json({ error: "Failed to transcribe audio." });
   }
 });
@@ -4963,9 +5510,28 @@ app.put("/api/web/profile", authenticateToken, async (req, res) => {
 });
 
 async function sendVoicePinConfirmationSms(phone, action = "set") {
-  if (!phone || !process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_PHONE_NUMBER) return;
+  if (!phone) return;
+  if (!hasTwilioSmsConfig()) {
+    await logError({
+      phone,
+      channel: "web",
+      stage: "Voice PIN Confirmation SMS",
+      message: "Twilio SMS configuration is missing.",
+      statusCode: 503,
+      userBlocking: true
+    });
+    return;
+  }
   if (!checkGlobalSmsLimit()) {
     console.warn("Voice PIN confirmation SMS skipped because global SMS circuit breaker is active.");
+    await logError({
+      phone,
+      channel: "web",
+      stage: "Voice PIN Confirmation SMS",
+      message: "Voice PIN confirmation SMS was blocked by the global SMS circuit breaker.",
+      statusCode: 503,
+      userBlocking: true
+    });
     return;
   }
   const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
@@ -4975,11 +5541,24 @@ async function sendVoicePinConfirmationSms(phone, action = "set") {
     : action === "recover_confirm"
       ? "reset"
       : "set";
-  await twilioClient.messages.create({
-    body: `Your Director Compass Voice PIN has been ${actionText} and your phone number is secured. You can safely call or text this number anytime. For privacy, I will ask for your PIN before using private account context during calls.`,
-    from: process.env.TWILIO_PHONE_NUMBER,
-    to: outboundPhone
-  });
+  try {
+    await twilioClient.messages.create({
+      body: `Your Director Compass Voice PIN has been ${actionText} and your phone number is secured. You can safely call or text this number anytime. For privacy, I will ask for your PIN before using private account context during calls.`,
+      from: process.env.TWILIO_PHONE_NUMBER,
+      to: outboundPhone,
+      statusCallback: `${APP_URL}/twilio/sms-status`
+    });
+  } catch (e) {
+    await logError({
+      phone,
+      channel: "web",
+      stage: "Voice PIN Confirmation SMS",
+      message: e.message,
+      statusCode: 500,
+      userBlocking: true
+    });
+    throw e;
+  }
 }
 
 async function getVoicePinUserForWeb(userId) {
@@ -5623,7 +6202,8 @@ app.post("/api/admin/send-bulk-sms", async (req, res) => {
         await twilioClient.messages.create({
           body: message,
           from: process.env.TWILIO_PHONE_NUMBER,
-          to: cleanPhone.startsWith("+") ? cleanPhone : "+" + cleanPhone
+          to: cleanPhone.startsWith("+") ? cleanPhone : "+" + cleanPhone,
+          statusCallback: `${APP_URL}/twilio/sms-status`
         });
 
         // Log the outbound broadcast in the database
@@ -5952,7 +6532,8 @@ app.post("/api/admin/send-sms", async (req, res) => {
     await twilioClient.messages.create({ 
       body: message, 
       from: process.env.TWILIO_PHONE_NUMBER, 
-      to: cleanPhone.startsWith("+") ? cleanPhone : "+" + cleanPhone 
+      to: cleanPhone.startsWith("+") ? cleanPhone : "+" + cleanPhone,
+      statusCallback: `${APP_URL}/twilio/sms-status`
     });
 
     await supabase.from("messages").insert(prepareMessageRecord({
@@ -6256,7 +6837,13 @@ app.post("/api/openai-proxy/chat/completions", async (req, res) => {
 
   } catch (e) {
     console.error("OpenAI Proxy Error:", e);
-    if (req.body.stream) {
+    void reportUserBlockingError(req, res, {
+      channel: "web",
+      stage: "Live Avatar Response",
+      error: e,
+      statusCode: 200
+    });
+    if (req.body?.stream) {
         try { res.write(`data: [DONE]\n\n`); res.end(); } catch(_){}
     } else {
         res.json({ choices: [{ message: { role: "assistant", content: "I am having trouble connecting to my brain." } }] });
@@ -6273,6 +6860,59 @@ app.use((err, req, res, next) => {
     return res.status(400).json({ error: "File upload error: " + err.message });
   }
   next(err);
+});
+
+// Final safety net for errors that reach Express without a route-level response.
+app.use((err, req, res, next) => {
+  const rawStatus = Number(err?.status || err?.statusCode || 500);
+  const statusCode = rawStatus >= 400 && rawStatus <= 599 ? rawStatus : 500;
+
+  console.error("Unhandled Express error:", err?.message || err);
+  if (statusCode >= 500) {
+    void reportUserBlockingError(req, res, {
+      channel: inferAlertChannel(req),
+      stage: "Unhandled Express Error",
+      error: err,
+      statusCode
+    });
+  }
+
+  if (res.headersSent) return next(err);
+  return res.status(statusCode).json({
+    error: statusCode >= 500 ? "Something went wrong while processing this request." : (err?.message || "Request failed."),
+    requestId: req.requestId
+  });
+});
+
+process.on("unhandledRejection", reason => {
+  const error = reason instanceof Error ? reason : new Error(String(reason));
+  console.error("Unhandled promise rejection:", error);
+  void logError({
+    channel: "system",
+    stage: "Unhandled Promise Rejection",
+    message: error.message,
+    details: { error_code: error.code || null },
+    statusCode: 500,
+    userBlocking: true
+  });
+});
+
+let fatalShutdownStarted = false;
+process.on("uncaughtException", error => {
+  console.error("Uncaught exception:", error);
+  if (fatalShutdownStarted) return;
+  fatalShutdownStarted = true;
+
+  const alertTask = logError({
+    channel: "system",
+    stage: "Uncaught Server Exception",
+    message: error?.message || String(error),
+    details: { error_code: error?.code || null },
+    statusCode: 500,
+    userBlocking: true
+  });
+  const shutdownDeadline = new Promise(resolve => setTimeout(resolve, SLACK_ALERT_TIMEOUT_MS + 500));
+  Promise.race([alertTask, shutdownDeadline]).finally(() => process.exit(1));
 });
 
 app.listen(PORT, () => {
