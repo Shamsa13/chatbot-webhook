@@ -1,3 +1,8 @@
+// Chat Completions rejects GPT-5.6 Sol function tools with default/positive reasoning.
+export function historyToolReasoningEffort(model, requested) {
+  return /^gpt-5\.6-sol(?:$|-)/.test(String(model)) ? "none" : requested;
+}
+
 export function replyCostPolicy(message, deepDive) {
   const text = String(message || "");
   const comprehensive = /\b(all|every|entire|whole|comprehensive|exhaustive|compare|comparison|across|risks?|tradeoffs?|trade-offs?|strategy|strategic|recommend|evaluate)\b/i.test(text);

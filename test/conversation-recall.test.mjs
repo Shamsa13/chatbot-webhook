@@ -136,6 +136,28 @@ function clientWith(rounds) {
 }
 const payload = { model: "gpt-5.5", stream: true, messages: [{ role: "system", content: "Test" }] };
 
+test("Sol history tools explicitly disable incompatible reasoning on every round", async () => {
+  for (const model of ["gpt-5.6-sol", "gpt-5.6-sol-2026-07-14"]) {
+    for (const requested of [undefined, "medium", "high", "xhigh", "none"]) {
+      const client = clientWith([callChunks("one"), callChunks("two"), [delta({ content: "Answer" })]]);
+      const original = { ...payload, model, reasoning_effort: requested };
+      await streamWithHistoryRecall({ client, payload: original, recall: async () => ({ status: "not_found" }) });
+      assert.equal(client.requests.length, 3);
+      for (const request of client.requests) {
+        assert.equal(request.payload.reasoning_effort, "none");
+        assert.equal(request.payload.tools.length, 1);
+      }
+      assert.equal(original.reasoning_effort, requested);
+    }
+  }
+});
+
+test("other models retain their requested reasoning", async () => {
+  const client = clientWith([[delta({ content: "Answer" })]]);
+  await streamWithHistoryRecall({ client, payload: { ...payload, reasoning_effort: "high" }, recall: () => assert.fail() });
+  assert.equal(client.requests[0].payload.reasoning_effort, "high");
+});
+
 test("ordinary follow-up uses one model request and no history lookup", async () => {
   const client = clientWith([[delta({ content: "The deadline is Friday." })]]);
   let text = "";

@@ -41,7 +41,9 @@ for (const model of [process.env.OPENAI_MODEL || "gpt-5.5", process.env.OPENAI_D
             ? "Find the exact original Meridian covenant clause I gave you much earlier in this conversation. Quote it verbatim, then tell me the corrected cash threshold."
             : "Who owns the review and what is the deadline?"
         }),
-        stream: true, stream_options: { include_usage: true }, reasoning_effort: "none", max_completion_tokens: 700
+        stream: true, stream_options: { include_usage: true },
+        reasoning_effort: model === "gpt-5.6-sol" ? (exact ? "high" : undefined) : "none",
+        max_completion_tokens: 700
       },
       hasDocuments: false,
       recall: async args => {

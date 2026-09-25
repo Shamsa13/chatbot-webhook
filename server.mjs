@@ -17,7 +17,7 @@ import path from "path";
 import cookieParser from "cookie-parser";
 import { createHistoryCompactor, buildChatMessages, tokenUsageFields } from "./chat-context.mjs";
 import { RECALL_INSTRUCTIONS, createConversationRecall, streamWithHistoryRecall } from "./conversation-recall.mjs";
-import { replyCostPolicy, focusedDocumentExcerpts, usageRecord, createTrackedCompletion, completedMemoryUpdate } from "./api-cost-controls.mjs";
+import { replyCostPolicy, focusedDocumentExcerpts, usageRecord, createTrackedCompletion, completedMemoryUpdate, historyToolReasoningEffort } from "./api-cost-controls.mjs";
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET || JWT_SECRET.length < 64) {
@@ -5391,6 +5391,7 @@ ${davidContext ? "KNOWLEDGE BASE:\n" + davidContext : ""}`;
         });
         const chatPayload = {
           model: isDeepDiveActive ? OPENAI_DEEP_DIVE_MODEL : OPENAI_MODEL,
+          reasoning_effort: historyToolReasoningEffort(isDeepDiveActive ? OPENAI_DEEP_DIVE_MODEL : OPENAI_MODEL, costPolicy.reasoningEffort),
           messages: chatMessages,
           stream: true,
           stream_options: { include_usage: true },
@@ -5400,11 +5401,11 @@ ${davidContext ? "KNOWLEDGE BASE:\n" + davidContext : ""}`;
 
       // Match reasoning effort to the question without changing the Deep Dive model.
       if (isDeepDiveActive) {
-        chatPayload.reasoning_effort = costPolicy.reasoningEffort;
-        console.log("DEEP_DIVE_POLICY", { model: OPENAI_DEEP_DIVE_MODEL, reasoningEffort: costPolicy.reasoningEffort, documentScope, maxCompletionTokens: costPolicy.maxCompletionTokens });
+        console.log("DEEP_DIVE_POLICY", { model: OPENAI_DEEP_DIVE_MODEL, reasoningEffort: chatPayload.reasoning_effort, documentScope, maxCompletionTokens: costPolicy.maxCompletionTokens });
       } else {
         console.log(`⚡ [MODEL LOG] STANDARD CHAT ACTIVE: ${OPENAI_MODEL}.`);
       }
+        console.log("WEB_MODEL_POLICY", { model: chatPayload.model, reasoningEffort: chatPayload.reasoning_effort ?? "default", api: "chat.completions", historyTools: true });
 
         const recall = createConversationRecall({
           supabase, decryptRows: decryptMessageRows, userId, conversationId,

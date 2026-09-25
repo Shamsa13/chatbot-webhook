@@ -52,7 +52,7 @@ September 24 recall verification: all 24 local tests passed. The live synthetic 
 ## September 25 cost controls
 
 - Main models remain GPT-5.5 and GPT-5.6 Sol. No environment change or database migration is required.
-- Deep Dive uses medium reasoning for ordinary questions and high for recognized complex questions, rather than xhigh for every request. This is a heuristic and needs real answer review after deployment.
+- The cost policy requests medium reasoning for ordinary Deep Dive questions and high for recognized complex questions. GPT-5.6 Sol overrides this to explicit none on Chat Completions because its function tools reject positive or default reasoning there. This compatibility fix keeps history lookup but disables extra reasoning, including Deep Dive. Preserving both requires a Responses API migration. Other models retain their requested effort.
 - Narrow document questions can use up to 24,000 characters of retrieved excerpts from up to three selected documents. Broad reviews keep the existing 200,000 character allowance. Missing coverage, failed retrieval, or ownership validation errors fall back to the existing full document path. Retrieved excerpts may still miss relevant context; the prompt discloses that they are not a full review.
 - Output allowances include reasoning tokens: ordinary replies 8,192, Deep Dive 16,384, and explicitly requested full or detailed reports/drafts/analyses/plans/proposals 32,768. A length limit produces a visible notice rather than silently pretending the reply is complete.
 - Memory still runs under the existing rate limit. It can now return NO_MEMORY_CHANGE rather than regenerating the full profile when no facts change. Truncated updates cannot replace saved memory. Updates are not batched.

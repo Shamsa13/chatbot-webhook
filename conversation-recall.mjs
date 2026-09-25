@@ -1,4 +1,5 @@
 import { configurePromptCache } from "./chat-context.mjs";
+import { historyToolReasoningEffort } from "./api-cost-controls.mjs";
 
 export const RECALL_INSTRUCTIONS = `You can search original messages in THIS conversation with search_conversation_history.
 Use it before answering a request for earlier wording, a past draft, a disputed detail, or a past decision
@@ -112,7 +113,8 @@ export async function streamWithHistoryRecall({ client, payload, hasDocuments, r
   for (let round = 0; round <= 2; round++) {
     signal?.throwIfAborted();
     const stream = await client.chat.completions.create(configurePromptCache({
-      ...payload, messages, tools: [HISTORY_SEARCH_TOOL], parallel_tool_calls: false,
+      ...payload, reasoning_effort: historyToolReasoningEffort(payload.model, payload.reasoning_effort),
+      messages, tools: [HISTORY_SEARCH_TOOL], parallel_tool_calls: false,
       tool_choice: lookups < 2 && round < 2 ? "auto" : "none"
     }, hasDocuments), { signal });
     const calls = new Map();
