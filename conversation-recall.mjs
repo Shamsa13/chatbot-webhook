@@ -117,10 +117,12 @@ export async function streamWithHistoryRecall({ client, payload, hasDocuments, r
     }, hasDocuments), { signal });
     const calls = new Map();
     let content = "";
+    let finishReason;
     for await (const chunk of stream) {
       signal?.throwIfAborted();
       if (chunk.usage) onUsage(chunk.usage, round);
       const delta = chunk.choices[0]?.delta;
+      if (chunk.choices[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
       if (delta?.content) { content += delta.content; onText(delta.content); }
       for (const part of delta?.tool_calls || []) {
         if (!Number.isInteger(part.index) || part.index < 0 || part.index > 7) throw new Error("Invalid history tool response");
@@ -133,7 +135,10 @@ export async function streamWithHistoryRecall({ client, payload, hasDocuments, r
       }
     }
     signal?.throwIfAborted();
-    if (!calls.size) return;
+    if (!calls.size) {
+      if (finishReason === "length") onText("\n\nThis response reached its length limit. Please ask me to continue or narrow the question.");
+      return;
+    }
     if (round === 2) throw new Error("History lookup limit exceeded");
     const toolCalls = [...calls.values()];
     if (toolCalls.some(call => !call.id)) throw new Error("Missing history tool call ID");

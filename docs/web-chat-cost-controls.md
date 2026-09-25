@@ -1,6 +1,6 @@
 # Web chat cost controls
 
-The web reply models and Deep Dive document allowance are unchanged. This update reduces repeated conversation history and puts stable material before changing memory so OpenAI can reuse prompt prefixes.
+The web reply models are unchanged. History compaction reduces repeated conversation history and puts stable material before changing memory so OpenAI can reuse prompt prefixes. The September 25 update adds focused document retrieval and reasoning/output controls, described below.
 
 ## Context
 
@@ -47,7 +47,20 @@ Local regression check: `node --test test/chat-context.test.mjs test/conversatio
 
 Optional paid synthetic retrieval check: `RUN_LIVE_CONTEXT_CHECK=1 node test/conversation-recall.live.mjs`. It checks that both reply models skip recall for a visible recent fact and retrieve an omitted original quote plus a correction. It does not access Hani's plaintext or measure production quality.
 
-September 24 recall verification: all 24 local tests passed. The live synthetic check passed on GPT-5.5 and GPT-5.6 Sol. Each model used zero lookups for a recent owner/deadline question (738 input tokens), and one lookup to recover an exact original clause from a 160-message fixture plus its later corrected amount (757 input tokens initially and 1,169 on the answer round). The clause was outside both the recent window and the latest 100 messages. This test used `reasoning_effort: none` for short test answers; production Deep Dive remains `xhigh`. These are measured test inputs, not a forecast of Hani's bill or a broad quality benchmark.
+September 24 recall verification: all 24 local tests passed. The live synthetic check passed on GPT-5.5 and GPT-5.6 Sol. Each model used zero lookups for a recent owner/deadline question (738 input tokens), and one lookup to recover an exact original clause from a 160-message fixture plus its later corrected amount (757 input tokens initially and 1,169 on the answer round). The clause was outside both the recent window and the latest 100 messages. This test used `reasoning_effort: none` for short test answers. These are measured test inputs, not a forecast of Hani's bill or a broad quality benchmark.
+
+## September 25 cost controls
+
+- Main models remain GPT-5.5 and GPT-5.6 Sol. No environment change or database migration is required.
+- Deep Dive uses medium reasoning for ordinary questions and high for recognized complex questions, rather than xhigh for every request. This is a heuristic and needs real answer review after deployment.
+- Narrow document questions can use up to 24,000 characters of retrieved excerpts from up to three selected documents. Broad reviews keep the existing 200,000 character allowance. Missing coverage, failed retrieval, or ownership validation errors fall back to the existing full document path. Retrieved excerpts may still miss relevant context; the prompt discloses that they are not a full review.
+- Output allowances include reasoning tokens: ordinary replies 8,192, Deep Dive 16,384, and explicitly requested full or detailed reports/drafts/analyses/plans/proposals 32,768. A length limit produces a visible notice rather than silently pretending the reply is complete.
+- Memory still runs under the existing rate limit. It can now return NO_MEMORY_CHANGE rather than regenerating the full profile when no facts change. Truncated updates cannot replace saved memory. Updates are not batched.
+- Transcript intent extraction uses OPENAI_INTENT_MODEL, defaulting to the existing memory model. Its narrow task no longer needs the main reply model. Existing deterministic confirmation and request filters remain in place.
+- Additional OPENAI_TOKEN_USAGE records cover background summaries, topics, titles, profile extraction, memory, transcript intent and embedding work. WEB_CONTEXT_BUDGET now separates document, memory, knowledge and prompt sizes. These are logs, not a billing ledger; interrupted requests may lack final usage.
+- Shared memory and intent helpers also serve other channels, although the spending investigation concerns web chat.
+
+Run `node --test test/api-cost-controls.test.mjs test/chat-context.test.mjs test/conversation-recall.test.mjs` for focused regression coverage. See `web-cost-audit.md` for the pricing comparison, measured synthetic results and limitations.
 
 ## Verification recorded September 24, 2026
 

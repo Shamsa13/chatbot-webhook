@@ -144,6 +144,13 @@ test("ordinary follow-up uses one model request and no history lookup", async ()
   assert.equal(client.requests.length, 1);
 });
 
+test("output limit is disclosed rather than silently presenting a complete answer", async () => {
+  const client = clientWith([[delta({ content: "Partial draft" }), { choices: [{ delta: {}, finish_reason: "length" }] }]]);
+  let text = "";
+  await streamWithHistoryRecall({ client, payload, recall: () => assert.fail("unexpected lookup"), onText: chunk => { text += chunk; } });
+  assert.match(text, /length limit/);
+});
+
 test("collects fragmented tool arguments, returns sources, and records each round's usage", async () => {
   const client = clientWith([callChunks(), [delta({ content: rows[4].text }), { choices: [], usage: { prompt_tokens: 456 } }]]);
   const usages = [];

@@ -1,0 +1,234 @@
+{
+  "generatedAt": "2026-09-25T15:30:34.382Z",
+  "caveat": "One fictional prompt, not real user traffic, a full quality benchmark, or a bill. Estimated standard token costs use published rates checked September 25, 2026; cache-write surcharges and other fees are excluded. No main model was changed.",
+  "results": [
+    {
+      "model": "gpt-5.5",
+      "effort": "medium",
+      "durationMs": 5225,
+      "usage": {
+        "timestamp": "2026-09-25T15:30:15.757Z",
+        "stage": "synthetic_comparison",
+        "model": "gpt-5.5",
+        "userId": null,
+        "conversationId": null,
+        "inputTokens": 191,
+        "cachedInputTokens": 0,
+        "outputTokens": 211,
+        "reasoningTokens": 80,
+        "totalTokens": 402
+      },
+      "estimatedTokenCostUsd": 0.007285,
+      "checks": {
+        "completed": true,
+        "correctedBudget": true,
+        "arithmetic": true,
+        "owner": true,
+        "deadline": true,
+        "originalQuote": true,
+        "unknownNotInvented": true,
+        "advicePresent": true
+      },
+      "passed": true,
+      "answer": {
+        "budget": 38000,
+        "remaining": 25500,
+        "owner": "Nora",
+        "deadline": "October 2",
+        "exactQuote": "The board approves the funding envelope; management owns delivery.",
+        "ceoName": null,
+        "advice": "The board should confirm the corrected funding envelope of CAD 38,000 and oversee progress through reporting on spend, risks, and delivery against the October 2 deadline. Nora, as management owner, should remain responsible for execution; the board should not take over delivery."
+      }
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "effort": "xhigh",
+      "durationMs": 4561,
+      "usage": {
+        "timestamp": "2026-09-25T15:30:20.334Z",
+        "stage": "synthetic_comparison",
+        "model": "gpt-5.6-sol",
+        "userId": null,
+        "conversationId": null,
+        "inputTokens": 191,
+        "cachedInputTokens": 0,
+        "outputTokens": 180,
+        "reasoningTokens": 64,
+        "totalTokens": 371
+      },
+      "estimatedTokenCostUsd": 0.004364,
+      "checks": {
+        "completed": true,
+        "correctedBudget": true,
+        "arithmetic": true,
+        "owner": true,
+        "deadline": true,
+        "originalQuote": true,
+        "unknownNotInvented": true,
+        "advicePresent": true
+      },
+      "passed": true,
+      "answer": {
+        "budget": 38000,
+        "remaining": 25500,
+        "owner": "Nora",
+        "deadline": "October 2",
+        "exactQuote": "The board approves the funding envelope; management owns delivery.",
+        "ceoName": null,
+        "advice": "The board should confirm oversight against the CAD 38,000 funding envelope and October 2 deadline, and request progress and variance reporting from Nora. Delivery decisions and execution should remain with management."
+      }
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "durationMs": 2967,
+      "usage": {
+        "timestamp": "2026-09-25T15:30:23.301Z",
+        "stage": "synthetic_comparison",
+        "model": "gpt-5.6-sol",
+        "userId": null,
+        "conversationId": null,
+        "inputTokens": 191,
+        "cachedInputTokens": 0,
+        "outputTokens": 158,
+        "reasoningTokens": 41,
+        "totalTokens": 349
+      },
+      "estimatedTokenCostUsd": 0.003924,
+      "checks": {
+        "completed": true,
+        "correctedBudget": true,
+        "arithmetic": true,
+        "owner": true,
+        "deadline": true,
+        "originalQuote": true,
+        "unknownNotInvented": true,
+        "advicePresent": true
+      },
+      "passed": true,
+      "answer": {
+        "budget": 38000,
+        "remaining": 25500,
+        "owner": "Nora",
+        "deadline": "October 2",
+        "exactQuote": "The board approves the funding envelope; management owns delivery.",
+        "ceoName": null,
+        "advice": "The board should confirm the corrected CAD 38,000 funding envelope and oversee progress, spending, risks, and delivery against the October 2 deadline. Nora and management should retain responsibility for execution."
+      }
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "effort": "medium",
+      "durationMs": 4402,
+      "usage": {
+        "timestamp": "2026-09-25T15:30:27.703Z",
+        "stage": "synthetic_comparison",
+        "model": "gpt-5.6-terra",
+        "userId": null,
+        "conversationId": null,
+        "inputTokens": 191,
+        "cachedInputTokens": 0,
+        "outputTokens": 185,
+        "reasoningTokens": 50,
+        "totalTokens": 376
+      },
+      "estimatedTokenCostUsd": 0.002602,
+      "checks": {
+        "completed": true,
+        "correctedBudget": true,
+        "arithmetic": true,
+        "owner": true,
+        "deadline": true,
+        "originalQuote": true,
+        "unknownNotInvented": true,
+        "advicePresent": true
+      },
+      "passed": true,
+      "answer": {
+        "budget": 38000,
+        "remaining": 25500,
+        "owner": "Nora",
+        "deadline": "October 2",
+        "exactQuote": "The board approves the funding envelope; management owns delivery.",
+        "ceoName": null,
+        "advice": "The board should confirm that the approved CAD 38,000 envelope and CAD 25,500 remaining balance are reflected in its oversight materials, request an appropriate management progress and budget update before October 2, and monitor delivery against the approved funding without directing Nora’s day-to-day execution."
+      }
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "effort": "medium",
+      "durationMs": 2314,
+      "usage": {
+        "timestamp": "2026-09-25T15:30:30.018Z",
+        "stage": "synthetic_comparison",
+        "model": "gpt-5.4-mini",
+        "userId": null,
+        "conversationId": null,
+        "inputTokens": 191,
+        "cachedInputTokens": 0,
+        "outputTokens": 255,
+        "reasoningTokens": 123,
+        "totalTokens": 446
+      },
+      "estimatedTokenCostUsd": 0.00129075,
+      "checks": {
+        "completed": true,
+        "correctedBudget": true,
+        "arithmetic": true,
+        "owner": true,
+        "deadline": true,
+        "originalQuote": true,
+        "unknownNotInvented": true,
+        "advicePresent": true
+      },
+      "passed": true,
+      "answer": {
+        "budget": 38000,
+        "remaining": 25500,
+        "owner": "Nora",
+        "deadline": "October 2",
+        "exactQuote": "The board approves the funding envelope; management owns delivery.",
+        "ceoName": null,
+        "advice": "The board should note the corrected approved budget and remaining funds, confirm the deadline, and ask management for a concise status update and any forecasted variances. It should stay in oversight mode—monitor delivery and risk—but not direct the work itself, since management owns delivery."
+      }
+    },
+    {
+      "model": "gpt-6-sol",
+      "effort": "medium",
+      "durationMs": 4363,
+      "usage": {
+        "timestamp": "2026-09-25T15:30:34.382Z",
+        "stage": "synthetic_comparison",
+        "model": "gpt-6-sol",
+        "userId": null,
+        "conversationId": null,
+        "inputTokens": 191,
+        "cachedInputTokens": 0,
+        "outputTokens": 181,
+        "reasoningTokens": 63,
+        "totalTokens": 372
+      },
+      "estimatedTokenCostUsd": 0.002192,
+      "checks": {
+        "completed": true,
+        "correctedBudget": true,
+        "arithmetic": true,
+        "owner": true,
+        "deadline": true,
+        "originalQuote": true,
+        "unknownNotInvented": true,
+        "advicePresent": true
+      },
+      "passed": true,
+      "answer": {
+        "budget": 38000,
+        "remaining": 25500,
+        "owner": "Nora",
+        "deadline": "October 2",
+        "exactQuote": "The board approves the funding envelope; management owns delivery.",
+        "ceoName": null,
+        "advice": "The board should confirm the corrected CAD 38,000 funding envelope and seek an update on spending and progress toward the deadline. Nora remains responsible for delivery; the board should not take over that work."
+      }
+    }
+  ]
+}
